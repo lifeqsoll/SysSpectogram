@@ -8,7 +8,9 @@ Linux-утилита для **поведенческого обнаружени�
 
 **Область (v0.2):** хосты и серверы Linux. Host ML (v1) + perimeter/egress/NIDS-lite + auto OSINT/nmap + Telegram-пульт. Это не антивирус и не полный NIDS/SIEM.
 
-**Связанные документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Симуляции](simulations/README_RU.md)
+**Live demo (синтетика в браузере):** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/) — сценарии по кнопкам, без установки.
+
+**Связанные документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web / Mini App](docs/WEBAPP_RU.md) · [Симуляции](simulations/README_RU.md)
 
 ---
 

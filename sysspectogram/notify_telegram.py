@@ -167,6 +167,19 @@ class TelegramClient:
             {"callback_query_id": callback_query_id, "text": text[:180]},
         )
 
+    def set_chat_menu_button_webapp(self, text: str, url: str, chat_id: str | None = None) -> dict:
+        """Attach a Mini App menu button (HTTPS URL required for phones)."""
+        payload: dict[str, Any] = {
+            "menu_button": {
+                "type": "web_app",
+                "text": text[:20] or "Dashboard",
+                "web_app": {"url": url},
+            }
+        }
+        if chat_id or self.chat_id:
+            payload["chat_id"] = chat_id or self.chat_id
+        return self._post("setChatMenuButton", payload)
+
     def get_updates(self, offset: int | None = None, timeout: int = 25) -> list[dict]:
         payload: dict[str, Any] = {"timeout": timeout}
         if offset is not None:

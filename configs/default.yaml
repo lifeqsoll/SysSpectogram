@@ -65,6 +65,13 @@ telegram:
   # local load tests / collect from phone — keep false in production
   allow_destructive_sims: false
 
+web:
+  enabled: false
+  host: 127.0.0.1
+  port: 8765
+  # HTTPS tunnel URL for Telegram Mini App (phone). Or set env WEBAPP_URL.
+  public_url: null
+
 siem:
   webhook_url: null
   # optional HMAC secret (or env SIEM_WEBHOOK_SECRET)

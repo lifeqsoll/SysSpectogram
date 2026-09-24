@@ -78,7 +78,12 @@ Destructive actions require YES/NO (tokens HMAC, single-use, TTL).
 - Sims localhost / local resources only  
 - AppImage soft-findings filtered in `/audit`
 
+## Live web / Mini App
+
+HTTPS tunnel + `WEBAPP_URL` + `guard --web` → `/dashboard`. Step-by-step: [WEBAPP.md](WEBAPP.md).
+
 ## Related
 
 - [CLI recipes](RECIPES.md) · [Рецепты](RECIPES_RU.md)
 - [Config](CONFIG.md)
+- [Live web / Mini App](WEBAPP.md)

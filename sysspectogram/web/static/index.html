@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#0e1613" />
+  <title>SysSpectogram Live</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div>
+      <h1 class="brand">SysSpectogram</h1>
+      <p class="live-badge" id="live-badge">LIVE · real host metrics</p>
+    </div>
+    <div class="topbar-actions">
+      <button type="button" class="theme-btn" id="btn-settings">Settings</button>
+      <button type="button" class="theme-btn" id="theme-toggle" aria-label="Toggle theme">Light</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="stage-head">
+      <div>
+        <p class="host-line"><span class="dot" id="status-dot"></span> host <strong id="host-id">—</strong> · score <strong id="score-val">—</strong> · thr <span id="thr-val">—</span></p>
+        <p class="meta-line">cnn <span id="cnn-val">—</span> · iforest <span id="ifo-val">—</span> · model <span id="model-val">—</span> · dry_run <span id="dry-val">—</span></p>
+      </div>
+      <p class="pattern" id="pattern-label">pattern: —</p>
+    </div>
+
+    <section class="controls" aria-label="Response actions">
+      <h3>Response</h3>
+      <div class="ctrl-row">
+        <input id="ip-input" type="text" placeholder="IP e.g. 203.0.113.10" />
+        <button type="button" data-act="ban" data-ttl="3600">Ban 1h</button>
+        <button type="button" data-act="ban" data-ttl="86400">Ban 24h</button>
+        <button type="button" data-act="ban" data-ttl="perm">Ban perm</button>
+        <button type="button" data-act="unban">Unban</button>
+        <button type="button" data-act="allow">Allow</button>
+        <button type="button" data-act="mute" data-ttl="3600">Mute 1h</button>
+        <button type="button" data-act="recon">OSINT recon</button>
+      </div>
+      <div class="ctrl-row">
+        <button type="button" data-act="quiet" data-on="true">Quiet on</button>
+        <button type="button" data-act="quiet" data-on="false">Quiet off</button>
+        <button type="button" data-act="lockdown" class="danger">Lockdown</button>
+        <input id="port-input" type="number" placeholder="port" min="1" max="65535" />
+        <button type="button" data-act="shield">Shield port</button>
+        <input id="pid-input" type="number" placeholder="pid" min="1" />
+        <button type="button" data-act="kill" class="danger">Kill PID</button>
+      </div>
+      <p class="action-msg" id="action-msg"></p>
+    </section>
+
+    <div class="charts">
+      <div class="chart-block"><h3>CPU %</h3><canvas id="chart-cpu" height="120"></canvas></div>
+      <div class="chart-block"><h3>Mem %</h3><canvas id="chart-mem" height="120"></canvas></div>
+      <div class="chart-block"><h3>Net packets/s</h3><canvas id="chart-net" height="120"></canvas></div>
+    </div>
+
+    <div class="viz-row">
+      <div class="heatmap-wrap">
+        <h3>Spectrogram window (live)</h3>
+        <canvas id="heatmap" width="640" height="200"></canvas>
+      </div>
+      <div class="alerts-wrap">
+        <h3>Alert feed</h3>
+        <div class="alerts" id="alerts"></div>
+      </div>
+    </div>
+
+    <section class="status-panel">
+      <div class="panel-head">
+        <h3>Top processes</h3>
+        <button type="button" class="theme-btn" id="btn-refresh-procs">Refresh</button>
+      </div>
+      <div id="procs-box" class="procs-box"></div>
+    </section>
+
+    <section class="status-panel">
+      <h3>Bans / allowlist</h3>
+      <pre id="bans-box" class="code-box">—</pre>
+    </section>
+  </main>
+
+  <dialog id="settings-dlg">
+    <form method="dialog" class="settings-form">
+      <h3>Settings</h3>
+      <label class="check"><input type="checkbox" id="set-dry" /> dry_run (no real nft/kill)</label>
+      <p class="hint">Only allowlisted Telegram chat / local loopback can call actions.</p>
+      <div class="dlg-actions">
+        <button type="submit" value="cancel" class="theme-btn">Close</button>
+        <button type="button" id="set-save" class="theme-btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dlg">
+    <form method="dialog" class="settings-form">
+      <h3>Confirm</h3>
+      <p id="confirm-text"></p>
+      <div class="dlg-actions">
+        <button type="submit" value="cancel" class="theme-btn">Cancel</button>
+        <button type="button" id="confirm-ok" class="theme-btn danger">Yes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer class="footer">
+    <p id="auth-note">Auth: local loopback allowed · Telegram Mini App uses initData (only TELEGRAM_CHAT_ID)</p>
+  </footer>
+</body>
+</html>

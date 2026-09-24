@@ -48,4 +48,9 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         tg["chat_id"] = os.environ["TELEGRAM_CHAT_ID"]
     if os.environ.get("TELEGRAM_TOKEN_SECRET"):
         tg["token_secret"] = os.environ["TELEGRAM_TOKEN_SECRET"]
+    web = data.setdefault("web", {})
+    if os.environ.get("WEBAPP_URL"):
+        web["public_url"] = os.environ["WEBAPP_URL"]
+    elif os.environ.get("SYSPECTOGRAM_WEB_URL"):
+        web["public_url"] = os.environ["SYSPECTOGRAM_WEB_URL"]
     return data

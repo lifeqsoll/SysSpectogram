@@ -51,6 +51,10 @@ Ban / Allowlist / Mute / Recon / Shield / Kill / Ignore / Report / Lockdown.
 
 Только allowlisted chat · нет shell с телефона · нет авто-ban/kill · симы только локально.
 
+## Live web / Mini App
+
+HTTPS-туннель + `WEBAPP_URL` + `guard --web` → `/dashboard`. Пошагово: [WEBAPP_RU.md](WEBAPP_RU.md).
+
 ## См. также
 
-[Рецепты CLI](RECIPES_RU.md) · [Config](CONFIG_RU.md)
+[Рецепты CLI](RECIPES_RU.md) · [Config](CONFIG_RU.md) · [Live web](WEBAPP_RU.md)

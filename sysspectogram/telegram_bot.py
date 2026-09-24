@@ -22,6 +22,7 @@ SysSpectogram TG control (allowlisted chat only)
 
 Status:
 /ping /help /menu /version /status /digest /last [n]
+/dashboard          # open live Mini App (needs WEBAPP_URL)
 
 Host audit (CLI audit):
 /audit /processes /ports /rootkit /panel /score
@@ -117,6 +118,7 @@ class TelegramBot:
         allow_destructive_sims: bool = False,
         lab_nmap_targets: list[str] | None = None,
         include_nmap: bool = False,
+        webapp_url: str | None = None,
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -131,6 +133,7 @@ class TelegramBot:
         self.allow_destructive_sims = allow_destructive_sims
         self.lab_nmap_targets = list(lab_nmap_targets or ["127.0.0.1", "::1"])
         self.include_nmap = include_nmap
+        self.webapp_url = (webapp_url or "").rstrip("/") or None
         self._offset: int | None = None
         self._started = time.time()
         self._alert_count_day = 0
@@ -258,13 +261,17 @@ class TelegramBot:
         return _markup([[_btn(label, f"yes|{token}"), _btn("NO", f"no|{token}")]])
 
     def _menu_markup(self) -> dict:
-        return _markup(
-            [
-                [_btn("Status", "menu|status"), _btn("Audit", "menu|audit"), _btn("Panel", "menu|panel")],
-                [_btn("Score", "menu|score"), _btn("Ports", "menu|ports"), _btn("Bans", "menu|bans")],
-                [_btn("Digest", "menu|digest"), _btn("Recipes", "menu|recipes"), _btn("Help", "menu|help")],
-            ]
-        )
+        rows = [
+            [_btn("Status", "menu|status"), _btn("Audit", "menu|audit"), _btn("Panel", "menu|panel")],
+            [_btn("Score", "menu|score"), _btn("Ports", "menu|ports"), _btn("Bans", "menu|bans")],
+            [_btn("Digest", "menu|digest"), _btn("Recipes", "menu|recipes"), _btn("Help", "menu|help")],
+        ]
+        if self.webapp_url:
+            rows.insert(
+                0,
+                [{"text": "Open Dashboard", "web_app": {"url": self.webapp_url}}],
+            )
+        return _markup(rows)
 
     def handle_command(self, text: str, chat_id: str) -> None:
         if not self.allowed_chat(chat_id):
@@ -293,6 +300,25 @@ class TelegramBot:
                 self.client.send_message(self.prefix(RECIPES_TEXT), chat_id=chat_id)
             elif cmd == "/status":
                 self.client.send_message(self.prefix(self._status_text()), chat_id=chat_id)
+            elif cmd == "/dashboard":
+                if not self.webapp_url:
+                    self.client.send_message(
+                        self.prefix(
+                            "WEBAPP_URL not set. Run a HTTPS tunnel to the local web UI "
+                            "and put the URL in .env (see docs/WEBAPP.md)."
+                        ),
+                        chat_id=chat_id,
+                    )
+                else:
+                    self.client.send_message(
+                        self.prefix("Live dashboard (Mini App):"),
+                        chat_id=chat_id,
+                        reply_markup={
+                            "inline_keyboard": [
+                                [{"text": "Open Dashboard", "web_app": {"url": self.webapp_url}}]
+                            ]
+                        },
+                    )
             elif cmd == "/audit":
                 self._cmd_audit(chat_id)
             elif cmd == "/processes":

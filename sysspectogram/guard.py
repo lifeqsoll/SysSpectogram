@@ -25,6 +25,9 @@ from sysspectogram.response.actions import NftBackend
 from sysspectogram.response.tokens import TokenStore
 from sysspectogram.telegram_bot import TelegramBot
 from sysspectogram.integrations.webhook import post_webhook
+from sysspectogram.web.actions import WebControllers
+from sysspectogram.web.bus import GLOBAL_BUS, LiveAlert
+from sysspectogram.web.server import start_web_server
 from sysspectogram.viz.panels import (
     ProcessCpuTracker,
     detect_host_pattern,
@@ -65,6 +68,7 @@ def run_guard(
     dry_run_actions: bool = False,
     duration_sec: float | None = None,
     jsonl_out: Path | None = None,
+    enable_web: bool = False,
 ) -> None:
     # Container metrics are cgroup-scoped — warn early.
     if Path("/.dockerenv").exists():
@@ -79,6 +83,13 @@ def run_guard(
     col_cfg = config.get("collector", {})
     tg_cfg = config.get("telegram", {})
     recon_cfg = config.get("recon", {})
+    web_cfg = config.get("web") or {}
+    import os
+    webapp_url = (
+        os.environ.get("WEBAPP_URL")
+        or os.environ.get("SYSPECTOGRAM_WEB_URL")
+        or web_cfg.get("public_url")
+    )
 
     host_id = host_cfg.get("id") or socket.gethostname()
     state_path = _resolve(per_cfg.get("state_path", "state/perimeter.json"))
@@ -106,6 +117,17 @@ def run_guard(
     auto_ban_ttl = float(auto_ban_cfg.get("ttl_sec", 3600))
 
     def on_alert(alert, recon):
+        GLOBAL_BUS.push_alert(
+            LiveAlert(
+                ts=getattr(alert, "ts", None) or __import__("time").time(),
+                severity=str(getattr(alert, "severity", "medium")),
+                title=f"PERIMETER · {getattr(alert, 'rule_id', 'alert')}",
+                body=str(getattr(alert, "message", "")),
+                kind="perimeter",
+                rule_id=getattr(alert, "rule_id", None),
+                extras={"ip": getattr(alert, "ip", None), "port": getattr(alert, "port", None)},
+            )
+        )
         bot = bot_holder["bot"]
         if bot is not None:
             bot.send_perimeter_alert(alert, recon)
@@ -156,7 +178,7 @@ def run_guard(
         passive_dns_url=recon_cfg.get("passive_dns_url"),
         poll_sec=float(per_cfg.get("poll_sec", 2.0)),
         alert_new_egress=bool(per_cfg.get("alert_new_egress", False)),
-        on_alert=on_alert if telegram else None,
+        on_alert=on_alert if (telegram or enable_web) else None,
         on_auto_ban=on_auto_ban if auto_ban_rules else None,
         nft=nft,
         auto_ban_rules=auto_ban_rules,
@@ -179,6 +201,7 @@ def run_guard(
             allow_destructive_sims=bool(tg_cfg.get("allow_destructive_sims", False)),
             lab_nmap_targets=list(lab_cfg.get("nmap_targets") or ["127.0.0.1", "::1"]),
             include_nmap=bool(recon_cfg.get("nmap", False)),
+            webapp_url=webapp_url,
         )
         bot_holder["bot"] = bot
         console.print("[green]telegram enabled[/]")
@@ -186,6 +209,39 @@ def run_guard(
         console.print("[yellow]telegram requested but TELEGRAM_BOT_TOKEN/CHAT_ID missing[/]")
 
     stop = threading.Event()
+
+    httpd = None
+    if enable_web or bool(web_cfg.get("enabled")):
+        bind = str(web_cfg.get("host") or "127.0.0.1")
+        port = int(web_cfg.get("port") or 8765)
+        GLOBAL_BUS.set_host(host_id, 0.5, model_loaded=bool(artifacts_dir))
+        controllers = WebControllers(
+            bus=GLOBAL_BUS,
+            nft=nft,
+            watcher=watcher,
+            dry_run=dry_run_actions,
+            lab_nmap_targets=list(lab_cfg.get("nmap_targets") or ["127.0.0.1", "::1"]),
+            include_nmap=bool(recon_cfg.get("nmap", False)),
+            recon_dir=_resolve(recon_cfg.get("dir", "reports/recon")),
+        )
+        httpd = start_web_server(
+            GLOBAL_BUS,
+            host=bind,
+            port=port,
+            bot_token=tg_cfg.get("bot_token"),
+            allowed_chat_id=tg_cfg.get("chat_id"),
+            public_url=webapp_url,
+            controllers=controllers,
+        )
+        console.print(f"[bold]web dashboard[/] http://{bind}:{port}/")
+        if webapp_url:
+            console.print(f"[cyan]Mini App URL[/] {webapp_url}")
+            try:
+                res = client.set_chat_menu_button_webapp("Dashboard", webapp_url)
+                if res.get("ok"):
+                    console.print("[green]Telegram menu button → Dashboard[/]")
+            except Exception as exc:
+                console.print(f"[yellow]menu button[/] {exc}")
 
     def perimeter_loop():
         t0 = time.monotonic()
@@ -217,8 +273,36 @@ def run_guard(
                 pass
 
     def host_loop():
+        web_on = enable_web or bool(web_cfg.get("enabled"))
         if artifacts_dir is None or not artifacts_dir.exists():
             console.print("[yellow]no model artifacts; host ML monitor disabled[/]")
+            if not web_on:
+                return
+            # metrics-only feed for the live web UI
+            collector = MetricsCollector(
+                max_cores=int(col_cfg.get("max_cores", 16)),
+                socket_sample_every=int(col_cfg.get("socket_sample_every", 5)),
+            )
+            daemon = CollectDaemon(collector, interval_sec=1.0, buffer_size=None)
+
+            def on_metrics(row: dict) -> None:
+                if stop.is_set():
+                    raise KeyboardInterrupt
+                GLOBAL_BUS.push_sample(
+                    cpu=float(row.get("cpu_percent") or 0.0),
+                    mem=float(row.get("mem_percent") or 0.0),
+                    net=float(
+                        row.get("net_packets_sent_per_s")
+                        or row.get("net_packets_recv_per_s")
+                        or 0.0
+                    ),
+                    pattern="live metrics",
+                )
+
+            try:
+                daemon.run(duration_sec=duration_sec, on_sample=on_metrics)
+            except KeyboardInterrupt:
+                return
             return
         try:
             infer = EnsembleInferencer(artifacts_dir)
@@ -257,12 +341,26 @@ def run_guard(
                 pass
             slim = {c: float(row.get(c, 0.0)) for c in columns}
             buf.append(slim)
+            GLOBAL_BUS.push_sample(
+                cpu=float(row.get("cpu_percent") or 0.0),
+                mem=float(row.get("mem_percent") or 0.0),
+                net=float(
+                    row.get("net_packets_sent_per_s")
+                    or row.get("net_packets_recv_per_s")
+                    or 0.0
+                ),
+            )
             now = time.monotonic()
             if len(buf) < infer.window_size:
                 return
             if now - last_infer < interval_sec:
                 return
             last_infer = now
+            # refresh process table each infer tick
+            try:
+                GLOBAL_BUS.set_processes(list_top_processes(limit=max(top_n, 8)))
+            except Exception:
+                pass
             matrix = rows_to_matrix(list(buf), columns)
             pred = infer.predict_window(matrix)
             recent_scores.append(pred.score)
@@ -275,6 +373,20 @@ def run_guard(
             console.print(
                 f"host {status} score={pred.score:.3f} cnn={pred.cnn_prob:.3f} "
                 f"iforest={pred.iforest_score:.3f}"
+            )
+            GLOBAL_BUS.set_host(host_id, pred.threshold, model_loaded=True)
+            GLOBAL_BUS.push_sample(
+                cpu=float(row.get("cpu_percent") or 0.0),
+                mem=float(row.get("mem_percent") or 0.0),
+                net=float(
+                    row.get("net_packets_sent_per_s")
+                    or row.get("net_packets_recv_per_s")
+                    or 0.0
+                ),
+                score=pred.score,
+                cnn=pred.cnn_prob,
+                iforest=pred.iforest_score,
+                is_anomaly=pred.is_anomaly,
             )
             from sysspectogram.ml.calibration import suggested_threshold_hint
 
@@ -316,6 +428,17 @@ def run_guard(
             pattern = detect_host_pattern(top_procs=tops, **{k: v for k, v in expl_kw.items() if k != "top_features"})
             body = explain_host_anomaly(top_procs=tops, **expl_kw)
             console.print(f"[red bold]HOST ALERT[/] pattern={pattern}\n{body}")
+            GLOBAL_BUS.push_alert(
+                LiveAlert(
+                    ts=__import__("time").time(),
+                    severity="high",
+                    title=f"HOST ANOMALY · {pattern}",
+                    body=body,
+                    kind="host",
+                    score=pred.score,
+                    rule_id="host_anomaly",
+                )
+            )
             notify("SysSpectogram host anomaly", body)
             webhook = (config.get("siem") or {}).get("webhook_url")
             if webhook:
@@ -439,6 +562,11 @@ def run_guard(
         console.print("stopping guard…")
     finally:
         stop.set()
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
         if honeypot is not None:
             honeypot.stop()
         for t in threads:

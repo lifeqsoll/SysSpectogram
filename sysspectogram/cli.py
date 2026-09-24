@@ -245,6 +245,22 @@ def _cmd_guard(args: argparse.Namespace) -> int:
         dry_run_actions=bool(args.dry_run),
         duration_sec=args.duration,
         jsonl_out=jsonl,
+        enable_web=bool(getattr(args, "web", False)),
+    )
+    return 0
+
+
+def _cmd_web(args: argparse.Namespace) -> int:
+    from sysspectogram.web.runtime import run_web_dashboard
+
+    cfg = load_config(args.config)
+    model = _resolve(args.model) if args.model else None
+    run_web_dashboard(
+        config=cfg,
+        artifacts_dir=model,
+        host=args.host,
+        port=args.port,
+        duration_sec=args.duration,
     )
     return 0
 
@@ -346,10 +362,18 @@ def build_parser() -> argparse.ArgumentParser:
     g = sub.add_parser("guard", help="perimeter + host ML + telegram control plane")
     g.add_argument("--model", default=None, help="artifacts directory (optional)")
     g.add_argument("--telegram", action="store_true")
+    g.add_argument("--web", action="store_true", help="serve live dashboard (localhost + Mini App URL)")
     g.add_argument("--dry-run", action="store_true", help="do not apply nft/kill")
     g.add_argument("--duration", type=float, default=None)
     g.add_argument("--jsonl-out", default=None)
     g.set_defaults(func=_cmd_guard)
+
+    w = sub.add_parser("web", help="live local / Telegram Mini App dashboard")
+    w.add_argument("--model", default=None, help="optional artifacts for scoring")
+    w.add_argument("--host", default=None)
+    w.add_argument("--port", type=int, default=None)
+    w.add_argument("--duration", type=float, default=None)
+    w.set_defaults(func=_cmd_web)
 
     ln = sub.add_parser("lab-nmap", help="nmap allowlisted lab targets only")
     ln.add_argument("target")

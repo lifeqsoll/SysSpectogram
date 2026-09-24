@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SysSpectogram — interactive demo</title>
+  <meta name="description" content="Fake interactive demo of SysSpectogram: host ML alerts and perimeter scenarios. Simulation only." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="hero" id="top">
+    <p class="sim-badge">SIMULATION — not connected to your machine</p>
+    <h1 class="brand">SysSpectogram</h1>
+    <p class="tagline">Press a scenario. Watch metrics shift and alerts fire — the same story the real Linux guard tells, without touching your host.</p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="#workbench">Try scenarios</a>
+      <a class="btn btn-ghost" href="https://github.com/lifeqsoll/SysSpectogram" rel="noopener">Clone on GitHub</a>
+    </div>
+  </header>
+
+  <main class="workbench" id="workbench">
+    <aside class="scenarios" aria-label="Scenarios">
+      <h2>Scenarios</h2>
+      <p class="aside-note">Synthetic load only. Real product runs on your Linux box + Telegram.</p>
+      <div class="scenario-grid" role="group">
+        <button type="button" class="scenario active" data-scenario="idle">Idle / Reset</button>
+        <button type="button" class="scenario" data-scenario="cpu">CPU miner</button>
+        <button type="button" class="scenario" data-scenario="mem">Mem pressure</button>
+        <button type="button" class="scenario" data-scenario="net">Net flood</button>
+        <button type="button" class="scenario" data-scenario="brute">SSH brute</button>
+        <button type="button" class="scenario" data-scenario="egress">Egress denylist</button>
+        <button type="button" class="scenario scenario-wide" data-scenario="train">Fake train pipeline</button>
+      </div>
+
+      <section class="train-panel" id="train-panel" hidden>
+        <h3>Train pipeline (fake)</h3>
+        <ol class="train-steps" id="train-steps">
+          <li data-step="collect">collect metrics CSV</li>
+          <li data-step="build">build-dataset windows</li>
+          <li data-step="train">train CNN + IForest</li>
+          <li data-step="ready">artifacts ready</li>
+        </ol>
+        <div class="train-bar"><div class="train-bar-fill" id="train-bar-fill"></div></div>
+        <p class="train-status" id="train-status">Idle</p>
+      </section>
+    </aside>
+
+    <section class="stage" aria-label="Live stage">
+      <div class="stage-head">
+        <div>
+          <h2>Live stage</h2>
+          <p class="host-line"><span class="dot"></span> host <strong>demo-vps</strong> · score <strong id="score-val">0.12</strong> · thr 0.75</p>
+        </div>
+        <p class="pattern" id="pattern-label">pattern: idle baseline</p>
+      </div>
+
+      <div class="charts">
+        <div class="chart-block">
+          <h3>CPU %</h3>
+          <canvas id="chart-cpu" height="120"></canvas>
+        </div>
+        <div class="chart-block">
+          <h3>Mem %</h3>
+          <canvas id="chart-mem" height="120"></canvas>
+        </div>
+        <div class="chart-block">
+          <h3>Net packets/s</h3>
+          <canvas id="chart-net" height="120"></canvas>
+        </div>
+      </div>
+
+      <div class="viz-row">
+        <div class="heatmap-wrap">
+          <h3>Fake spectrogram window</h3>
+          <canvas id="heatmap" width="640" height="200" aria-label="Synthetic metric heatmap"></canvas>
+          <p class="heatmap-caption">60×N synthetic window — real product uses your collect CSV + trained artifacts.</p>
+        </div>
+        <div class="alerts-wrap">
+          <h3>Alert feed <span class="like-tg">(as Telegram would)</span></h3>
+          <div class="alerts" id="alerts" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Ready for the real thing? Install on Linux, train on <em>your</em> data, run <code>guard --telegram</code>.</p>
+    <div class="footer-links">
+      <a href="https://github.com/lifeqsoll/SysSpectogram">GitHub</a>
+      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/README.md">Install</a>
+      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/RECIPES.md">Recipes</a>
+      <a href="https://github.com/lifeqsoll/SysSpectogram/releases">Releases</a>
+    </div>
+  </footer>
+</body>
+</html>

@@ -8,7 +8,9 @@ It samples OS metrics every second, turns 60-second windows into matrices for a 
 
 **Scope (v0.2):** Linux hosts/servers. Host ML + perimeter/egress/NIDS-lite + auto OSINT/nmap + Telegram control. Not an antivirus or full NIDS/SIEM.
 
-**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Simulations](simulations/README.md)
+**Live demo (synthetic, browser only):** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/) — click scenarios, no install.
+
+**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Simulations](simulations/README.md)
 
 ---
 
