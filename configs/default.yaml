@@ -1,0 +1,81 @@
+collector:
+  interval_sec: 1.0
+  max_cores: 16
+  socket_sample_every: 5
+
+window:
+  size: 60
+  stride: 5
+
+train:
+  epochs: 25
+  batch_size: 32
+  lr: 0.001
+  val_ratio: 0.2
+  seed: 42
+  cnn_weight: 0.55
+  iforest_weight: 0.45
+  recall_target: 0.85
+
+monitor:
+  interval_sec: 5
+  cooldown_sec: 60
+  top_processes: 3
+
+ensemble:
+  default_threshold: 0.5
+
+host:
+  id: null
+
+perimeter:
+  poll_sec: 2.0
+  fail_threshold: 8
+  fail_window_sec: 60
+  scan_unique_ips: 8
+  scan_window_sec: 60
+  state_path: state/perimeter.json
+  jsonl_out: reports/perimeter.jsonl
+  denylist_paths:
+    - configs/denylist.txt
+  alert_new_egress: false
+  suspicious_domains:
+    - malware.test
+    - c2.example
+  auto_ban:
+    enabled: false
+    rules:
+      - bruteforce_ssh
+      - egress_denylist_hit
+      - honeypot_hit
+      - lockdown_inbound
+    ttl_sec: 3600
+
+recon:
+  auto: false
+  nmap: false
+  cooldown_sec: 900
+  dir: reports/recon
+  passive_dns_url: null
+
+telegram:
+  bot_token: null
+  chat_id: null
+  token_secret: null
+  # local load tests / collect from phone — keep false in production
+  allow_destructive_sims: false
+
+siem:
+  webhook_url: null
+  # optional HMAC secret (or env SIEM_WEBHOOK_SECRET)
+  webhook_secret: null
+
+lab:
+  mode: false
+  nmap_targets:
+    - 127.0.0.1
+    - "::1"
+
+honeypot:
+  enabled: false
+  port: 2222

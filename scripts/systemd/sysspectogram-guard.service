@@ -1,0 +1,30 @@
+[Unit]
+Description=SysSpectogram guard (perimeter + host ML + telegram)
+After=network.target
+# Do not start if secrets file missing (optional):
+# ConditionPathExists=/opt/sysspectogram/.env
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sysspectogram
+# Prefer EnvironmentFile over embedding tokens in unit file
+EnvironmentFile=-/opt/sysspectogram/.env
+EnvironmentFile=-/etc/sysspectogram.env
+# Hardening (relax NoNewPrivileges if nft/iptables need caps)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/sysspectogram/state /opt/sysspectogram/reports /var/log
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictRealtime=true
+SystemCallArchitectures=native
+UMask=0077
+ExecStart=/opt/sysspectogram/.venv/bin/python -m sysspectogram guard --model /opt/sysspectogram/artifacts --telegram --dry-run --jsonl-out /var/log/sysspectogram-guard.jsonl
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=SysSpectogram realtime anomaly monitor
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sysspectogram
+EnvironmentFile=-/opt/sysspectogram/.env
+EnvironmentFile=-/etc/sysspectogram.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/sysspectogram/state /opt/sysspectogram/reports /var/log
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+ExecStart=/opt/sysspectogram/.venv/bin/python -m sysspectogram monitor --model /opt/sysspectogram/artifacts --jsonl-out /var/log/sysspectogram.jsonl
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

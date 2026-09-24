@@ -1,0 +1,57 @@
+# --- Python / tooling ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+*.log
+
+# --- Secrets / local overrides ---
+.env
+.env.*
+!.env.example
+configs/local.yaml
+*.pem
+*.key
+
+# --- Runtime state & logs ---
+state/
+reports/
+*.jsonl
+
+# --- Training data & model artifacts (large / machine-specific) ---
+data/*
+!data/.gitkeep
+dataset/*
+!dataset/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+*.pt
+*.joblib
+*.onnx
+*.png
+*.npy
+*.npz
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- Optional local tools ---
+tools/bin/
