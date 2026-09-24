@@ -5,20 +5,29 @@ Synthetic browser demo of SysSpectogram scenarios (CPU / mem / net / SSH brute /
 ## Local preview
 
 ```bash
-# from repo root
-python -m http.server 8765 --directory docs
+cd docs && python -m http.server 8765
 # open http://127.0.0.1:8765/demo/
 ```
 
-## Enable GitHub Pages
+## Enable GitHub Pages (one-time)
 
-1. Repo **Settings → Pages**
-2. Source: **Deploy from a branch**
-3. Branch: `main`, folder: `/docs`
-4. Save → wait a minute
+Repo files live under `docs/`. If Pages is set to **branch root `/`**, you only see the README and `/demo/` returns **404**.
 
-Live URL:
+### Recommended: GitHub Actions
 
-`https://lifeqsoll.github.io/SysSpectogram/demo/`
+1. Push includes `.github/workflows/pages.yml` (deploys the `docs/` folder).
+2. **Settings → Pages → Build and deployment → Source:** **GitHub Actions**.
+3. Wait for the **Deploy Pages demo** workflow (Actions tab) → green.
+4. Open:
+   - https://lifeqsoll.github.io/SysSpectogram/  
+   - https://lifeqsoll.github.io/SysSpectogram/demo/
+
+### Alternative: branch `/docs` folder
+
+1. **Settings → Pages → Source:** Deploy from a branch  
+2. Branch: `main` · Folder: **`/docs`** (not `/`)  
+3. Save and wait ~1 minute.
+
+`docs/.nojekyll` disables Jekyll so `index.html` is served as-is.
 
 Root `docs/index.html` redirects to `/demo/`.
