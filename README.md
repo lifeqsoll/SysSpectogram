@@ -2,15 +2,34 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-Linux utility for **behavioral host anomaly detection** and a small defensive audit layer.
+Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
 
-It samples OS metrics every second, turns 60-second windows into matrices for a lightweight CNN plus Isolation Forest ensemble, and can alert in real time or analyze CSV logs offline. It also provides process/port snapshots for quick host inspection.
+**Scope (v0.4):** Linux hosts/servers. Shareable **profile packs** (GitHub Release `tar.gz`) + load budgets `lite`/`full`. Userspace agent (`/proc` + inotify + FIM) always; optional **eBPF** `execve`/`openat` (clang BPF + Aya, attach as root).
 
-**Scope (v0.2):** Linux hosts/servers. Host ML + perimeter/egress/NIDS-lite + auto OSINT/nmap + Telegram control. Not an antivirus or full NIDS/SIEM.
+**Live demo (synthetic, browser only):** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
-**Live demo (synthetic, browser only):** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/) — click scenarios, no install.
+**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Profiles](docs/PROFILES.md) · [Roadmap](docs/ROADMAP_V3.md) · [Simulations](simulations/README.md)
 
-**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Simulations](simulations/README.md)
+### What’s new in v0.4
+
+| Piece | Status |
+| --- | --- |
+| Fuse `risk` = host + agent | yes |
+| Profile packs (GitHub tar.gz) | yes — `profiles pack/pull/install` |
+| Load `lite` / `full` | yes — small VPS vs large VDS |
+| FIM sha256 + flow lite | yes (`full` profile) |
+| Console unlock + Mini App gate | yes |
+| eBPF `execve`/`openat` | yes — clang BPF + Aya; attach needs **root** (`sudo -E`) |
+
+```bash
+source .venv/bin/activate
+cd agent && cargo build --release && cd ..
+# small VPS (default load_profile: lite)
+python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
+# large VDS
+SYSSPECTOGRAM_LOAD_PROFILE=full python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-run
+# eBPF agent (root): see docs/EBPF_SETUP.md
+```
 
 ---
 
@@ -60,6 +79,8 @@ Threshold is chosen on validation to favor high recall (see `configs/default.yam
 
 - Linux (any common distribution)
 - Python 3.10+
+- Optional: Rust toolchain to build `sysspectogram-agent`
+- Optional eBPF: `clang`/`llvm` + kernel BTF; attach with **root** ([EBPF_SETUP.md](docs/EBPF_SETUP.md))
 - Optional: `notify-send` for desktop notifications
 - Optional: Telegram bot (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` in `.env`)
 - Optional: `nmap` / `dig` (or project `tools/bin` wrappers + dnspython)
@@ -487,18 +508,21 @@ The image installs CPU PyTorch by default.
 
 - Monitor: [scripts/systemd/sysspectogram-monitor.service](scripts/systemd/sysspectogram-monitor.service)
 - Guard + Telegram: [scripts/systemd/sysspectogram-guard.service](scripts/systemd/sysspectogram-guard.service)
+- Agent: [scripts/systemd/sysspectogram-agent.service](scripts/systemd/sysspectogram-agent.service) (for eBPF, run as root / see [EBPF_SETUP.md](docs/EBPF_SETUP.md))
 
-Put secrets in `/opt/sysspectogram/.env` (or `/etc/sysspectogram.env`); units use `EnvironmentFile=-…`. Point `--model` at artifacts, then `systemctl enable --now …`. Units ship with basic hardening (`ProtectSystem`, `PrivateTmp`, …); relax if you need live nft without `--dry-run`.
+Put secrets in `/opt/sysspectogram/.env` (or `/etc/sysspectogram.env`); units use `EnvironmentFile=-…`. Point `--model` at artifacts, then `systemctl enable --now …`. Helper: `scripts/install.sh`. Units ship with basic hardening (`ProtectSystem`, `PrivateTmp`, …); relax if you need live nft without `--dry-run`.
 
 ---
 
 ## Limitations and safety
 
 - Model quality depends on **your** labeled CSVs. A model trained on a laptop will not match a busy database VPS.  
-- Does not detect kernel rootkits or signed malware by name.  
+- Does not detect kernel rootkits or signed malware by name. Userspace `/proc` can be lied to by advanced LKMs; eBPF `execve`/`openat` reduces the blind spot but is not complete coverage.  
 - Simulations must stay on the local machine / localhost. Do not aim them at third-party networks.  
 - `audit` heuristics are best-effort hints, not proof.  
 - Desktop notifications require a working Freedesktop notification service; headless hosts rely on terminal/JSONL.  
+- **Telegram / Mini App:** treat `.env` as highly sensitive. Console unlock (`/unlock`) blocks control actions if the token leaks, but **does not** protect against an attacker who also has host console access. Keep `require_console_unlock: true`, short `unlock_ttl_sec`, and never put the unlock code in chat history on purpose.  
+- Agent Unix socket: prefer `$XDG_RUNTIME_DIR` (mode `0600`); do not expose the web port on `0.0.0.0` without a reverse proxy + auth.  
 
 ---
 
@@ -527,4 +551,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-v0.2 ships perimeter + Telegram + OSINT + dual heatmaps. See [docs/TELEGRAM.md](docs/TELEGRAM.md) and [docs/RECIPES.md](docs/RECIPES.md). Backlog: stronger GPU train stack, SIEM exporters, honeypot defaults.
+**v0.4** ships fuse `risk`, profile packs, lite/full load, FIM, flow lite, console unlock, and optional eBPF (`execve`/`openat`). See [docs/AGENT.md](docs/AGENT.md), [docs/PROFILES.md](docs/PROFILES.md), [docs/EBPF_SETUP.md](docs/EBPF_SETUP.md), [docs/ROADMAP_V3.md](docs/ROADMAP_V3.md). Next: XDP/TC flow counters; role-specific lab packs.

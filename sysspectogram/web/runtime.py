@@ -14,6 +14,7 @@ from sysspectogram.ml.infer import EnsembleInferencer
 from sysspectogram.preprocess.window import rows_to_matrix
 from sysspectogram.viz.panels import detect_host_pattern
 from sysspectogram.response.actions import NftBackend
+from sysspectogram.console_unlock import ConsoleUnlock
 from sysspectogram.web.actions import WebControllers
 from sysspectogram.web.bus import GLOBAL_BUS, LiveAlert, LiveBus
 from sysspectogram.web.server import start_web_server
@@ -81,6 +82,24 @@ def run_web_dashboard(
         nft=nft,
         alert_new_egress=bool(per.get("alert_new_egress", False)),
     )
+
+    def _print_unlock(code: str) -> None:
+        console.print("")
+        console.print("[bold red]WEB UNLOCK CODE[/] (Mini App: enter code · or POST /api/unlock)")
+        console.print(f"[bold white on red]  {code}  [/]")
+        console.print("")
+
+    want_unlock = bool(tg_cfg.get("require_console_unlock", True))
+    has_bot_creds = bool(tg_cfg.get("bot_token") and tg_cfg.get("chat_id"))
+    unlock_enabled = want_unlock and (bool(public_url) or has_bot_creds)
+    unlock_gate = ConsoleUnlock(
+        enabled=unlock_enabled,
+        ttl_sec=float(tg_cfg.get("unlock_ttl_sec", 7200)),
+        on_code=_print_unlock,
+    )
+    if unlock_gate.enabled and unlock_gate.pending_code:
+        _print_unlock(unlock_gate.pending_code)
+
     controllers = WebControllers(
         bus=bus,
         nft=nft,
@@ -89,6 +108,7 @@ def run_web_dashboard(
         lab_nmap_targets=list((config.get("lab") or {}).get("nmap_targets") or ["127.0.0.1", "::1"]),
         include_nmap=bool((config.get("recon") or {}).get("nmap", False)),
         recon_dir=_resolve((config.get("recon") or {}).get("dir", "reports/recon")),
+        unlock_ok=unlock_gate.unlocked if unlock_gate.enabled else None,
     )
 
     httpd = start_web_server(
@@ -99,6 +119,7 @@ def run_web_dashboard(
         allowed_chat_id=tg_cfg.get("chat_id"),
         public_url=public_url,
         controllers=controllers,
+        unlock=unlock_gate if unlock_gate.enabled else None,
     )
     local = f"http://{bind}:{listen_port}/"
     console.print(f"[bold]web dashboard[/] {local}")

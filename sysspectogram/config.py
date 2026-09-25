@@ -53,4 +53,8 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         web["public_url"] = os.environ["WEBAPP_URL"]
     elif os.environ.get("SYSPECTOGRAM_WEB_URL"):
         web["public_url"] = os.environ["SYSPECTOGRAM_WEB_URL"]
-    return data
+    if os.environ.get("SYSSPECTOGRAM_LOAD_PROFILE"):
+        data["load_profile"] = os.environ["SYSSPECTOGRAM_LOAD_PROFILE"]
+    from sysspectogram.load_profile import apply_load_profile
+
+    return apply_load_profile(data)

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from sysspectogram.web.actions import WebControllers
 from sysspectogram.web.auth import validate_webapp_init_data
 from sysspectogram.web.bus import LiveBus
+from sysspectogram.console_unlock import ConsoleUnlock
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -26,6 +27,7 @@ class WebAppState:
         public_url: str | None,
         bind_host: str,
         controllers: WebControllers | None = None,
+        unlock: ConsoleUnlock | None = None,
     ) -> None:
         self.bus = bus
         self.bot_token = bot_token or ""
@@ -33,6 +35,7 @@ class WebAppState:
         self.public_url = (public_url or "").rstrip("/")
         self.bind_host = bind_host
         self.controllers = controllers
+        self.unlock = unlock
         self._sessions: dict[str, float] = {}
         self._lock = threading.Lock()
 
@@ -55,6 +58,9 @@ class WebAppState:
             return True
 
     def allow_local_unauth(self, client_ip: str) -> bool:
+        # Never treat tunnel→localhost as trusted when a public Mini App URL is configured.
+        if self.public_url:
+            return False
         return client_ip in {"127.0.0.1", "::1", "localhost"} and self.bind_host in {
             "127.0.0.1",
             "localhost",
@@ -69,6 +75,20 @@ class WebAppState:
             if self.controllers.watcher is not None:
                 snap["quiet"] = self.controllers.watcher.state.quiet
                 snap["lockdown"] = self.controllers.watcher.state.lockdown
+        # Mutations locked → hide process list / ban details (stolen token can still see scores)
+        locked = False
+        if self.unlock is not None and self.unlock.enabled and not self.unlock.unlocked():
+            locked = True
+        elif callable(getattr(self.controllers, "unlock_ok", None)):
+            try:
+                locked = not bool(self.controllers.unlock_ok())
+            except Exception:
+                locked = True
+        if locked:
+            snap["processes"] = []
+            snap["bans"] = []
+            snap["allowlist"] = []
+            snap["control_unlocked"] = False
         return snap
 
 
@@ -177,6 +197,28 @@ def _make_handler(app: WebAppState):
                 )
                 return self._json(200, {"ok": True, "user": user}, extra={"Set-Cookie": cookie})
 
+            # Console unlock via Mini App / local UI (code never in .env)
+            if path == "/api/unlock":
+                if app.public_url and not self._authorized():
+                    return self._json(401, {"ok": False, "error": "unauthorized"})
+                if app.unlock is None or not app.unlock.enabled:
+                    return self._json(200, {"ok": True, "unlocked": True, "note": "gate off"})
+                code = str(payload.get("code") or "")
+                if app.unlock.try_unlock(code):
+                    return self._json(
+                        200,
+                        {"ok": True, "unlocked": True, "status": app.controllers.status() if app.controllers else {}},
+                    )
+                return self._json(
+                    403,
+                    {
+                        "ok": False,
+                        "error": "bad unlock code",
+                        "fails": app.unlock.fail_count,
+                        "unlocked": False,
+                    },
+                )
+
             if not self._authorized():
                 return self._json(401, {"ok": False, "error": "unauthorized"})
 
@@ -229,6 +271,7 @@ def start_web_server(
     allowed_chat_id: str | None = None,
     public_url: str | None = None,
     controllers: WebControllers | None = None,
+    unlock: ConsoleUnlock | None = None,
 ) -> ThreadingHTTPServer:
     app = WebAppState(
         bus,
@@ -237,6 +280,7 @@ def start_web_server(
         public_url=public_url,
         bind_host=host,
         controllers=controllers,
+        unlock=unlock,
     )
 
     class ReusableServer(ThreadingHTTPServer):

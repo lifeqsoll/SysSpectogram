@@ -2,7 +2,25 @@
 
 [English](TELEGRAM.md) · [Русский](TELEGRAM_RU.md)
 
-`guard --telegram` даёт управление с телефона: статус, аудит, OSINT, симуляции и действия с confirm. Принимается только `TELEGRAM_CHAT_ID`.
+`guard --telegram` — пульт с телефона. Только `TELEGRAM_CHAT_ID`.
+
+## Console unlock (v0.4)
+
+Если утёк `.env` (token + chat_id), злоумышленник всё равно не должен жать kill/ban без доступа к консоли хоста.
+
+1. При старте `guard --telegram` в **консоли** печатается 6-значный код (в текст TG-сообщения код не кладётся).
+2. В TG: контроль **LOCKED** → `/unlock 123456`.
+3. Сессия на `unlock_ttl_sec` (по умолчанию **2ч**). `/lock` — новый код в консоли.
+
+**Также:** действия live web / Mini App (`/api/action`) сидят на той же сессии unlock. Unlock: TG `/unlock` **или** Settings в Mini App / `POST /api/unlock`. В LOCKED скрываются процессы и детали bans.
+
+**Антибрут:** после 5 неверных кодов консоль печатает новый; после 8 за 5 минут — отказ до паузы / рестарта.
+
+```yaml
+telegram:
+  require_console_unlock: true
+  unlock_ttl_sec: 7200
+```
 
 ## Настройка
 

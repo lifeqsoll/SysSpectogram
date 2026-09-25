@@ -4,6 +4,26 @@
 
 SysSpectogram `guard --telegram` exposes a phone remote for status, audit, OSINT, sims, and confirmed response actions. Only `TELEGRAM_CHAT_ID` is accepted.
 
+## Console unlock (v0.4)
+
+If someone steals `.env` (bot token + chat id), they still should not drive **kill/ban/lockdown** without the host. After `guard --telegram` starts:
+
+1. Host console prints a **6-digit TELEGRAM UNLOCK CODE** (never sent in the TG message body).
+2. Bot tells the allowlisted chat that the control plane is **LOCKED**.
+3. You send `/unlock 123456` from that chat.
+4. Session stays open for `telegram.unlock_ttl_sec` (default **2h**). `/lock` regenerates a new code on the console.
+
+Also gated: live web / Mini App SOAR actions (`/api/action`) use the same unlock session. Unlock via TG `/unlock` **or** Mini App Settings → unlock code (`POST /api/unlock`). While LOCKED, process lists and ban details are hidden from the dashboard snapshot.
+
+**Brute-force:** after 5 bad codes the console prints a **new** code; after 8 failures in 5 minutes unlock is refused until you wait / restart.
+
+```yaml
+# configs/default.yaml
+telegram:
+  require_console_unlock: true
+  unlock_ttl_sec: 7200
+```
+
 ## Setup
 
 ```bash
@@ -21,7 +41,9 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ### Status & help
 | Command | Maps to / notes |
 | --- | --- |
-| `/ping` | liveness |
+| `/ping` | liveness (+ LOCKED/unlocked) |
+| `/unlock <code>` | console pairing unlock |
+| `/lock` | re-lock; new code on host console |
 | `/help` `/start` | full command list + menu |
 | `/menu` | inline shortcuts |
 | `/version` | package version, model path, dry_run |

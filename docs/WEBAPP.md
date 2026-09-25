@@ -37,7 +37,8 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-r
 Open: **http://127.0.0.1:8765/**
 
 - Theme: dark by default (Light/Dark toggle in the header).
-- Loopback (`127.0.0.1`) can view and run actions without Telegram auth.
+- Loopback (`127.0.0.1`) can view metrics **only when `WEBAPP_URL` is empty**. If a public Mini App URL is set, loopback is **not** trusted (tunnels terminate on localhost) — auth via Telegram `initData` is required.
+- With `guard --telegram`, **SOAR actions** also need console unlock (`/unlock` from the host code). Header shows `control LOCKED|unlocked`.
 - Through a public tunnel you must open the app from Telegram so `initData` validates, and your user id must match `TELEGRAM_CHAT_ID`.
 
 Port/host: `web:` in `configs/default.yaml` (keep `host: 127.0.0.1`).

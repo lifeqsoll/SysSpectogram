@@ -21,6 +21,53 @@ def test_web_action_dry_ban():
     assert bus.alerts[0].kind == "action"
 
 
+def test_web_action_gated_by_unlock():
+    bus = LiveBus()
+    nft = NftBackend()
+    unlocked = {"ok": False}
+    ctl = WebControllers(
+        bus=bus,
+        nft=nft,
+        watcher=None,
+        dry_run=True,
+        unlock_ok=lambda: unlocked["ok"],
+    )
+    locked = ctl.run("ban", {"ip": "203.0.113.9", "ttl": 60})
+    assert locked["ok"] is False
+    assert "LOCKED" in locked["error"]
+    assert locked["status"]["control_unlocked"] is False
+    unlocked["ok"] = True
+    opened = ctl.run("ban", {"ip": "203.0.113.9", "ttl": 60})
+    assert opened["ok"] is True
+    assert opened["status"]["control_unlocked"] is True
+    # process list refresh stays available while locked
+    unlocked["ok"] = False
+    refresh = ctl.run("refresh_processes", {})
+    assert refresh["ok"] is True
+
+
+def test_allow_local_unauth_disabled_with_public_url():
+    from sysspectogram.web.server import WebAppState
+
+    bus = LiveBus()
+    app = WebAppState(
+        bus,
+        bot_token="t",
+        allowed_chat_id="1",
+        public_url="https://example.loca.lt",
+        bind_host="127.0.0.1",
+    )
+    assert app.allow_local_unauth("127.0.0.1") is False
+    local = WebAppState(
+        bus,
+        bot_token="t",
+        allowed_chat_id="1",
+        public_url=None,
+        bind_host="127.0.0.1",
+    )
+    assert local.allow_local_unauth("127.0.0.1") is True
+
+
 def test_live_bus_snapshot():
     bus = LiveBus(window=5)
     bus.set_host("h1", 0.7, True)

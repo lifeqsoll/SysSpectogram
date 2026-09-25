@@ -2,15 +2,34 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-Linux-утилита для **поведенческого обнаружения аномалий на хосте** и небольшого defensive-аудита.
+Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
 
-Раз в секунду снимает метрики ОС, режет их на окна по 60 секунд, обучает лёгкий ансамбль CNN + Isolation Forest и умеет работать в realtime или разбирать CSV офлайн. Дополнительно даёт снимок процессов и портов.
+**Область (v0.4):** Linux VPS/хосты. **Profile packs** (`tar.gz` в GitHub Release) + бюджеты `lite`/`full`. Userspace-агент (`/proc` + inotify + FIM) всегда; опционально **eBPF** `execve`/`openat` (clang BPF + Aya, attach от root).
 
-**Область (v0.2):** хосты и серверы Linux. Host ML (v1) + perimeter/egress/NIDS-lite + auto OSINT/nmap + Telegram-пульт. Это не антивирус и не полный NIDS/SIEM.
+**Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
-**Live demo (синтетика в браузере):** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/) — сценарии по кнопкам, без установки.
+**Документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Profiles](docs/PROFILES.md) · [Roadmap](docs/ROADMAP_V3.md) · [Симуляции](simulations/README_RU.md)
 
-**Связанные документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web / Mini App](docs/WEBAPP_RU.md) · [Симуляции](simulations/README_RU.md)
+### Что нового в v0.4
+
+| Часть | Статус |
+| --- | --- |
+| Fuse `risk` = host + agent | да |
+| Profile packs (GitHub tar.gz) | да — `profiles pack/pull/install` |
+| Load `lite` / `full` | да — маленький VPS vs большой VDS |
+| FIM sha256 + flow lite | да (`full`) |
+| Console unlock + Mini App gate | да |
+| eBPF `execve`/`openat` | да — clang BPF + Aya; attach нужен **root** (`sudo -E`) |
+
+```bash
+source .venv/bin/activate
+cd agent && cargo build --release && cd ..
+# маленький VPS (default: lite)
+python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
+# большой VDS
+SYSSPECTOGRAM_LOAD_PROFILE=full python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-run
+# eBPF-агент (root): docs/EBPF_SETUP.md
+```
 
 ---
 
@@ -60,6 +79,8 @@ Linux-утилита для **поведенческого обнаружени�
 
 - Linux (любой распространённый дистрибутив)
 - Python 3.10+
+- Опционально: Rust toolchain для сборки `sysspectogram-agent`
+- Опционально eBPF: `clang`/`llvm` + BTF ядра; attach от **root** ([EBPF_SETUP.md](docs/EBPF_SETUP.md))
 - Опционально: `notify-send` для desktop-уведомлений
 - Опционально: Docker для воспроизводимого обучения
 - `stress-ng` не обязателен: встроенных симуляторов достаточно
@@ -483,18 +504,21 @@ docker run --rm \
 
 - Monitor: [scripts/systemd/sysspectogram-monitor.service](scripts/systemd/sysspectogram-monitor.service)
 - Guard: [scripts/systemd/sysspectogram-guard.service](scripts/systemd/sysspectogram-guard.service)
+- Agent: [scripts/systemd/sysspectogram-agent.service](scripts/systemd/sysspectogram-agent.service) (для eBPF — от root; [EBPF_SETUP.md](docs/EBPF_SETUP.md))
 
-Секреты — в `/opt/sysspectogram/.env` (или `/etc/sysspectogram.env`); unit'ы читают `EnvironmentFile=-…`. Укажите `--model`, затем `systemctl enable --now …`. В unit'ах есть hardening (`ProtectSystem`, `PrivateTmp`, …); для живого nft без `--dry-run` может понадобиться ослабить ограничения.
+Секреты — в `/opt/sysspectogram/.env` (или `/etc/sysspectogram.env`); unit'ы читают `EnvironmentFile=-…`. Укажите `--model`, затем `systemctl enable --now …`. Хелпер: `scripts/install.sh`. В unit'ах есть hardening (`ProtectSystem`, `PrivateTmp`, …); для живого nft без `--dry-run` может понадобиться ослабить ограничения.
 
 ---
 
 ## Ограничения и безопасность
 
 - Качество модели = качество **ваших** размеченных CSV. Модель с ноутбука не равна профилю БД на VPS.  
-- Не ловит kernel-rootkit и не знает malware по имени.  
+- Не ловит kernel-rootkit и не знает malware по имени. Userspace `/proc` можно обмануть LKM; eBPF `execve`/`openat` сужает слепую зону, но не даёт полной гарантии.  
 - Симуляции только на этой машине / localhost.  
 - Эвристики `audit` — подсказки, не доказательство.  
 - Без notification daemon уведомления только в терминал/JSONL.  
+- **Telegram / Mini App:** `.env` — чувствительный. Console unlock (`/unlock`) блокирует управление при утечке токена, но **не** защищает, если атакующий уже на консоли хоста. Держите `require_console_unlock: true`, короткий TTL, не кладите код unlock в чат специально.  
+- Сокет агента: `$XDG_RUNTIME_DIR`, mode `0600`; web-порт не слушайте на `0.0.0.0` без прокси + auth.  
 
 ---
 
@@ -521,4 +545,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-Perimeter/Telegram/OSINT уже в v0.2 — см. [TELEGRAM_RU.md](docs/TELEGRAM_RU.md) и [RECIPES_RU.md](docs/RECIPES_RU.md).
+**v0.4:** fuse `risk`, profile packs, lite/full, FIM, flow lite, console unlock, опциональный eBPF. См. [AGENT.md](docs/AGENT.md), [PROFILES.md](docs/PROFILES.md), [EBPF_SETUP.md](docs/EBPF_SETUP.md), [ROADMAP_V3.md](docs/ROADMAP_V3.md). Дальше: XDP/TC flow; роль-специфичные lab packs.

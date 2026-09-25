@@ -33,7 +33,7 @@
     <div class="stage-head">
       <div>
         <p class="host-line"><span class="dot" id="status-dot"></span> host <strong id="host-id">—</strong> · score <strong id="score-val">—</strong> · thr <span id="thr-val">—</span></p>
-        <p class="meta-line">cnn <span id="cnn-val">—</span> · iforest <span id="ifo-val">—</span> · model <span id="model-val">—</span> · dry_run <span id="dry-val">—</span></p>
+        <p class="meta-line">cnn <span id="cnn-val">—</span> · iforest <span id="ifo-val">—</span> · model <span id="model-val">—</span> · dry_run <span id="dry-val">—</span> · control <span id="lock-val">—</span></p>
       </div>
       <p class="pattern" id="pattern-label">pattern: —</p>
     </div>
@@ -97,9 +97,13 @@
     <form method="dialog" class="settings-form">
       <h3>Settings</h3>
       <label class="check"><input type="checkbox" id="set-dry" /> dry_run (no real nft/kill)</label>
-      <p class="hint">Only allowlisted Telegram chat / local loopback can call actions.</p>
+      <label>Unlock code (from host console)
+        <input type="text" id="set-unlock" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="off" />
+      </label>
+      <p class="hint">SOAR actions need /unlock (TG) or this code when control is LOCKED. Stolen bot token alone is not enough.</p>
       <div class="dlg-actions">
         <button type="submit" value="cancel" class="theme-btn">Close</button>
+        <button type="button" id="set-unlock-btn" class="theme-btn">Unlock</button>
         <button type="button" id="set-save" class="theme-btn primary">Save</button>
       </div>
     </form>

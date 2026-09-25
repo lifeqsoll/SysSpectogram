@@ -1,0 +1,23 @@
+[Unit]
+Description=SysSpectogram integrity agent (userspace / eBPF)
+After=network.target
+Before=sysspectogram-guard.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sysspectogram
+EnvironmentFile=-/opt/sysspectogram/.env
+EnvironmentFile=-/etc/sysspectogram.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/sysspectogram/reports /run/user
+UMask=0077
+# Prefer XDG_RUNTIME_DIR socket; guard can also auto_start the agent.
+ExecStart=/opt/sysspectogram/agent/target/release/sysspectogram-agent --socket /run/sysspectogram-agent.sock --metrics-ms 2000 --poll-ms 1000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

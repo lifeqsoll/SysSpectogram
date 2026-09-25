@@ -37,7 +37,8 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-r
 Открыть: **http://127.0.0.1:8765/**
 
 - Тема тёмная по умолчанию; в шапке Light/Dark.
-- С `127.0.0.1` можно смотреть и жать actions без Telegram-авторизации.
+- Loopback без Telegram-auth **только если `WEBAPP_URL` пустой**. Если URL Mini App задан, localhost не доверен (туннель садится на 127.0.0.1) — нужна авторизация `initData`.
+- При `guard --telegram` SOAR-кнопки web требуют console unlock (`/unlock`). В шапке: `control LOCKED|unlocked`.
 - Через публичный туннель — открывать из Telegram (`initData`), user id = `TELEGRAM_CHAT_ID`.
 
 Хост/порт: секция `web:` в `configs/default.yaml` (оставь `host: 127.0.0.1`).

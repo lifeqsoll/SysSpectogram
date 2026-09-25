@@ -265,6 +265,72 @@ def _cmd_web(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_profiles(args: argparse.Namespace) -> int:
+    from sysspectogram.profiles import (
+        finetune_note,
+        install_profile,
+        list_builtin_roles,
+        pack_profile,
+        pull_profile,
+    )
+
+    action = args.profiles_action
+    if action == "list":
+        for row in list_builtin_roles():
+            console.print(f"{row['name']:32} role={row['role']}  {row['note']}")
+        console.print(
+            "\n[dim]Publish packs as GitHub Release assets: profile-<role>-v1.tar.gz + .sha256[/]"
+        )
+        return 0
+    if action == "pack":
+        meta = pack_profile(
+            name=args.name,
+            role=args.role,
+            host_artifacts=_resolve(args.host),
+            out_tar=_resolve(args.out),
+            agent_iforest=_resolve(args.agent_if) if args.agent_if else None,
+            description=args.description or "",
+        )
+        console.print(f"[green]packed[/] {meta['path']} sha256={meta['sha256'][:16]}…")
+        return 0
+    if action == "pull":
+        dest = _resolve(args.out)
+        pull_profile(
+            args.url,
+            dest,
+            expected_sha256=args.sha256,
+            insecure_no_verify=bool(args.insecure),
+        )
+        console.print(f"[green]downloaded[/] {dest}")
+        return 0
+    if action == "install":
+        info = install_profile(
+            _resolve(args.tar),
+            _resolve(args.dest),
+            expected_sha256=args.sha256,
+            insecure_no_verify=bool(args.insecure),
+        )
+        console.print(f"[green]installed[/] host={info['host']}")
+        if info.get("agent_iforest"):
+            console.print(f"  agent IF: {info['agent_iforest']}")
+        console.print(f"  guard --model {info['host']}")
+        return 0
+    if action == "finetune-help":
+        console.print(finetune_note(_resolve(args.host or "artifacts/profiles/local/host")))
+        return 0
+    console.print("unknown profiles action")
+    return 1
+
+
+def _cmd_train_agent_if(args: argparse.Namespace) -> int:
+    from sysspectogram.agent_score import train_agent_iforest
+
+    paths = [_resolve(p) for p in args.jsonl]
+    meta = train_agent_iforest(paths, _resolve(args.out), contamination=float(args.contamination))
+    console.print(f"[green]agent IF[/] wrote {_resolve(args.out)} samples={meta['n_samples']}")
+    return 0
+
+
 def _cmd_lab_nmap(args: argparse.Namespace) -> int:
     from sysspectogram.lab_nmap import main as lab_main
 
@@ -367,6 +433,40 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--duration", type=float, default=None)
     g.add_argument("--jsonl-out", default=None)
     g.set_defaults(func=_cmd_guard)
+
+    tai = sub.add_parser("train-agent-if", help="train IsolationForest on agent JSONL windows")
+    tai.add_argument("--jsonl", nargs="+", required=True, help="agent NDJSON logs")
+    tai.add_argument("--out", required=True, help="output joblib path")
+    tai.add_argument("--contamination", type=float, default=0.05)
+    tai.set_defaults(func=_cmd_train_agent_if)
+
+    pr = sub.add_parser("profiles", help="shareable baseline packs (tar.gz for GitHub Releases)")
+    pr_sub = pr.add_subparsers(dest="profiles_action", required=True)
+    pr_list = pr_sub.add_parser("list", help="catalog of role packs")
+    pr_list.set_defaults(func=_cmd_profiles)
+    pr_pack = pr_sub.add_parser("pack", help="build profile-*.tar.gz")
+    pr_pack.add_argument("--name", required=True)
+    pr_pack.add_argument("--role", required=True)
+    pr_pack.add_argument("--host", required=True, help="host artifacts dir")
+    pr_pack.add_argument("--out", required=True, help="output .tar.gz path")
+    pr_pack.add_argument("--agent-if", default=None, help="optional agent_iforest.joblib")
+    pr_pack.add_argument("--description", default="")
+    pr_pack.set_defaults(func=_cmd_profiles)
+    pr_pull = pr_sub.add_parser("pull", help="download pack URL")
+    pr_pull.add_argument("--url", required=True)
+    pr_pull.add_argument("--out", required=True)
+    pr_pull.add_argument("--sha256", default=None)
+    pr_pull.add_argument("--insecure", action="store_true", help="allow pull without sha256")
+    pr_pull.set_defaults(func=_cmd_profiles)
+    pr_inst = pr_sub.add_parser("install", help="extract pack into artifacts/profiles/...")
+    pr_inst.add_argument("tar")
+    pr_inst.add_argument("--dest", required=True)
+    pr_inst.add_argument("--sha256", default=None)
+    pr_inst.add_argument("--insecure", action="store_true", help="allow install without sha256")
+    pr_inst.set_defaults(func=_cmd_profiles)
+    pr_ft = pr_sub.add_parser("finetune-help", help="print local fine-tune recipe")
+    pr_ft.add_argument("--host", default="artifacts/profiles/local/host")
+    pr_ft.set_defaults(func=_cmd_profiles)
 
     w = sub.add_parser("web", help="live local / Telegram Mini App dashboard")
     w.add_argument("--model", default=None, help="optional artifacts for scoring")

@@ -13,8 +13,9 @@ from sysspectogram.osint.recon import run_full_recon, save_report
 from sysspectogram.perimeter.connections import listening_ports, snapshot_connections
 from sysspectogram.perimeter.rules import Alert
 from sysspectogram.perimeter.watcher import PerimeterWatcher
-from sysspectogram.response.actions import NftBackend, kill_pid
+from sysspectogram.response.actions import NftBackend, kill_pid, read_proc_comm
 from sysspectogram.response.tokens import TokenStore
+from sysspectogram.console_unlock import ConsoleUnlock
 
 
 HELP_TEXT = """\
@@ -23,6 +24,8 @@ SysSpectogram TG control (allowlisted chat only)
 Status:
 /ping /help /menu /version /status /digest /last [n]
 /dashboard          # open live Mini App (needs WEBAPP_URL)
+/unlock <code>      # console pairing code (required after guard start)
+/lock               # re-lock control plane
 
 Host audit (CLI audit):
 /audit /processes /ports /rootkit /panel /score
@@ -119,6 +122,9 @@ class TelegramBot:
         lab_nmap_targets: list[str] | None = None,
         include_nmap: bool = False,
         webapp_url: str | None = None,
+        require_console_unlock: bool = True,
+        unlock_ttl_sec: float = 7200.0,
+        unlock: ConsoleUnlock | None = None,
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -134,11 +140,45 @@ class TelegramBot:
         self.lab_nmap_targets = list(lab_nmap_targets or ["127.0.0.1", "::1"])
         self.include_nmap = include_nmap
         self.webapp_url = (webapp_url or "").rstrip("/") or None
+        self.unlock = unlock or ConsoleUnlock(
+            enabled=require_console_unlock,
+            ttl_sec=float(unlock_ttl_sec),
+        )
+        self.require_console_unlock = self.unlock.enabled
+        self.unlock_ttl_sec = self.unlock.ttl_sec
         self._offset: int | None = None
         self._started = time.time()
         self._alert_count_day = 0
         self._digest_counts: dict[str, int] = {}
         self._busy = False
+
+    def begin_console_unlock(self) -> str:
+        return self.unlock.begin()
+
+    def session_unlocked(self) -> bool:
+        return self.unlock.unlocked()
+
+    def try_unlock(self, code: str) -> bool:
+        return self.unlock.try_unlock(code)
+
+    def lock_session(self) -> str:
+        return self.unlock.lock()
+
+    @property
+    def _unlock_code(self) -> str | None:
+        return self.unlock.pending_code
+
+    @property
+    def _unlock_fails(self) -> list[float]:
+        return list(self.unlock._fails)
+
+    @property
+    def _on_unlock_code(self) -> Any:
+        return self.unlock.on_code
+
+    @_on_unlock_code.setter
+    def _on_unlock_code(self, cb: Any) -> None:
+        self.unlock.on_code = cb
 
     def prefix(self, text: str) -> str:
         return f"[{self.host_id}]\n{text}"
@@ -176,7 +216,11 @@ class TelegramBot:
             rows.append([_btn(f"Shield :{port}", f"ask|{tsh}")])
         pid = (alert.extras or {}).get("pid")
         if pid:
-            tkill = self.tokens.issue("kill", {"pid": int(pid)})
+            expect = read_proc_comm(int(pid))
+            payload = {"pid": int(pid)}
+            if expect:
+                payload["expect_comm"] = expect
+            tkill = self.tokens.issue("kill", payload)
             rows.append([_btn(f"Kill PID {pid}", f"ask|{tkill}")])
         tign = self.tokens.issue("ignore", {"ip": ip})
         tlock = self.tokens.issue("lockdown", {})
@@ -213,6 +257,51 @@ class TelegramBot:
         )
         self.client.send_message(text, reply_markup=self.alert_keyboard(alert))
 
+    def send_agent_alert(self, alert) -> None:
+        """Agent / integrity sensor alert with Kill PID + Ignore."""
+        if not self.client.configured:
+            return
+        self._alert_count_day += 1
+        rid = getattr(alert, "rule_id", "agent")
+        self._digest_counts[rid] = self._digest_counts.get(rid, 0) + 1
+        sev = getattr(alert, "severity", "medium")
+        msg = getattr(alert, "message", "")
+        pid = getattr(alert, "pid", None)
+        ppid = getattr(alert, "ppid", None)
+        comm = getattr(alert, "comm", None)
+        path = getattr(alert, "path", None)
+        # Re-resolve live /proc identity before offering Kill
+        live_comm = read_proc_comm(int(pid)) if pid and int(pid) > 1 else None
+        lines = [
+            self.prefix(f"AGENT [{sev}] {rid}"),
+            str(msg),
+        ]
+        meta = []
+        if comm:
+            meta.append(f"comm={comm}")
+        if live_comm and live_comm != comm:
+            meta.append(f"live_comm={live_comm}")
+        if pid:
+            meta.append(f"pid={pid}")
+        if ppid:
+            meta.append(f"ppid={ppid}")
+        if path:
+            meta.append(f"path={path}")
+        if meta:
+            lines.append(" · ".join(meta))
+        if self.dry_run:
+            lines.append("(dry_run: Kill will not SIGKILL)")
+        rows: list[list[dict]] = []
+        if pid and int(pid) > 1 and live_comm is not None:
+            tkill = self.tokens.issue("kill", {"pid": int(pid), "expect_comm": live_comm})
+            label = f"Kill {live_comm}({pid})"
+            rows.append([_btn(label[:40], f"ask|{tkill}")])
+        elif pid and int(pid) > 1:
+            lines.append("(pid gone — Kill unavailable)")
+        tign = self.tokens.issue("ignore", {"pid": int(pid) if pid else 0, "rule": rid})
+        rows.append([_btn("Ignore", f"do|{tign}")])
+        self.client.send_message("\n".join(lines), reply_markup=_markup(rows))
+
     def send_host_alert(
         self,
         *,
@@ -247,7 +336,11 @@ class TelegramBot:
         for p in top_procs[:3]:
             pid = int(p.get("pid") or 0)
             if pid > 1:
-                tok = self.tokens.issue("kill", {"pid": pid})
+                expect = read_proc_comm(pid) or str(p.get("name") or "")
+                payload: dict[str, Any] = {"pid": pid}
+                if expect:
+                    payload["expect_comm"] = expect
+                tok = self.tokens.issue("kill", payload)
                 rows.append([_btn(f"Kill {p.get('name')}({pid})", f"ask|{tok}")])
         rows.append([_btn("Ignore", f"do|{self.tokens.issue('ignore', {})}")])
         markup = _markup(rows) if rows else None
@@ -282,10 +375,58 @@ class TelegramBot:
         cmd = parts[0].split("@")[0].lower()
         args = parts[1:]
 
+        # Always allow unlock / lock / ping while pairing
+        if cmd == "/unlock":
+            if not args:
+                self.client.send_message(
+                    self.prefix("usage: /unlock <6-digit code from host console>"),
+                    chat_id=chat_id,
+                )
+                return
+            if self.try_unlock(args[0]):
+                mins = int(self.unlock_ttl_sec // 60) if self.unlock_ttl_sec else 0
+                self.client.send_message(
+                    self.prefix(f"control plane UNLOCKED ({mins}m TTL). /lock to re-lock."),
+                    chat_id=chat_id,
+                )
+            else:
+                nfail = self.unlock.fail_count
+                hint = "bad or expired unlock code"
+                if nfail >= 8:
+                    hint = "too many failed unlocks — wait / check console for a new code"
+                elif nfail >= 5:
+                    hint = "bad code — new code printed on host console"
+                self.client.send_message(self.prefix(hint), chat_id=chat_id)
+            return
+        if cmd == "/lock":
+            if self.require_console_unlock:
+                code = self.lock_session()
+                self.client.send_message(
+                    self.prefix("control plane LOCKED. New code is on the host console."),
+                    chat_id=chat_id,
+                )
+                # code only on console — reprint via attribute for guard logger
+                _ = code
+            else:
+                self.client.send_message(self.prefix("console unlock disabled in config"), chat_id=chat_id)
+            return
+        if cmd == "/ping":
+            state = "unlocked" if self.session_unlocked() else "LOCKED"
+            self.client.send_message(self.prefix(f"pong ({state})"), chat_id=chat_id)
+            return
+
+        if not self.session_unlocked():
+            self.client.send_message(
+                self.prefix(
+                    "control plane LOCKED. Read the 6-digit code on the host console, "
+                    "then send /unlock <code> from this chat."
+                ),
+                chat_id=chat_id,
+            )
+            return
+
         try:
-            if cmd == "/ping":
-                self.client.send_message(self.prefix("pong"), chat_id=chat_id)
-            elif cmd in {"/help", "/start"}:
+            if cmd in {"/help", "/start"}:
                 self.client.send_message(self.prefix(HELP_TEXT), chat_id=chat_id, reply_markup=self._menu_markup())
             elif cmd == "/menu":
                 self.client.send_message(self.prefix("quick menu"), chat_id=chat_id, reply_markup=self._menu_markup())
@@ -394,9 +535,15 @@ class TelegramBot:
                     reply_markup=self._confirm_markup(tok),
                 )
             elif cmd == "/kill" and args:
-                tok = self.tokens.issue("kill", {"pid": int(args[0])})
+                pid = int(args[0])
+                expect = read_proc_comm(pid)
+                payload: dict[str, Any] = {"pid": pid}
+                if expect:
+                    payload["expect_comm"] = expect
+                tok = self.tokens.issue("kill", payload)
+                hint = f" ({expect})" if expect else ""
                 self.client.send_message(
-                    self.prefix(f"Confirm kill pid {args[0]}?"),
+                    self.prefix(f"Confirm kill pid {args[0]}{hint}?"),
                     chat_id=chat_id,
                     reply_markup=self._confirm_markup(tok),
                 )
@@ -472,6 +619,27 @@ class TelegramBot:
             return
         data = cq.get("data") or ""
         cq_id = cq.get("id", "")
+        if not self.session_unlocked():
+            if data.startswith("ask|") or data.startswith("ask2|") or data.startswith("yes|"):
+                self.client.answer_callback(cq_id, "locked")
+                self.client.send_message(
+                    self.prefix("LOCKED — /unlock <console code> before actions"),
+                    chat_id=chat_id,
+                )
+                return
+            if data.startswith("do|"):
+                tok = data.split("|", 1)[1]
+                peeked = self.tokens.peek(tok)
+                if peeked is None or peeked[0] != "ignore":
+                    self.client.answer_callback(cq_id, "locked")
+                    return
+            if data.startswith("menu|"):
+                self.client.answer_callback(cq_id, "locked")
+                self.client.send_message(
+                    self.prefix("LOCKED — /unlock <console code> first"),
+                    chat_id=chat_id,
+                )
+                return
         if data.startswith("menu|"):
             key = data.split("|", 1)[1]
             self.client.answer_callback(cq_id, key)
@@ -544,7 +712,9 @@ class TelegramBot:
                 int(payload.get("port")), float(payload.get("ttl") or 3600), dry_run=self.dry_run
             )
         if action == "kill":
-            return kill_pid(int(payload.get("pid") or 0), dry_run=self.dry_run)
+            pid = int(payload.get("pid") or 0)
+            expect = payload.get("expect_comm")
+            return kill_pid(pid, dry_run=self.dry_run, expect_comm=expect)
         if action == "allow":
             ip = str(payload.get("ip"))
             if self.watcher:

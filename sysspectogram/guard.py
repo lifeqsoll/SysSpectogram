@@ -24,7 +24,9 @@ from sysspectogram.preprocess.window import rows_to_matrix
 from sysspectogram.response.actions import NftBackend
 from sysspectogram.response.tokens import TokenStore
 from sysspectogram.telegram_bot import TelegramBot
+from sysspectogram.console_unlock import ConsoleUnlock
 from sysspectogram.integrations.webhook import post_webhook
+from sysspectogram.agent_bridge import AgentSocketListener
 from sysspectogram.web.actions import WebControllers
 from sysspectogram.web.bus import GLOBAL_BUS, LiveAlert
 from sysspectogram.web.server import start_web_server
@@ -84,6 +86,12 @@ def run_guard(
     tg_cfg = config.get("telegram", {})
     recon_cfg = config.get("recon", {})
     web_cfg = config.get("web") or {}
+    ens_cfg = config.get("ensemble") or {}
+    host_weight = float(ens_cfg.get("host_weight", 0.6))
+    agent_weight = float(ens_cfg.get("agent_weight", 0.4))
+    load_name = str(config.get("load_profile") or "lite")
+    risk_state: dict[str, float] = {"agent": 0.0}
+    console.print(f"[cyan]load_profile[/] {load_name} (lite=small VPS, full=large VDS)")
     import os
     webapp_url = (
         os.environ.get("WEBAPP_URL")
@@ -186,6 +194,28 @@ def run_guard(
     )
 
     bot = None
+
+    def _print_unlock(code: str) -> None:
+        console.print("")
+        console.print("[bold red]TELEGRAM UNLOCK CODE[/] (TG: /unlock CODE · Mini App also accepts it)")
+        console.print(f"[bold white on red]  {code}  [/]")
+        console.print("[dim]Stolen bot token alone cannot control the host without this code.[/]")
+        console.print("")
+
+    # Shared unlock for Telegram + Mini App (not needed for pure local web without bot/tunnel)
+    want_unlock = bool(tg_cfg.get("require_console_unlock", True))
+    web_on = bool(enable_web or web_cfg.get("enabled"))
+    tg_on = bool(telegram and client.configured)
+    has_bot_creds = bool(tg_cfg.get("bot_token") and tg_cfg.get("chat_id"))
+    unlock_enabled = want_unlock and (tg_on or (web_on and (bool(webapp_url) or has_bot_creds)))
+    unlock_gate = ConsoleUnlock(
+        enabled=unlock_enabled,
+        ttl_sec=float(tg_cfg.get("unlock_ttl_sec", 7200)),
+        on_code=_print_unlock,
+    )
+    if unlock_gate.enabled and unlock_gate.pending_code:
+        _print_unlock(unlock_gate.pending_code)
+
     if telegram and client.configured:
         bot = TelegramBot(
             client,
@@ -202,7 +232,19 @@ def run_guard(
             lab_nmap_targets=list(lab_cfg.get("nmap_targets") or ["127.0.0.1", "::1"]),
             include_nmap=bool(recon_cfg.get("nmap", False)),
             webapp_url=webapp_url,
+            unlock=unlock_gate,
         )
+        if unlock_gate.enabled:
+            try:
+                client.send_message(
+                    bot.prefix(
+                        "control plane LOCKED after guard start.\n"
+                        "Look at the host console for a 6-digit code, then send:\n"
+                        "/unlock 123456"
+                    )
+                )
+            except Exception:
+                pass
         bot_holder["bot"] = bot
         console.print("[green]telegram enabled[/]")
     elif telegram:
@@ -223,6 +265,7 @@ def run_guard(
             lab_nmap_targets=list(lab_cfg.get("nmap_targets") or ["127.0.0.1", "::1"]),
             include_nmap=bool(recon_cfg.get("nmap", False)),
             recon_dir=_resolve(recon_cfg.get("dir", "reports/recon")),
+            unlock_ok=unlock_gate.unlocked if unlock_gate.enabled else None,
         )
         httpd = start_web_server(
             GLOBAL_BUS,
@@ -232,6 +275,7 @@ def run_guard(
             allowed_chat_id=tg_cfg.get("chat_id"),
             public_url=webapp_url,
             controllers=controllers,
+            unlock=unlock_gate if unlock_gate.enabled else None,
         )
         console.print(f"[bold]web dashboard[/] http://{bind}:{port}/")
         if webapp_url:
@@ -369,12 +413,24 @@ def run_guard(
             if not pred.is_anomaly and len(recent_scores) >= 10:
                 calib.update(recent_scores[-10:])
                 calib.save(cal_path)
-            status = "ANOMALY" if pred.is_anomaly else "ok"
-            console.print(
-                f"host {status} score={pred.score:.3f} cnn={pred.cnn_prob:.3f} "
-                f"iforest={pred.iforest_score:.3f}"
+            from sysspectogram.risk import fuse_host_agent
+
+            ascore = risk_state.get("agent", 0.0)
+            risk = fuse_host_agent(
+                pred.score, ascore, host_weight=host_weight, agent_weight=agent_weight
             )
-            GLOBAL_BUS.set_host(host_id, pred.threshold, model_loaded=True)
+            risk_thr = ens_cfg.get("risk_threshold")
+            if risk_thr is None:
+                risk_thr = pred.threshold
+            else:
+                risk_thr = float(risk_thr)
+            is_anom = bool(risk >= risk_thr) if agent_weight > 0 else pred.is_anomaly
+            status = "ANOMALY" if is_anom else "ok"
+            console.print(
+                f"host {status} risk={risk:.3f} host={pred.score:.3f} agent={ascore:.3f} "
+                f"cnn={pred.cnn_prob:.3f} iforest={pred.iforest_score:.3f}"
+            )
+            GLOBAL_BUS.set_host(host_id, float(risk_thr), model_loaded=True)
             GLOBAL_BUS.push_sample(
                 cpu=float(row.get("cpu_percent") or 0.0),
                 mem=float(row.get("mem_percent") or 0.0),
@@ -386,7 +442,10 @@ def run_guard(
                 score=pred.score,
                 cnn=pred.cnn_prob,
                 iforest=pred.iforest_score,
-                is_anomaly=pred.is_anomaly,
+                agent_score=ascore,
+                risk=risk,
+                is_anomaly=is_anom,
+                load_profile=load_name,
             )
             from sysspectogram.ml.calibration import suggested_threshold_hint
 
@@ -408,7 +467,7 @@ def run_guard(
                             )
                         except Exception:
                             pass
-            if not pred.is_anomaly:
+            if not is_anom:
                 return
             if now - last_alert < cooldown_sec:
                 return
@@ -427,6 +486,7 @@ def run_guard(
             }
             pattern = detect_host_pattern(top_procs=tops, **{k: v for k, v in expl_kw.items() if k != "top_features"})
             body = explain_host_anomaly(top_procs=tops, **expl_kw)
+            body = f"{body}\nrisk={risk:.2f} host={pred.score:.2f} agent={ascore:.2f}"
             console.print(f"[red bold]HOST ALERT[/] pattern={pattern}\n{body}")
             GLOBAL_BUS.push_alert(
                 LiveAlert(
@@ -435,8 +495,9 @@ def run_guard(
                     title=f"HOST ANOMALY · {pattern}",
                     body=body,
                     kind="host",
-                    score=pred.score,
+                    score=risk,
                     rule_id="host_anomaly",
+                    extras={"host_score": pred.score, "agent_score": ascore, "risk": risk},
                 )
             )
             notify("SysSpectogram host anomaly", body)
@@ -548,6 +609,234 @@ def run_guard(
 
         threads.append(threading.Thread(target=honeypot_loop, name="honeypot", daemon=True))
 
+    flow_cfg = config.get("flow") or {}
+    if bool(flow_cfg.get("enabled")):
+        from sysspectogram.flow import FlowWatcher
+        from sysspectogram.perimeter.rules import Alert as PAlert
+
+        flow = FlowWatcher(
+            window_sec=float(flow_cfg.get("window_sec", 30)),
+            syn_threshold=int(flow_cfg.get("syn_threshold", 80)),
+            unique_port_threshold=int(flow_cfg.get("unique_port_threshold", 40)),
+        )
+        console.print(
+            f"[cyan]flow lite[/] window={flow.window_sec}s "
+            f"syn≥{flow.syn_threshold} ports≥{flow.unique_port_threshold}"
+        )
+
+        def flow_loop():
+            t0 = time.monotonic()
+            last_emit: dict[str, float] = {}
+            while not stop.is_set():
+                try:
+                    for a in flow.poll():
+                        key = f"{a.get('rule_id')}:{a.get('ip')}"
+                        now = time.time()
+                        if now - last_emit.get(key, 0) < 60:
+                            continue
+                        last_emit[key] = now
+                        watcher.emit(
+                            PAlert(
+                                rule_id=str(a["rule_id"]),
+                                severity=str(a.get("severity", "high")),
+                                message=str(a["message"]),
+                                ip=a.get("ip"),
+                            )
+                        )
+                except Exception as exc:
+                    console.print(f"[yellow]flow[/] {exc}")
+                if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
+                    break
+                stop.wait(2.0)
+
+        threads.append(threading.Thread(target=flow_loop, name="flow", daemon=True))
+
+    agent_listener = None
+    agent_proc = None
+    agent_cfg = config.get("agent") or {}
+    if agent_cfg.get("enabled"):
+        from sysspectogram.agent_score import AgentFeatureWindow, AgentIsolationScorer
+
+        agent_feat = AgentFeatureWindow(window_sec=float(agent_cfg.get("score_window_sec", 120)))
+        agent_scorer = AgentIsolationScorer(
+            _resolve(agent_cfg["iforest"]) if agent_cfg.get("iforest") else None
+        )
+        agent_score_threshold = float(agent_cfg.get("score_threshold", 0.65))
+
+        raw_sock = agent_cfg.get("socket")
+        if not raw_sock:
+            runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/sysspectogram-{os.getuid()}"
+            Path(runtime).mkdir(parents=True, exist_ok=True)
+            raw_sock = str(Path(runtime) / "sysspectogram-agent.sock")
+        sock_path = str(raw_sock) if str(raw_sock).startswith("/") else str(_resolve(raw_sock))
+
+        def on_agent_alert(alert) -> None:
+            from sysspectogram.perimeter.rules import Alert as PAlert
+
+            extras = dict(getattr(alert, "extras", None) or {})
+            agent_feat.push(
+                str(alert.rule_id),
+                risky_comm=bool(extras.get("risky_comm")),
+                path=getattr(alert, "path", None),
+            )
+            ascore = agent_scorer.score(agent_feat.vector())
+            risk_state["agent"] = float(ascore)
+            extras["agent_score"] = round(ascore, 3)
+            alert.extras = extras
+            # Suppress noisy filesystem-watch pings to Telegram unless IF score is hot
+            notify_tg = True
+            if alert.rule_id == "agent_path_watch" and ascore < agent_score_threshold:
+                notify_tg = False
+
+            body = str(alert.message)
+            if ascore >= agent_score_threshold:
+                body = f"{body}\nagent_score={ascore:.2f} (elevated)"
+
+            GLOBAL_BUS.push_alert(
+                LiveAlert(
+                    ts=alert.ts,
+                    severity=str(alert.severity),
+                    title=f"AGENT · {alert.rule_id}",
+                    body=body,
+                    kind="agent",
+                    rule_id=alert.rule_id,
+                    extras={
+                        "pid": alert.pid,
+                        "ppid": alert.ppid,
+                        "comm": alert.comm,
+                        "path": alert.path,
+                        "agent_score": ascore,
+                    },
+                )
+            )
+            pa = PAlert(
+                rule_id=alert.rule_id,
+                severity=alert.severity,
+                message=body,
+                extras={
+                    "pid": alert.pid,
+                    "ppid": alert.ppid,
+                    "comm": alert.comm,
+                    "path": alert.path,
+                    "source": "agent",
+                    "agent_score": ascore,
+                },
+            )
+            if jsonl_out or per_cfg.get("jsonl_out"):
+                try:
+                    append_jsonl(
+                        _resolve(jsonl_out or per_cfg.get("jsonl_out", "reports/perimeter.jsonl")),
+                        {
+                            "type": "agent",
+                            "rule_id": alert.rule_id,
+                            "severity": alert.severity,
+                            "message": alert.message,
+                            "pid": alert.pid,
+                            "path": alert.path,
+                            "ts": alert.ts,
+                        },
+                    )
+                except Exception:
+                    pass
+            bot = bot_holder["bot"]
+            if bot is not None and notify_tg:
+                try:
+                    # ensure message reflects score
+                    alert.message = body
+                    bot.send_agent_alert(alert)
+                except Exception:
+                    pass
+            webhook = siem_cfg.get("webhook_url")
+            if webhook:
+                post_webhook(
+                    webhook,
+                    {
+                        "host_id": host_id,
+                        "type": "agent",
+                        "rule_id": alert.rule_id,
+                        "severity": alert.severity,
+                        "message": alert.message,
+                        "pid": alert.pid,
+                        "path": alert.path,
+                    },
+                    secret=siem_cfg.get("webhook_secret"),
+                )
+            _ = pa
+
+        def on_agent_metrics(sample) -> None:
+            # Phase 2: feed live web from Rust hot path (ML still uses Python collector).
+            try:
+                GLOBAL_BUS.push_sample(
+                    cpu=float(sample.cpu_percent),
+                    mem=float(sample.mem_percent),
+                    net=float(sample.net_packets_sent_per_s or sample.net_packets_recv_per_s or 0.0),
+                    pattern="agent metrics",
+                )
+            except Exception:
+                pass
+
+        agent_listener = AgentSocketListener(
+            sock_path,
+            on_alert=on_agent_alert,
+            on_metrics=on_agent_metrics if bool(agent_cfg.get("metrics", True)) else None,
+            cooldown_sec=float(agent_cfg.get("cooldown_sec", 60)),
+            max_alerts_per_min=int(agent_cfg.get("max_alerts_per_min", 20)),
+            require_same_uid=bool(agent_cfg.get("require_same_uid", True)),
+        )
+        try:
+            agent_listener.start()
+            console.print(f"[cyan]agent socket[/] listening {sock_path}")
+        except OSError as exc:
+            console.print(f"[yellow]agent socket[/] {exc}")
+            agent_listener = None
+
+        if agent_cfg.get("auto_start") and agent_listener is not None:
+            import shutil
+            import subprocess
+
+            bin_path = agent_cfg.get("binary") or shutil.which("sysspectogram-agent")
+            if not bin_path:
+                cand = ROOT / "agent" / "target" / "release" / "sysspectogram-agent"
+                if cand.exists():
+                    bin_path = str(cand)
+            if bin_path:
+                cmd = [
+                    str(bin_path),
+                    "--socket",
+                    sock_path,
+                    "--host-id",
+                    str(host_id),
+                    "--mode",
+                    str(agent_cfg.get("mode", "userspace")),
+                    "--poll-ms",
+                    str(int(agent_cfg.get("poll_ms", 500))),
+                ]
+                if agent_cfg.get("metrics", True):
+                    cmd.extend(["--metrics-ms", str(int(agent_cfg.get("metrics_ms", 1000)))])
+                else:
+                    cmd.extend(["--metrics-ms", "0"])
+                fim_cfg = agent_cfg.get("fim") or {}
+                if bool(fim_cfg.get("enabled")):
+                    cmd.append("--fim")
+                    cmd.extend(["--fim-interval-sec", str(int(fim_cfg.get("interval_sec", 60)))])
+                jpath = agent_cfg.get("jsonl")
+                if jpath:
+                    cmd.extend(["--jsonl", str(_resolve(jpath))])
+                try:
+                    agent_proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    console.print(f"[green]agent auto_start[/] pid={agent_proc.pid}")
+                except OSError as exc:
+                    console.print(f"[yellow]agent auto_start[/] {exc}")
+            else:
+                console.print(
+                    "[yellow]agent auto_start[/] binary not found — build agent/ "
+                    "or put sysspectogram-agent on PATH"
+                )
+
     for t in threads:
         t.start()
     try:
@@ -569,6 +858,17 @@ def run_guard(
                 pass
         if honeypot is not None:
             honeypot.stop()
+        if agent_listener is not None:
+            agent_listener.stop()
+        if agent_proc is not None and agent_proc.poll() is None:
+            try:
+                agent_proc.terminate()
+                agent_proc.wait(timeout=3)
+            except Exception:
+                try:
+                    agent_proc.kill()
+                except Exception:
+                    pass
         for t in threads:
             t.join(timeout=3)
         watcher.persist()

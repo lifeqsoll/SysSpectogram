@@ -166,6 +166,8 @@
       el.querySelector(".alert-title").textContent = a.title || a.rule_id || "alert";
       el.querySelector(".alert-body").textContent = a.body || "";
       const actions = el.querySelector(".alert-actions");
+      const pid = (a.extras && a.extras.pid) || null;
+      const comm = (a.extras && a.extras.comm) || "";
       if (ip && a.kind !== "action") {
         [
           ["Ban 1h", () => askAction("ban", { ip, ttl: 3600 }, `Ban ${ip} for 1h?`)],
@@ -181,6 +183,20 @@
           b.addEventListener("click", fn);
           actions.appendChild(b);
         });
+      }
+      if (pid && Number(pid) > 1 && (a.kind === "agent" || a.kind === "host")) {
+        const bKill = document.createElement("button");
+        bKill.type = "button";
+        bKill.className = "danger";
+        bKill.textContent = comm ? `Kill ${comm}(${pid})` : `Kill ${pid}`;
+        bKill.addEventListener("click", () =>
+          askAction(
+            "kill",
+            { pid: Number(pid), expect_comm: String(comm || "") },
+            `Kill pid ${pid}${comm ? ` (${comm})` : ""}?`
+          )
+        );
+        actions.appendChild(bKill);
       }
       box.appendChild(el);
     });
@@ -206,7 +222,11 @@
       row.querySelector(".meta").textContent = `pid=${pid}`;
       row.children[1].textContent = `cpu ${cpu}% · mem ${mem}%`;
       row.querySelector("button").addEventListener("click", () => {
-        askAction("kill", { pid: Number(pid) }, `Kill pid ${pid} (${name})?`);
+        askAction(
+          "kill",
+          { pid: Number(pid), expect_comm: String(name || "") },
+          `Kill pid ${pid} (${name})?`
+        );
       });
       box.appendChild(row);
     });
@@ -219,7 +239,7 @@
     const bans = snap.bans || [];
     const allow = snap.allowlist || [];
     const lines = [
-      `quiet=${snap.quiet} lockdown=${snap.lockdown} dry_run=${snap.dry_run}`,
+      `control=${snap.control_unlocked === false ? "LOCKED" : "unlocked"} quiet=${snap.quiet} lockdown=${snap.lockdown} dry_run=${snap.dry_run}`,
       `allowlist: ${allow.length ? allow.join(", ") : "(empty)"}`,
       "bans:",
     ];
@@ -243,6 +263,12 @@
     document.getElementById("ifo-val").textContent = Number(snap.iforest || 0).toFixed(3);
     document.getElementById("model-val").textContent = snap.model_loaded ? "yes" : "metrics-only";
     document.getElementById("pattern-label").textContent = `pattern: ${snap.pattern || "—"}`;
+    const lockEl = document.getElementById("lock-val");
+    if (lockEl) {
+      const locked = snap.control_unlocked === false;
+      lockEl.textContent = locked ? "LOCKED" : "unlocked";
+      lockEl.style.color = locked ? "var(--crit)" : "inherit";
+    }
     const anom = !!snap.is_anomaly;
     document.getElementById("score-val").style.color = anom ? "var(--crit)" : "inherit";
     document.getElementById("status-dot").classList.toggle("warn", anom);
@@ -336,6 +362,30 @@
       await postAction("set_dry_run", { dry_run: dry });
       document.getElementById("settings-dlg").close();
     });
+    const unlockBtn = document.getElementById("set-unlock-btn");
+    if (unlockBtn) {
+      unlockBtn.addEventListener("click", async () => {
+        const code = (document.getElementById("set-unlock").value || "").trim();
+        const msg = document.getElementById("action-msg");
+        try {
+          const res = await fetch("/api/unlock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          });
+          const data = await res.json();
+          if (!data.ok) {
+            msg.textContent = "unlock failed: " + (data.error || res.status);
+            return;
+          }
+          msg.textContent = "control UNLOCKED";
+          document.getElementById("set-unlock").value = "";
+          if (data.status) renderStatus({ ...data.status, control_unlocked: true });
+        } catch (e) {
+          msg.textContent = "unlock error: " + e;
+        }
+      });
+    }
     const rp = document.getElementById("btn-refresh-procs");
     if (rp) {
       rp.addEventListener("click", () => postAction("refresh_processes", {}));

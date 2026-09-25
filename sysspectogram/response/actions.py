@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -227,11 +228,24 @@ class NftBackend:
         return "nft required for shield_port"
 
 
-def kill_pid(pid: int, dry_run: bool = False) -> str:
+def read_proc_comm(pid: int) -> str | None:
+    try:
+        return Path(f"/proc/{int(pid)}/comm").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+
+
+def kill_pid(pid: int, dry_run: bool = False, *, expect_comm: str | None = None) -> str:
     if pid <= 1:
         return "refusing to kill pid<=1"
+    if expect_comm:
+        live = read_proc_comm(pid)
+        if live is None:
+            return f"kill skipped: pid {pid} gone"
+        if live != expect_comm:
+            return f"kill skipped: pid {pid} is {live!r}, expected {expect_comm!r}"
     if dry_run:
-        return f"dry-run kill {pid}"
+        return f"dry-run kill {pid}" + (f" ({expect_comm})" if expect_comm else "")
     try:
         import os
         import signal

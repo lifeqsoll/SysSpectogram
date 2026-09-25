@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sysspectogram"
-version = "0.2.0"
-description = "Linux hybrid ML host IDS + perimeter/egress guard with Telegram response"
+version = "0.4.0"
+description = "Linux hybrid ML host IDS + perimeter + Rust agent + shareable profile packs (v0.4)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

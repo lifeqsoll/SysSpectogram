@@ -55,3 +55,6 @@ Thumbs.db
 
 # --- Optional local tools ---
 tools/bin/
+
+# --- Rust agent ---
+agent/target/

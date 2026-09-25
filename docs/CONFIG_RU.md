@@ -102,10 +102,23 @@ CLI `--window` / `--stride` у `build-dataset` перекрывают эти з�
 | `bot_token` | Bot API token |
 | `chat_id` | Allowlisted chat |
 | `token_secret` | HMAC secret для inline callback tokens |
+| `require_console_unlock` | `true` — после старта TG/web actions LOCKED до `/unlock` |
+| `unlock_ttl_sec` | TTL сессии unlock (по умолчанию `7200` = 2ч) |
+
+## `agent` (v0.4)
+
+| Ключ | Смысл |
+| --- | --- |
+| `enabled` | Слушать Unix-сокет агента в `guard` |
+| `auto_start` | Спавнить `sysspectogram-agent` |
+| `mode` | `userspace` (default) / `ebpf` (clang BPF + Aya; attach нужен **root**) |
+| `metrics` | Лёгкие метрики на live web |
+| `socket` | `null` → `$XDG_RUNTIME_DIR/sysspectogram-agent.sock` (0600) |
+| `cooldown_sec` | Cooldown TG-алертов агента |
 
 ---
 
 ## Замечания
 
-- v0.2: `watch-perimeter`, `recon`, `guard` (+ Telegram slash/inline). Авто-kill/ban только после confirm в TG.  
+- v0.4: fuse risk, packs, lite/full, FIM/flow в `full`, опциональный eBPF. Console unlock гейтит TG/web kill/ban.  
 - Смена `max_cores` или схемы признаков требует нового датасета и переобучения.

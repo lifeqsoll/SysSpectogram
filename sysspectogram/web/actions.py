@@ -17,6 +17,8 @@ class WebControllers:
     lab_nmap_targets: list[str] | None = None
     include_nmap: bool = False
     recon_dir: Any = None
+    # When set, destructive actions require True (Telegram console unlock).
+    unlock_ok: Any = None  # Callable[[], bool] | None
 
     def status(self) -> dict[str, Any]:
         bans = []
@@ -35,16 +37,35 @@ class WebControllers:
         quiet = bool(self.watcher.state.quiet) if self.watcher else self.bus.quiet
         lockdown = bool(self.watcher.state.lockdown) if self.watcher else self.bus.lockdown
         allow = sorted(self.watcher.engine.allowlist) if self.watcher else []
+        unlocked = True
+        if callable(self.unlock_ok):
+            try:
+                unlocked = bool(self.unlock_ok())
+            except Exception:
+                unlocked = False
         return {
             "dry_run": self.dry_run,
             "quiet": quiet,
             "lockdown": lockdown,
             "bans": bans,
             "allowlist": allow[:50],
+            "control_unlocked": unlocked,
         }
 
     def run(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         action = (action or "").lower().strip()
+        # Gate every control action (incl. recon) when Telegram console unlock is active.
+        if action != "refresh_processes" and callable(self.unlock_ok):
+            try:
+                ok = bool(self.unlock_ok())
+            except Exception:
+                ok = False
+            if not ok:
+                return {
+                    "ok": False,
+                    "error": "control plane LOCKED — unlock via Telegram /unlock <console code>",
+                    "status": self.status(),
+                }
         try:
             result = self._run(action, payload or {})
             if action not in {"recon", "refresh_processes", "set_dry_run"}:
@@ -85,8 +106,16 @@ class WebControllers:
             ttl = float(payload.get("ttl") or 3600)
             return self.nft.shield_port(port, ttl_sec=ttl, dry_run=self.dry_run)
         if action == "kill":
+            from sysspectogram.response.actions import read_proc_comm
+
             pid = int(payload.get("pid") or 0)
-            return kill_pid(pid, dry_run=self.dry_run)
+            live = read_proc_comm(pid)
+            if live is None:
+                return f"kill skipped: pid {pid} gone"
+            expect = payload.get("expect_comm") or payload.get("comm") or live
+            if expect != live:
+                return f"kill skipped: pid {pid} is {live!r}, expected {expect!r}"
+            return kill_pid(pid, dry_run=self.dry_run, expect_comm=live)
         if action == "allow":
             ip = str(payload.get("ip") or "")
             if not ip:

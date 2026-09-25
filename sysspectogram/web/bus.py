@@ -33,8 +33,11 @@ class LiveBus:
         self.score = 0.0
         self.cnn = 0.0
         self.iforest = 0.0
+        self.agent_score = 0.0
+        self.risk = 0.0
         self.is_anomaly = False
         self.pattern = "idle"
+        self.load_profile = "lite"
         self.cpu: deque[float] = deque(maxlen=window)
         self.mem: deque[float] = deque(maxlen=window)
         self.net: deque[float] = deque(maxlen=window)
@@ -64,9 +67,12 @@ class LiveBus:
         score: float | None = None,
         cnn: float | None = None,
         iforest: float | None = None,
+        agent_score: float | None = None,
+        risk: float | None = None,
         is_anomaly: bool | None = None,
         pattern: str | None = None,
         processes: list[dict[str, Any]] | None = None,
+        load_profile: str | None = None,
     ) -> None:
         with self._lock:
             self.cpu.append(float(cpu))
@@ -78,12 +84,18 @@ class LiveBus:
                 self.cnn = float(cnn)
             if iforest is not None:
                 self.iforest = float(iforest)
+            if agent_score is not None:
+                self.agent_score = float(agent_score)
+            if risk is not None:
+                self.risk = float(risk)
             if is_anomaly is not None:
                 self.is_anomaly = bool(is_anomaly)
             if pattern is not None:
                 self.pattern = pattern
             if processes is not None:
                 self.processes = list(processes[:12])
+            if load_profile is not None:
+                self.load_profile = load_profile
 
     def push_alert(self, alert: LiveAlert) -> None:
         with self._lock:
@@ -97,9 +109,12 @@ class LiveBus:
                 "score": self.score,
                 "cnn": self.cnn,
                 "iforest": self.iforest,
+                "agent_score": self.agent_score,
+                "risk": self.risk,
                 "is_anomaly": self.is_anomaly,
                 "pattern": self.pattern,
                 "model_loaded": self.model_loaded,
+                "load_profile": self.load_profile,
                 "quiet": self.quiet,
                 "lockdown": self.lockdown,
                 "uptime_s": int(time.time() - self.started),

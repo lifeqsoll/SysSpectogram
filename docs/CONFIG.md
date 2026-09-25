@@ -65,13 +65,26 @@ Fusion is renormalized so the two weights sum to 1.
 
 ---
 
-## `host` / `perimeter` / `recon` / `telegram`
+## `host` / `perimeter` / `recon` / `telegram` / `web` / `agent`
 
-See Russian config doc or `configs/default.yaml` for v0.2 keys (`host.id`, perimeter thresholds, denylist, auto recon, Telegram token/chat). Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
+See `configs/default.yaml` and the Russian config doc for full tables. Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `WEBAPP_URL`.
+
+Notable **v0.4** keys:
+
+| Section | Key | Default | Meaning |
+| --- | --- | --- | --- |
+| `load_profile` | `lite` / `full` | `lite` | CPU budget (VPS vs VDS) |
+| `telegram` | `require_console_unlock` | `true` | Gate TG + web actions until `/unlock` |
+| `telegram` | `unlock_ttl_sec` | `7200` | Unlock session TTL (2h) |
+| `agent` | `enabled` / `auto_start` | off / on | Spawn Rust integrity agent from guard |
+| `agent` | `mode` | `userspace` | `userspace` or `ebpf` (attach needs root) |
+| `agent` | `socket` | `null` | `null` → `$XDG_RUNTIME_DIR/…sock` mode 0600 |
+| `agent` | `metrics` | `true` | Emit light metrics for live web |
+| `ensemble` | `host_weight` / `agent_weight` | see yaml | Fuse host ML + agent IF → `risk` |
 
 ---
 
 ## Environment notes
 
-- v0.2 adds `watch-perimeter`, `recon`, `guard` with Telegram slash + inline confirm. No auto-kill/ban without confirm.  
+- v0.4: fuse risk, profile packs, lite/full, FIM/flow in `full`, optional eBPF (clang + root). Console unlock gates TG/web kill/ban.  
 - Changing `max_cores` or feature schema requires rebuilding the dataset and retraining; old artifacts will not match new column layouts.
