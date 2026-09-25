@@ -93,6 +93,27 @@ def probe_kirk_trust(*, require_tpm: bool = False) -> KirkTrustReport:
     tpm, d3 = _tpm_present()
     details.extend(d3)
 
+    # Operator-facing reason codes (stable-ish for /status and docs)
+    if not ima_ok:
+        if not _ima_ascii_path().parent.exists() and not _ima_ascii_path().exists():
+            # Distinguish "kernel built without IMA" vs "policy empty"
+            details.append(
+                "reason=ima_not_in_kernel_or_disabled "
+                "(stock Arch often has CONFIG_IMA unset — not a SysSpectogram bug)"
+            )
+        else:
+            details.append("reason=ima_unreadable_or_empty")
+    if sb is False:
+        details.append(
+            "reason=secure_boot_off (enable in firmware; Arch+DKMS often keeps this off)"
+        )
+    elif sb is None:
+        details.append("reason=secure_boot_unknown")
+    if tpm:
+        details.append("reason=tpm_present")
+    else:
+        details.append("reason=tpm_absent")
+
     ima_usable = ima_ok and n_meas > 0
     if require_tpm:
         measured = ima_usable and tpm and (sb is True or sb is None)
@@ -113,6 +134,7 @@ def probe_kirk_trust(*, require_tpm: bool = False) -> KirkTrustReport:
         tpm_present=tpm,
         details=details,
     )
+
 
 
 def recent_ima_module_hashes(limit: int = 50) -> list[dict[str, str]]:

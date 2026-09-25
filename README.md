@@ -6,7 +6,7 @@ Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms”
 
 **Scope (v0.5):** Linux VPS defense — **notorch / ONNX** runtime, train bridge, fuse risk, profile packs, Rust agent (userspace + eBPF), **Kirk** in-guest integrity + **IMA/TPM/Secure Boot trust** (`best-effort` | `measured`). Live **VMI** binary deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
-**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_V3.md) · [Simulations](simulations/README.md)
+**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_V3.md) · [Quality roadmap](docs/ROADMAP_QUALITY.md) · [Simulations](simulations/README.md)
 
 ### What’s new in v0.5
 
