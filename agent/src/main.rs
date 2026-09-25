@@ -3,6 +3,8 @@
 //! Default: userspace `/proc` + inotify. `--mode ebpf` probes toolchain and falls back.
 
 mod aggregate;
+mod baseline;
+mod crossview;
 mod ebpf;
 mod emit;
 mod fim;
@@ -19,6 +21,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::aggregate::Aggregator;
+use crate::baseline::{BaselineMonitor, SymbolBaseline, DEFAULT_WATCH_SYMBOLS};
+use crate::crossview::CrossViewMonitor;
 use crate::ebpf::probe_toolchain;
 use crate::emit::Emitter;
 use crate::fim::FimWatcher;
@@ -61,11 +65,62 @@ struct Args {
 
     #[arg(long)]
     host_id: Option<String>,
+
+    /// Seal kallsyms watchlist → JSON (+ .sha256). Exits after write.
+    #[arg(long)]
+    kirk_seal: bool,
+
+    /// Path for kirk baseline JSON (seal + drift poll).
+    #[arg(long, default_value = "state/kirk-baseline.json")]
+    kirk_baseline: PathBuf,
+
+    /// Enable /sys/module vs /proc/modules cross-view (and soft PID drop).
+    #[arg(long, default_value_t = true)]
+    crossview: bool,
+
+    #[arg(long, default_value_t = 2)]
+    crossview_confirm: u32,
+
+    #[arg(long, default_value_t = 10)]
+    crossview_interval_sec: u64,
+
+    /// Poll sealed kallsyms baseline for drift (needs prior --kirk-seal).
+    #[arg(long, default_value_t = true)]
+    kirk_baseline_poll: bool,
+
+    #[arg(long, default_value_t = 300)]
+    kirk_baseline_interval_sec: u64,
 }
 
 fn main() {
     let args = Args::parse();
     let host = args.host_id.unwrap_or_else(hostname_fallback);
+
+    if args.kirk_seal {
+        match SymbolBaseline::from_kallsyms(
+            std::path::Path::new("/proc/kallsyms"),
+            DEFAULT_WATCH_SYMBOLS,
+        ) {
+            Ok(bl) => match bl.seal_to(&args.kirk_baseline) {
+                Ok(dig) => {
+                    eprintln!(
+                        "[sysspectogram-agent] sealed {} symbols → {} sha256={dig}",
+                        bl.symbols.len(),
+                        args.kirk_baseline.display()
+                    );
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("[sysspectogram-agent] seal failed: {e}");
+                    std::process::exit(1);
+                }
+            },
+            Err(e) => {
+                eprintln!("[sysspectogram-agent] kallsyms read failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let mut ebpf_rt = None;
     let mut effective_mode = args.mode.as_str();
@@ -79,7 +134,7 @@ fn main() {
         {
             match crate::ebpf::start_runtime(&host) {
                 Ok(h) => {
-                    eprintln!("[sysspectogram-agent] eBPF attached: execve+openat");
+                    eprintln!("[sysspectogram-agent] eBPF attached: execve+openat+module");
                     ebpf_rt = Some(h);
                     effective_mode = "ebpf";
                 }
@@ -136,11 +191,32 @@ fn main() {
     };
     let mut metrics = MetricsSampler::new(host.clone());
 
+    let mut cross = if args.crossview {
+        Some(CrossViewMonitor::new(args.crossview_confirm))
+    } else {
+        None
+    };
+    let cross_every = Duration::from_secs(args.crossview_interval_sec.max(5));
+    let mut last_cross = Instant::now()
+        .checked_sub(Duration::from_secs(u64::MAX / 4))
+        .unwrap_or_else(Instant::now);
+
+    let mut baseline_mon = if args.kirk_baseline_poll {
+        Some(BaselineMonitor::try_load(
+            &args.kirk_baseline,
+            args.kirk_baseline_interval_sec,
+        ))
+    } else {
+        None
+    };
+
     eprintln!(
-        "[sysspectogram-agent] host={host} mode={effective_mode} peer_socket={} poll={}ms metrics={}ms",
+        "[sysspectogram-agent] host={host} mode={effective_mode} peer_socket={} poll={}ms metrics={}ms crossview={} baseline_poll={}",
         args.socket.display(),
         args.poll_ms,
-        args.metrics_ms
+        args.metrics_ms,
+        args.crossview,
+        args.kirk_baseline_poll
     );
 
     let poll = Duration::from_millis(args.poll_ms.max(100));
@@ -200,6 +276,30 @@ fn main() {
                 }
             }
             last_flush = Instant::now();
+        }
+
+        if let Some(ref mut cv) = cross {
+            if last_cross.elapsed() >= cross_every {
+                if let Some(alert) = cv.poll_modules(&host) {
+                    if let Err(e) = emitter.emit_alert(&alert) {
+                        eprintln!("[sysspectogram-agent] emit: {e}");
+                    }
+                }
+                if let Some(alert) = cv.poll_pid_drop(&host) {
+                    if let Err(e) = emitter.emit_alert(&alert) {
+                        eprintln!("[sysspectogram-agent] emit: {e}");
+                    }
+                }
+                last_cross = Instant::now();
+            }
+        }
+
+        if let Some(ref mut bm) = baseline_mon {
+            if let Some(alert) = bm.poll(&host) {
+                if let Err(e) = emitter.emit_alert(&alert) {
+                    eprintln!("[sysspectogram-agent] emit: {e}");
+                }
+            }
         }
 
         if let Some(every) = metrics_every {

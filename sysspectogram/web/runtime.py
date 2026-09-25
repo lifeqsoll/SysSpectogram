@@ -10,7 +10,7 @@ from rich.console import Console
 
 from sysspectogram.collect.daemon import CollectDaemon
 from sysspectogram.collect.metrics import MetricsCollector
-from sysspectogram.ml.infer import EnsembleInferencer
+from sysspectogram.ml.infer import load_inferencer
 from sysspectogram.preprocess.window import rows_to_matrix
 from sysspectogram.viz.panels import detect_host_pattern
 from sysspectogram.response.actions import NftBackend
@@ -52,7 +52,10 @@ def run_web_dashboard(
     columns: list[str] = []
     if artifacts_dir is not None and Path(artifacts_dir).exists():
         try:
-            infer = EnsembleInferencer(Path(artifacts_dir))
+            infer = load_inferencer(
+                Path(artifacts_dir),
+                runtime="onnx" if (Path(artifacts_dir) / "cnn.onnx").exists() else "torch_ml",
+            )
             threshold = infer.threshold
             columns = list(infer.columns)
             console.print(f"[green]web model[/] {artifacts_dir} thr={threshold:.3f}")

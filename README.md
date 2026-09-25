@@ -4,31 +4,31 @@
 
 Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
 
-**Scope (v0.4):** Linux hosts/servers. Shareable **profile packs** (GitHub Release `tar.gz`) + load budgets `lite`/`full`. Userspace agent (`/proc` + inotify + FIM) always; optional **eBPF** `execve`/`openat` (clang BPF + Aya, attach as root).
+**Scope (v0.5):** Linux VPS defense — **notorch / ONNX** runtime, train bridge, fuse risk, profile packs, Rust agent (userspace + eBPF), **Kirk** in-guest integrity + **IMA/TPM/Secure Boot trust** (`best-effort` | `measured`). Live **VMI** binary deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
-**Live demo (synthetic, browser only):** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
+**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_V3.md) · [Simulations](simulations/README.md)
 
-**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Profiles](docs/PROFILES.md) · [Roadmap](docs/ROADMAP_V3.md) · [Simulations](simulations/README.md)
-
-### What’s new in v0.4
+### What’s new in v0.5
 
 | Piece | Status |
 | --- | --- |
-| Fuse `risk` = host + agent | yes |
-| Profile packs (GitHub tar.gz) | yes — `profiles pack/pull/install` |
-| Load `lite` / `full` | yes — small VPS vs large VDS |
-| FIM sha256 + flow lite | yes (`full` profile) |
-| Console unlock + Mini App gate | yes |
-| eBPF `execve`/`openat` | yes — clang BPF + Aya; attach needs **root** (`sudo -E`) |
+| Runtime `notorch` / `onnx` / `torch_ml` | yes |
+| Train bridge (VPS collect → PC train → artifacts push) | yes |
+| `response.mode` observe\|shield\|aggressive | yes |
+| Kirk module eBPF + cross-view + kallsyms seal | yes |
+| IMA / Secure Boot / TPM **measured** trust | yes — `sysspectogram kirk trust` |
+| `kirk_isolate` / auto_isolate (opt-in) | yes |
+| VMI out-of-band | **v1.0** — see [docs/VMI.md](docs/VMI.md) |
 
 ```bash
 source .venv/bin/activate
 cd agent && cargo build --release && cd ..
-# small VPS (default load_profile: lite)
+python -m sysspectogram kirk trust
+# seal kallsyms once (root helps readability)
+sudo ./agent/target/release/sysspectogram-agent --kirk-seal
+# small VPS
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
-# large VDS
-SYSSPECTOGRAM_LOAD_PROFILE=full python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-run
-# eBPF agent (root): see docs/EBPF_SETUP.md
+# eBPF agent (root): see docs/EBPF_SETUP.md / docs/KIRK.md
 ```
 
 ---

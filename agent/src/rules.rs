@@ -46,6 +46,10 @@ impl RuleEngine {
             if !self.path_interesting(path) {
                 continue;
             }
+            // sudo always opens /etc/sudoers — expected, not an attack
+            if Self::benign_sudo_sudoers(&snap.comm, path) {
+                continue;
+            }
             let risky = self
                 .risky_comms
                 .iter()
@@ -151,5 +155,15 @@ impl RuleEngine {
             }
             path.starts_with(p.as_str())
         })
+    }
+
+    fn benign_sudo_sudoers(comm: &str, path: &str) -> bool {
+        let c = comm.rsplit('/').next().unwrap_or(comm);
+        if c != "sudo" && c != "sudoedit" && c != "su" {
+            return false;
+        }
+        path == "/etc/sudoers"
+            || path.starts_with("/etc/sudoers.d/")
+            || path.contains("/etc/sudoers")
     }
 }

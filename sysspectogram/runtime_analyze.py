@@ -6,7 +6,7 @@ import pandas as pd
 from rich.console import Console
 
 from sysspectogram.audit.report import build_report, write_json
-from sysspectogram.ml.infer import EnsembleInferencer
+from sysspectogram.ml.infer import load_inferencer
 from sysspectogram.preprocess.window import dataframe_to_matrix, iter_windows
 
 console = Console()
@@ -18,7 +18,7 @@ def run_analyze(
     out_path: Path | None = None,
     stride: int = 5,
 ) -> dict:
-    infer = EnsembleInferencer(artifacts_dir)
+    infer = load_inferencer(artifacts_dir, runtime="onnx" if (artifacts_dir / "cnn.onnx").exists() else "torch_ml")
     df = pd.read_csv(csv_path).fillna(0.0)
     columns = infer.columns or [c for c in df.columns if c != "timestamp"]
     for c in columns:

@@ -33,7 +33,7 @@ Host audit (CLI audit):
 Perimeter / response:
 /bans /ban <ip> [ttl_sec|perm]
 /unban <ip> /allow <ip> /mute <ip> [sec]
-/quiet on|off /lockdown
+/quiet on|off /lockdown /kirk_release
 /recon <ip> /labnmap <ip> /report
 
 Load sims (lab only; telegram.allow_destructive_sims):
@@ -125,6 +125,8 @@ class TelegramBot:
         require_console_unlock: bool = True,
         unlock_ttl_sec: float = 7200.0,
         unlock: ConsoleUnlock | None = None,
+        kirk_status: dict | None = None,
+        response_mode: str | None = None,
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -146,6 +148,8 @@ class TelegramBot:
         )
         self.require_console_unlock = self.unlock.enabled
         self.unlock_ttl_sec = self.unlock.ttl_sec
+        self.kirk_status = kirk_status if kirk_status is not None else {}
+        self.response_mode = response_mode or "observe"
         self._offset: int | None = None
         self._started = time.time()
         self._alert_count_day = 0
@@ -496,6 +500,13 @@ class TelegramBot:
                     chat_id=chat_id,
                     reply_markup=self._confirm_markup(tok, double=True),
                 )
+            elif cmd == "/kirk_release":
+                tok = self.tokens.issue("kirk_release", {})
+                self.client.send_message(
+                    self.prefix("Confirm kirk_release (drop inet ss_kirk)?"),
+                    chat_id=chat_id,
+                    reply_markup=self._confirm_markup(tok),
+                )
             elif cmd == "/allow" and args:
                 ip = args[0]
                 tok = self.tokens.issue("allow", {"ip": ip})
@@ -748,6 +759,11 @@ class TelegramBot:
             if self.watcher:
                 return self.watcher.apply_lockdown(dry_run=self.dry_run)
             return self.nft.apply_lockdown(dry_run=self.dry_run)
+        if action == "kirk_release":
+            msg = self.nft.kirk_release(dry_run=self.dry_run)
+            if self.kirk_status is not None:
+                self.kirk_status["isolated"] = False
+            return msg
         if action == "simulate":
             if not self.allow_destructive_sims:
                 return "simulate disabled (allow_destructive_sims=false)"
@@ -865,14 +881,22 @@ class TelegramBot:
 
     def _cmd_rootkit(self, chat_id: str) -> None:
         from sysspectogram.audit.rootkit import rootkit_heuristics
+        from sysspectogram.kirk_trust import probe_kirk_trust
 
         findings = rootkit_heuristics()
+        report = probe_kirk_trust()
+        lines = [
+            f"kirk.trust={report.trust} ima={report.ima_present} "
+            f"meas={report.ima_measurements} sb={report.secure_boot} tpm={report.tpm_present}",
+            f"note: without Secure Boot/IMA this is best-effort, not integrity proof",
+            f"VMI out-of-band: deferred to v1.0 (docs/VMI.md)",
+        ]
         if not findings:
-            self.client.send_message(self.prefix("rootkit heuristics: clean"), chat_id=chat_id)
-            return
-        lines = [f"rootkit findings: {len(findings)}"]
-        for f in findings[:20]:
-            lines.append(str(f))
+            lines.append("rootkit heuristics: clean")
+        else:
+            lines.append(f"rootkit findings: {len(findings)}")
+            for f in findings[:20]:
+                lines.append(str(f))
         self.client.send_message(self.prefix("\n".join(lines)[:3800]), chat_id=chat_id)
 
     def _cmd_panel(self, chat_id: str) -> None:
@@ -919,11 +943,14 @@ class TelegramBot:
 
                 from sysspectogram.collect.daemon import CollectDaemon
                 from sysspectogram.collect.metrics import MetricsCollector
-                from sysspectogram.ml.infer import EnsembleInferencer
+                from sysspectogram.ml.infer import load_inferencer
                 from sysspectogram.preprocess.window import rows_to_matrix
                 from sysspectogram.viz.panels import ProcessCpuTracker, detect_host_pattern, render_alert_panel
 
-                infer = EnsembleInferencer(Path(self.model_dir))
+                infer = load_inferencer(
+                    Path(self.model_dir),
+                    runtime="onnx" if (Path(self.model_dir) / "cnn.onnx").exists() else "torch_ml",
+                )
                 columns = infer.columns
                 buf: deque = deque(maxlen=infer.window_size)
                 track = ProcessCpuTracker(maxlen=infer.window_size, top_k=8)
@@ -1024,9 +1051,14 @@ class TelegramBot:
             last = f"{a.rule_id} {a.ip} {a.message[:80]}"
         quiet = self.watcher.state.quiet if self.watcher else False
         lockdown = getattr(self.watcher.state, "lockdown", False) if self.watcher else False
+        kt = self.kirk_status.get("trust", "best-effort")
+        kr = self.kirk_status.get("report") or {}
+        isolated = self.kirk_status.get("isolated", False)
         return (
             f"uptime_s={uptime} quiet={quiet} lockdown={lockdown} dry_run={self.dry_run} busy={self._busy}\n"
-            f"model={self.model_dir or 'none'}\n"
+            f"response.mode={self.response_mode} model={self.model_dir or 'none'}\n"
+            f"kirk.trust={kt} ima={kr.get('ima_present')} sb={kr.get('secure_boot')} "
+            f"tpm={kr.get('tpm_present')} isolated={isolated}\n"
             f"last_alert={last or 'none'}\n"
             f"listen_ports={listens}\n"
             f"allowlist={sorted(self.watcher.engine.allowlist)[:20] if self.watcher else []}"

@@ -3,6 +3,13 @@
 # Env: SYSSPECTOGRAM_LOAD_PROFILE=full
 load_profile: lite
 
+# Infer backend on this host:
+#   notorch  — perimeter + agent only (no CNN; default for 1GB VPS)
+#   onnx     — cnn.onnx via onnxruntime (no PyTorch)
+#   torch_ml — cnn.pt via PyTorch (builder / fat VDS)
+# Env: SYSSPECTOGRAM_RUNTIME=onnx
+runtime: notorch
+
 # Semantic defaults (not rate-budget). Rate keys live in load_profile presets.
 collector: {}
 window:
@@ -23,9 +30,10 @@ monitor: {}
 
 ensemble:
   default_threshold: 0.5
+  # host_weight overridden to 0.0 when runtime=notorch (see config.py)
   host_weight: 0.6
   agent_weight: 0.4
-  risk_threshold: null
+  risk_threshold: 0.7
 
 host:
   id: null
@@ -51,6 +59,12 @@ perimeter:
       - honeypot_hit
       - lockdown_inbound
     ttl_sec: 3600
+
+# Graduated response (A2): observe = alerts only; shield = auto SSH/honeypot ban; aggressive = +scan/egress
+response:
+  mode: observe          # observe | shield | aggressive
+  never_ban_cidrs: []    # e.g. ["1.2.3.4/32"] — never auto-ban these
+  learn_hours: 24
 
 recon:
   auto: false
@@ -99,3 +113,16 @@ agent:
   score_threshold: 0.65
   iforest: null
   require_same_uid: true
+
+# Kernel integrity (Kirk) — in-guest best-effort; trust auto-probed (IMA/SB/TPM)
+kirk:
+  enabled: true
+  trust: auto          # auto | best-effort | measured (auto probes IMA+SB/TPM)
+  require_tpm: false   # if true, measured needs TPM device
+  auto_isolate: false  # CRITICAL kirk → nft ss_kirk (needs allow_ssh_cidrs!)
+  isolate_ttl_sec: 3600
+  allow_ssh_cidrs: []
+  ima_watch: true
+  ima_state_path: state/ima_offset.txt
+  baseline_path: state/kirk-baseline.json
+  vmi: false           # reserved — live VMI binary deferred to v1.0 (docs/VMI.md)

@@ -20,6 +20,8 @@ FEATURE_NAMES = (
     "module_load",
     "risky_comm",
     "unique_paths",
+    "ebpf_execve",
+    "ebpf_openat",
 )
 
 
@@ -53,14 +55,39 @@ class AgentFeatureWindow:
                 counts["exec_burst"] += 1
             elif rid == "agent_connect_burst":
                 counts["connect_burst"] += 1
-            elif rid == "agent_module_load":
+            elif rid in ("agent_module_load", "agent_kirk_module_load", "agent_kirk_module_delete"):
                 counts["module_load"] += 1
+            elif rid == "agent_ebpf_execve":
+                counts["ebpf_execve"] += 1
+            elif rid == "agent_ebpf_openat":
+                counts["ebpf_openat"] += 1
             if risky:
                 counts["risky_comm"] += 1
-            if path:
+            # Only count sensitive-looking paths toward unique_paths (avoid AppImage flood → score=1)
+            if path and _path_counts_toward_score(path):
                 paths.add(path)
         counts["unique_paths"] = float(len(paths))
         return np.array([counts[k] for k in FEATURE_NAMES], dtype=np.float64)
+
+
+def _path_counts_toward_score(path: str) -> bool:
+    p = path.lower()
+    if not p or p.startswith("/proc/") or p.startswith("/sys/"):
+        return False
+    if "/.mount_" in p or p.startswith("/tmp/.mount_"):
+        return False
+    if p.endswith(".so") or ".so." in p:
+        return False
+    markers = (
+        "/.ssh/",
+        "/etc/shadow",
+        "/etc/sudoers",
+        "/etc/crontab",
+        "/tmp/",
+        "/dev/shm/",
+        "/var/tmp/",
+    )
+    return any(m in p for m in markers)
 
 
 class AgentIsolationScorer:
@@ -85,9 +112,16 @@ class AgentIsolationScorer:
             raw = float(-self.model.decision_function(vec.reshape(1, -1))[0])
             # squash
             return float(1.0 / (1.0 + np.exp(-raw)))
-        # heuristic: more events → higher score
-        total = float(vec.sum())
-        return float(min(1.0, total / 8.0))
+        # heuristic: weight high-signal dims; ignore raw ebpf flood alone
+        # order matches FEATURE_NAMES
+        weights = np.array(
+            [2.0, 1.0, 2.0, 2.0, 3.0, 1.5, 0.5, 0.15, 0.25], dtype=np.float64
+        )
+        if vec.shape[0] != weights.shape[0]:
+            total = float(vec.sum())
+            return float(min(1.0, total / 16.0))
+        weighted = float(np.dot(vec, weights))
+        return float(min(1.0, weighted / 12.0))
 
 
 def train_agent_iforest(

@@ -25,6 +25,7 @@ class NftBackend:
         self.table = table
         self.chain = chain
         self.bans: dict[str, BanRecord] = {}
+        self._kirk_expires: float | None = None
         self._ensure_chain()
 
     def _run(self, cmd: list[str]) -> tuple[int, str]:
@@ -153,6 +154,7 @@ class NftBackend:
         expired = [ip for ip, b in self.bans.items() if b.expires and b.expires <= now]
         for ip in expired:
             self.unban_ip(ip)
+        self.expire_kirk_isolate()
         return list(self.bans.values())
 
     def apply_lockdown(self, dry_run: bool = False) -> str:
@@ -226,6 +228,137 @@ class NftBackend:
                 return f"shield failed: {out.strip()}"
             return f"shielded port {port}"
         return "nft required for shield_port"
+
+    def kirk_isolate(
+        self,
+        *,
+        allow_cidrs: list[str] | None = None,
+        dry_run: bool = False,
+        ttl_sec: float = 3600.0,
+    ) -> str:
+        """Drop most traffic except allowlisted SSH sources (table inet ss_kirk).
+
+        TTL is tracked in-process; call ``expire_kirk_isolate`` / ``list_bans`` to release.
+        """
+        allow_cidrs = allow_cidrs or []
+        for cidr in allow_cidrs:
+            if not _SAFE_CIDR.match(str(cidr).strip()):
+                return f"kirk_isolate refused: invalid cidr {cidr!r}"
+        if dry_run:
+            return f"dry-run kirk_isolate allow={allow_cidrs} ttl={ttl_sec}"
+        if not shutil.which("nft"):
+            return "nft required for kirk_isolate"
+        if not allow_cidrs:
+            return "kirk_isolate refused: allow_ssh_cidrs empty (would lock you out)"
+        self._run(["nft", "add", "table", "inet", "ss_kirk"])
+        self._run(["nft", "flush", "table", "inet", "ss_kirk"])
+        self._run(
+            [
+                "nft",
+                "add",
+                "chain",
+                "inet",
+                "ss_kirk",
+                "input",
+                "{ type filter hook input priority -10 ; policy drop ; }",
+            ]
+        )
+        self._run(
+            [
+                "nft",
+                "add",
+                "chain",
+                "inet",
+                "ss_kirk",
+                "output",
+                "{ type filter hook output priority -10 ; policy drop ; }",
+            ]
+        )
+        # always allow loopback + established
+        for chain in ("input", "output"):
+            self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "ss_kirk",
+                    chain,
+                    "ct",
+                    "state",
+                    "established,related",
+                    "accept",
+                ]
+            )
+        self._run(["nft", "add", "rule", "inet", "ss_kirk", "input", "iif", "lo", "accept"])
+        self._run(["nft", "add", "rule", "inet", "ss_kirk", "output", "oif", "lo", "accept"])
+        for cidr in allow_cidrs:
+            self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "ss_kirk",
+                    "input",
+                    "ip",
+                    "saddr",
+                    cidr,
+                    "tcp",
+                    "dport",
+                    "22",
+                    "accept",
+                ]
+            )
+            self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "ss_kirk",
+                    "output",
+                    "ip",
+                    "daddr",
+                    cidr,
+                    "ct",
+                    "state",
+                    "established,related",
+                    "accept",
+                ]
+            )
+        ttl = max(60.0, float(ttl_sec)) if ttl_sec else 3600.0
+        self._kirk_expires = time.time() + ttl
+        return f"kirk_isolate active allow={allow_cidrs} ttl={ttl}"
+
+    def kirk_release(self, dry_run: bool = False) -> str:
+        if dry_run:
+            self._kirk_expires = None
+            return "dry-run kirk_release"
+        if not shutil.which("nft"):
+            return "nft required"
+        code, out = self._run(["nft", "delete", "table", "inet", "ss_kirk"])
+        self._kirk_expires = None
+        if code != 0 and "No such file" not in out and "does not exist" not in out:
+            return f"kirk_release failed: {out.strip()}"
+        return "kirk_release ok"
+
+    def expire_kirk_isolate(self, dry_run: bool = False) -> str | None:
+        """Release ss_kirk when TTL elapsed. Returns message if released, else None."""
+        if self._kirk_expires is None:
+            return None
+        if time.time() < self._kirk_expires:
+            return None
+        return self.kirk_release(dry_run=dry_run)
+
+
+_SAFE_CIDR = re.compile(
+    r"^(?:"
+    r"(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?"  # IPv4 / optional prefix
+    r"|"
+    r"[0-9a-fA-F:]+(?:/\d{1,3})?"  # coarse IPv6
+    r")$"
+)
 
 
 def read_proc_comm(pid: int) -> str | None:

@@ -179,16 +179,22 @@ def list_builtin_roles() -> list[dict[str, str]]:
         {
             "role": "generic-linux",
             "name": "profile-generic-linux-v1",
-            "note": "Generic quiet Linux VPS",
+            "note": "Generic quiet Linux VPS (Release asset)",
+        },
+        {
+            "role": "wireguard",
+            "name": "profile-wireguard-v1",
+            "note": "VPN endpoint (wireguard) — pack TBD / fine-tune locally",
         },
     ]
 
 
 def finetune_note(host_dir: Path) -> str:
     return (
-        f"Fine-tune on this VPS:\n"
-        f"  1) collect normal traffic → CSV\n"
-        f"  2) build-dataset + train --out {host_dir}\n"
-        f"  3) optional: train-agent-if on local agent JSONL\n"
-        f"  4) profiles pack --name my-vps --role custom --host {host_dir}\n"
+        f"Fine-tune (builder PC, not 1GB VPS):\n"
+        f"  1) On VPS: collect → data bundle (see docs/TRAIN_BRIDGE.md)\n"
+        f"  2) On PC: unpack → build-dataset → train --out {host_dir}\n"
+        f"  3) export-onnx --model {host_dir}\n"
+        f"  4) artifacts push --model {host_dir} --ssh user@vps --remote …/artifacts/live\n"
+        f"  5) optional: train-agent-if on local agent JSONL\n"
     )

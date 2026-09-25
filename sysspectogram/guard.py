@@ -16,7 +16,7 @@ from sysspectogram.collect.metrics import MetricsCollector
 from sysspectogram.config import ROOT
 from sysspectogram.explain.templates import explain_host_anomaly
 from sysspectogram.ml.calibration import CalibrationState, detect_drift, feature_attribution
-from sysspectogram.ml.infer import EnsembleInferencer
+from sysspectogram.ml.infer import load_inferencer
 from sysspectogram.notify import notify
 from sysspectogram.notify_telegram import TelegramClient
 from sysspectogram.perimeter.watcher import PerimeterWatcher
@@ -27,6 +27,8 @@ from sysspectogram.telegram_bot import TelegramBot
 from sysspectogram.console_unlock import ConsoleUnlock
 from sysspectogram.integrations.webhook import post_webhook
 from sysspectogram.agent_bridge import AgentSocketListener
+from sysspectogram.kirk_trust import ima_watch_new_lines, probe_kirk_trust
+from sysspectogram.risk import apply_kirk_override
 from sysspectogram.web.actions import WebControllers
 from sysspectogram.web.bus import GLOBAL_BUS, LiveAlert
 from sysspectogram.web.server import start_web_server
@@ -38,6 +40,32 @@ from sysspectogram.viz.panels import (
 )
 
 console = Console()
+
+
+def _ebpf_path_benign(path: str) -> bool:
+    """Desktop / toolchain noise that must not spam Telegram."""
+    if not path:
+        return True
+    if path.startswith(("/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/", "/opt/", "/snap/")):
+        return True
+    markers = (
+        "/.venv/",
+        "/venv/",
+        "/go/bin/",
+        "/.local/bin/",
+        "/.cargo/bin/",
+        "/.mount_",
+        "/tmp/.mount_",
+    )
+    return any(m in path for m in markers)
+
+
+def _benign_sudo_sudoers(comm: str | None, path: str | None) -> bool:
+    c = (comm or "").rsplit("/", 1)[-1].lower()
+    p = path or ""
+    if c not in ("sudo", "sudoedit", "su"):
+        return False
+    return p == "/etc/sudoers" or p.startswith("/etc/sudoers.d/") or "/etc/sudoers" in p
 
 
 def _resolve(path: str | Path) -> Path:
@@ -116,13 +144,74 @@ def run_guard(
     tokens = TokenStore(secret=tg_cfg.get("token_secret"))
     nft = NftBackend()
 
+    kirk_cfg = dict(config.get("kirk") or {})
+    kirk_enabled = bool(kirk_cfg.get("enabled", False))
+    kirk_auto_isolate = bool(kirk_cfg.get("auto_isolate", False))
+    kirk_allow_cidrs = list(kirk_cfg.get("allow_ssh_cidrs") or [])
+    kirk_isolate_ttl = float(kirk_cfg.get("isolate_ttl_sec", 3600))
+    kirk_status: dict = {"trust": "best-effort", "report": None, "isolated": False}
+    if kirk_enabled:
+        trust_mode = str(kirk_cfg.get("trust") or "auto").strip().lower()
+        allowed_labels = {"best-effort", "measured", "auto"}
+        if trust_mode in ("auto", "measured"):
+            report = probe_kirk_trust(require_tpm=bool(kirk_cfg.get("require_tpm", False)))
+            kirk_status["report"] = report.to_dict()
+            if trust_mode == "auto":
+                kirk_status["trust"] = report.trust
+            else:
+                kirk_status["trust"] = report.trust  # measured only if probe agrees
+                if report.trust != "measured":
+                    console.print(
+                        "[yellow]kirk[/] trust requested measured but probe says best-effort "
+                        f"({'; '.join(report.details[:3])})"
+                    )
+            console.print(
+                f"[cyan]kirk trust[/] {kirk_status['trust']} "
+                f"ima={report.ima_present} meas={report.ima_measurements} "
+                f"sb={report.secure_boot} tpm={report.tpm_present}"
+            )
+        elif trust_mode in allowed_labels:
+            kirk_status["trust"] = trust_mode
+            console.print(f"[cyan]kirk trust[/] {kirk_status['trust']} (forced)")
+        else:
+            # reject out-of-band / trash labels until VMI ships
+            kirk_status["trust"] = "best-effort"
+            console.print(
+                f"[yellow]kirk[/] unknown trust={trust_mode!r} → best-effort "
+                "(out-of-band / VMI deferred to v1.0)"
+            )
+        if kirk_cfg.get("vmi"):
+            console.print(
+                "[dim]kirk.vmi=true ignored until v1.0 — see docs/VMI.md[/]"
+            )
+
     bot_holder: dict[str, TelegramBot | None] = {"bot": None}
 
     siem_cfg = config.get("siem") or {}
     lab_cfg = config.get("lab") or {}
-    auto_ban_cfg = per_cfg.get("auto_ban") or {}
-    auto_ban_rules = set(auto_ban_cfg.get("rules") or []) if auto_ban_cfg.get("enabled") else set()
+    resp_cfg = config.get("response") or {}
+    resp_mode = str(resp_cfg.get("mode") or "observe").strip().lower()
+    never_ban = set(str(x) for x in (resp_cfg.get("never_ban_cidrs") or []))
+    auto_ban_cfg = dict(per_cfg.get("auto_ban") or {})
+    # Derive auto_ban from response.mode
+    if resp_mode == "observe":
+        auto_ban_cfg["enabled"] = False
+        auto_ban_rules: set[str] = set()
+    elif resp_mode == "shield":
+        auto_ban_cfg["enabled"] = True
+        auto_ban_rules = {"bruteforce_ssh", "honeypot_hit"}
+    elif resp_mode == "aggressive":
+        auto_ban_cfg["enabled"] = True
+        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or {
+            "bruteforce_ssh",
+            "honeypot_hit",
+            "egress_denylist_hit",
+            "port_scan_suspected",
+        }
+    else:
+        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) if auto_ban_cfg.get("enabled") else set()
     auto_ban_ttl = float(auto_ban_cfg.get("ttl_sec", 3600))
+    console.print(f"[cyan]response.mode[/] {resp_mode} auto_ban_rules={sorted(auto_ban_rules) or '—'}")
 
     def on_alert(alert, recon):
         GLOBAL_BUS.push_alert(
@@ -158,6 +247,19 @@ def run_guard(
     def on_auto_ban(alert):
         if not alert.ip:
             return
+        try:
+            import ipaddress
+
+            ip_obj = ipaddress.ip_address(alert.ip)
+            for cidr in never_ban:
+                try:
+                    if ip_obj in ipaddress.ip_network(cidr, strict=False):
+                        console.print(f"[yellow]auto-ban skipped[/] {alert.ip} in never_ban {cidr}")
+                        return
+                except ValueError:
+                    continue
+        except ValueError:
+            pass
         msg = nft.ban_ip(alert.ip, ttl_sec=auto_ban_ttl, dry_run=dry_run_actions)
         console.print(f"[red]auto-ban[/] {msg}")
         if bot_holder["bot"] is not None:
@@ -233,6 +335,8 @@ def run_guard(
             include_nmap=bool(recon_cfg.get("nmap", False)),
             webapp_url=webapp_url,
             unlock=unlock_gate,
+            kirk_status=kirk_status,
+            response_mode=resp_mode,
         )
         if unlock_gate.enabled:
             try:
@@ -310,46 +414,68 @@ def run_guard(
                 console.print(f"[yellow]tg poll[/] {exc}")
             if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                 break
-            # ban TTL cleanup
+            # ban TTL cleanup + kirk isolate TTL
             try:
                 nft.list_bans()
+                if kirk_status.get("isolated") and getattr(nft, "_kirk_expires", None) is None:
+                    kirk_status["isolated"] = False
             except Exception:
                 pass
 
     def host_loop():
         web_on = enable_web or bool(web_cfg.get("enabled"))
-        if artifacts_dir is None or not artifacts_dir.exists():
-            console.print("[yellow]no model artifacts; host ML monitor disabled[/]")
-            if not web_on:
-                return
-            # metrics-only feed for the live web UI
-            collector = MetricsCollector(
-                max_cores=int(col_cfg.get("max_cores", 16)),
-                socket_sample_every=int(col_cfg.get("socket_sample_every", 5)),
-            )
-            daemon = CollectDaemon(collector, interval_sec=1.0, buffer_size=None)
-
-            def on_metrics(row: dict) -> None:
-                if stop.is_set():
-                    raise KeyboardInterrupt
-                GLOBAL_BUS.push_sample(
-                    cpu=float(row.get("cpu_percent") or 0.0),
-                    mem=float(row.get("mem_percent") or 0.0),
-                    net=float(
-                        row.get("net_packets_sent_per_s")
-                        or row.get("net_packets_recv_per_s")
-                        or 0.0
-                    ),
-                    pattern="live metrics",
+        runtime = str(config.get("runtime") or "notorch").strip().lower()
+        if runtime == "notorch" or artifacts_dir is None or not artifacts_dir.exists():
+            if runtime == "notorch":
+                console.print("[cyan]runtime=notorch[/] host CNN off — perimeter + agent risk only")
+            elif artifacts_dir is None or not artifacts_dir.exists():
+                console.print("[yellow]no model artifacts; host ML monitor disabled[/]")
+            if not web_on and runtime == "notorch":
+                # still feed light metrics so bus/risk from agent works
+                pass
+            if artifacts_dir is None or not artifacts_dir.exists() or runtime == "notorch":
+                if not web_on and runtime != "notorch":
+                    return
+                # metrics-only feed for the live web UI + agent fuse
+                collector = MetricsCollector(
+                    max_cores=int(col_cfg.get("max_cores", 16)),
+                    socket_sample_every=int(col_cfg.get("socket_sample_every", 5)),
                 )
+                daemon = CollectDaemon(collector, interval_sec=1.0, buffer_size=None)
+                mon_cfg_local = config.get("monitor") or {}
+                interval_sec = float(mon_cfg_local.get("interval_sec", 5))
+                last_print = 0.0
 
-            try:
-                daemon.run(duration_sec=duration_sec, on_sample=on_metrics)
-            except KeyboardInterrupt:
+                def on_metrics(row: dict) -> None:
+                    nonlocal last_print
+                    if stop.is_set():
+                        raise KeyboardInterrupt
+                    ascore = float(risk_state.get("agent", 0.0))
+                    now = time.monotonic()
+                    GLOBAL_BUS.push_sample(
+                        cpu=float(row.get("cpu_percent") or 0.0),
+                        mem=float(row.get("mem_percent") or 0.0),
+                        net=float(
+                            row.get("net_packets_sent_per_s")
+                            or row.get("net_packets_recv_per_s")
+                            or 0.0
+                        ),
+                        agent_score=ascore,
+                        risk=ascore,
+                        pattern="live metrics",
+                        load_profile=load_name,
+                    )
+                    if now - last_print >= interval_sec:
+                        last_print = now
+                        console.print(f"host ok risk={ascore:.3f} host=0.000 agent={ascore:.3f} (notorch)")
+
+                try:
+                    daemon.run(duration_sec=duration_sec, on_sample=on_metrics)
+                except KeyboardInterrupt:
+                    return
                 return
-            return
         try:
-            infer = EnsembleInferencer(artifacts_dir)
+            infer = load_inferencer(artifacts_dir, runtime=runtime)
         except Exception as exc:
             console.print(f"[yellow]host ML unavailable[/] {exc}")
             return
@@ -662,6 +788,8 @@ def run_guard(
             _resolve(agent_cfg["iforest"]) if agent_cfg.get("iforest") else None
         )
         agent_score_threshold = float(agent_cfg.get("score_threshold", 0.65))
+        last_agent_seen = {"ts": time.time()}
+        agent_heartbeat_sec = float(agent_cfg.get("heartbeat_sec", 180))
 
         raw_sock = agent_cfg.get("socket")
         if not raw_sock:
@@ -673,6 +801,8 @@ def run_guard(
         def on_agent_alert(alert) -> None:
             from sysspectogram.perimeter.rules import Alert as PAlert
 
+            last_agent_seen["ts"] = time.time()
+
             extras = dict(getattr(alert, "extras", None) or {})
             agent_feat.push(
                 str(alert.rule_id),
@@ -680,17 +810,100 @@ def run_guard(
                 path=getattr(alert, "path", None),
             )
             ascore = agent_scorer.score(agent_feat.vector())
+            raw_thr = (config.get("ensemble") or {}).get("risk_threshold", 0.7)
+            risk_thr = float(raw_thr if raw_thr is not None else 0.7)
+            ascore = apply_kirk_override(
+                ascore,
+                rule_id=str(alert.rule_id),
+                severity=str(alert.severity),
+                risk_threshold=risk_thr,
+            )
             risk_state["agent"] = float(ascore)
             extras["agent_score"] = round(ascore, 3)
+            extras["kirk_trust"] = kirk_status.get("trust")
             alert.extras = extras
-            # Suppress noisy filesystem-watch pings to Telegram unless IF score is hot
+
+            # auto_isolate: only allowlisted rule_ids (ignore forged severity=critical alone)
+            _AUTO_ISOLATE_RULES = frozenset(
+                {
+                    "agent_kirk_module_hide",
+                    "agent_kirk_symbol_drift",
+                    "agent_kirk_ima_mismatch",
+                }
+            )
+            if (
+                kirk_enabled
+                and kirk_auto_isolate
+                and not kirk_status.get("isolated")
+                and str(alert.rule_id) in _AUTO_ISOLATE_RULES
+                and str(alert.severity).lower() == "critical"
+            ):
+                if not kirk_allow_cidrs:
+                    console.print(
+                        "[red]kirk auto_isolate skipped[/] — set kirk.allow_ssh_cidrs first"
+                    )
+                else:
+                    try:
+                        msg_iso = nft.kirk_isolate(
+                            allow_cidrs=kirk_allow_cidrs,
+                            ttl_sec=kirk_isolate_ttl,
+                            dry_run=dry_run_actions,
+                        )
+                        if "refused" in msg_iso or "failed" in msg_iso:
+                            console.print(f"[yellow]kirk isolate[/] {msg_iso}")
+                        else:
+                            kirk_status["isolated"] = not dry_run_actions
+                            console.print(f"[red]kirk isolate[/] {msg_iso}")
+                            bot = bot_holder["bot"]
+                            if bot is not None:
+                                try:
+                                    bot.client.send_message(
+                                        bot.prefix(
+                                            f"KIRK [critical] AUTO ISOLATE after {alert.rule_id}: {msg_iso}\n"
+                                            f"/kirk_release after /unlock (TTL={kirk_isolate_ttl}s)"
+                                        )
+                                    )
+                                except Exception:
+                                    pass
+                    except Exception as exc:
+                        console.print(f"[yellow]kirk isolate failed[/] {exc}")
+
+            # Telegram: default quiet. Only push high-signal rules, or when IF is hot.
+            quiet_unless_hot = {
+                "agent_path_watch",
+                "agent_ebpf_execve",
+                "agent_ebpf_openat",
+                "agent_ebpf",
+            }
             notify_tg = True
-            if alert.rule_id == "agent_path_watch" and ascore < agent_score_threshold:
+            if alert.rule_id in quiet_unless_hot and ascore < agent_score_threshold:
+                notify_tg = False
+            # kirk: always notify hide/drift/ima/down; module_load has cooldown
+            if alert.rule_id.startswith("agent_kirk_"):
+                notify_tg = True
+                if alert.rule_id in (
+                    "agent_kirk_module_load",
+                    "agent_kirk_module_delete",
+                ):
+                    now_m = time.time()
+                    last_m = float(kirk_status.get("_last_module_tg") or 0.0)
+                    if now_m - last_m < 120.0:
+                        notify_tg = False
+                    else:
+                        kirk_status["_last_module_tg"] = now_m
+            path_l = (getattr(alert, "path", None) or "").lower()
+            if alert.rule_id.startswith("agent_ebpf") and _ebpf_path_benign(path_l):
+                notify_tg = False
+            if alert.rule_id == "agent_open_sensitive" and _benign_sudo_sudoers(
+                getattr(alert, "comm", None), getattr(alert, "path", None)
+            ):
                 notify_tg = False
 
             body = str(alert.message)
-            if ascore >= agent_score_threshold:
+            if ascore >= agent_score_threshold and notify_tg:
                 body = f"{body}\nagent_score={ascore:.2f} (elevated)"
+            if alert.rule_id.startswith("agent_kirk_"):
+                body = f"{body}\nkirk.trust={kirk_status.get('trust')}"
 
             GLOBAL_BUS.push_alert(
                 LiveAlert(
@@ -765,6 +978,7 @@ def run_guard(
 
         def on_agent_metrics(sample) -> None:
             # Phase 2: feed live web from Rust hot path (ML still uses Python collector).
+            last_agent_seen["ts"] = time.time()
             try:
                 GLOBAL_BUS.push_sample(
                     cpu=float(sample.cpu_percent),
@@ -789,6 +1003,60 @@ def run_guard(
         except OSError as exc:
             console.print(f"[yellow]agent socket[/] {exc}")
             agent_listener = None
+
+        def agent_heartbeat_loop():
+            last_alert_sent = 0.0
+            while not stop.is_set():
+                silence = time.time() - last_agent_seen["ts"]
+                if silence >= agent_heartbeat_sec and time.time() - last_alert_sent > agent_heartbeat_sec:
+                    last_alert_sent = time.time()
+                    msg = f"agent heartbeat missing ({silence:.0f}s) — agent_kirk_agent_down"
+                    console.print(f"[red]{msg}[/]")
+                    bot = bot_holder["bot"]
+                    if bot is not None:
+                        try:
+                            bot.client.send_message(bot.prefix(f"KIRK [high] {msg}"))
+                        except Exception:
+                            pass
+                stop.wait(15.0)
+
+        if agent_listener is not None:
+            threads.append(
+                threading.Thread(target=agent_heartbeat_loop, name="agent-hb", daemon=True)
+            )
+
+        def ima_watch_loop():
+            if not (kirk_enabled and bool(kirk_cfg.get("ima_watch", True))):
+                return
+            state_p = _resolve(kirk_cfg.get("ima_state_path", "state/ima_offset.txt"))
+            # seed offset so boot history does not flood
+            try:
+                ima_watch_new_lines(state_p)
+            except Exception:
+                pass
+            while not stop.is_set():
+                try:
+                    lines = ima_watch_new_lines(state_p)
+                except Exception:
+                    lines = []
+                for ln in lines:
+                    low = ln.lower()
+                    if "module" not in low and "/lib/modules/" not in low and not low.endswith(".ko"):
+                        continue
+                    msg = f"IMA new module-related measurement: {ln[:200]}"
+                    console.print(f"[magenta]kirk ima[/] {msg}")
+                    bot = bot_holder["bot"]
+                    if bot is not None:
+                        try:
+                            bot.client.send_message(
+                                bot.prefix(f"KIRK [high] agent_kirk_ima_event\n{msg}\ntrust={kirk_status.get('trust')}")
+                            )
+                        except Exception:
+                            pass
+                stop.wait(30.0)
+
+        if kirk_enabled and bool(kirk_cfg.get("ima_watch", True)):
+            threads.append(threading.Thread(target=ima_watch_loop, name="ima-watch", daemon=True))
 
         if agent_cfg.get("auto_start") and agent_listener is not None:
             import shutil

@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Protocol
 
 import numpy as np
-import torch
 
-from sysspectogram.ml.cnn import AnomalyCNN
 from sysspectogram.ml.ensemble import fuse_scores
 from sysspectogram.ml.forest import ForestDetector
 from sysspectogram.preprocess.heatmap import tabular_features, window_to_tensor
@@ -23,8 +22,47 @@ class Prediction:
     threshold: float
 
 
+class _InferBackend(Protocol):
+    columns: list[str]
+    window_size: int
+    threshold: float
+
+    def predict_window(self, window: np.ndarray) -> Prediction: ...
+
+
+def load_inferencer(
+    artifacts_dir: Path,
+    *,
+    runtime: str = "torch_ml",
+    device: str | None = None,
+) -> _InferBackend:
+    """Pick backend: notorch raises; onnx prefers cnn.onnx; torch_ml uses cnn.pt."""
+    artifacts_dir = Path(artifacts_dir)
+    runtime = (runtime or "torch_ml").strip().lower()
+    if runtime == "notorch":
+        raise RuntimeError("runtime=notorch — host CNN disabled")
+    onnx_path = artifacts_dir / "cnn.onnx"
+    if runtime == "onnx" or (runtime != "torch_ml" and onnx_path.exists()):
+        from sysspectogram.ml.infer_onnx import OnnxEnsembleInferencer
+
+        return OnnxEnsembleInferencer(artifacts_dir)
+    return EnsembleInferencer(artifacts_dir, device=device)
+
+
 class EnsembleInferencer:
+    """Torch CNN + IsolationForest (requires torch / pip install -e '.[ml]')."""
+
     def __init__(self, artifacts_dir: Path, device: str | None = None) -> None:
+        try:
+            import torch
+        except ImportError as exc:
+            raise ImportError(
+                "PyTorch required for cnn.pt inference. "
+                "Install: pip install -e '.[ml]'  — or export-onnx and use runtime=onnx"
+            ) from exc
+
+        from sysspectogram.ml.cnn import AnomalyCNN
+
         self.artifacts_dir = Path(artifacts_dir)
         meta_path = self.artifacts_dir / "meta.json"
         self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -34,6 +72,7 @@ class EnsembleInferencer:
         self.columns: list[str] = list(self.meta.get("columns", []))
         self.window_size = int(self.meta.get("window_size", 60))
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self._torch = torch
 
         try:
             ckpt = torch.load(
@@ -44,7 +83,6 @@ class EnsembleInferencer:
         except TypeError:
             ckpt = torch.load(self.artifacts_dir / "cnn.pt", map_location=self.device)
         except Exception:
-            # older checkpoints wrap state_dict in a dict with non-tensor meta
             ckpt = torch.load(
                 self.artifacts_dir / "cnn.pt",
                 map_location=self.device,
@@ -60,7 +98,6 @@ class EnsembleInferencer:
         self.model.to(self.device)
         self.model.eval()
 
-        # optional integrity
         checksum_path = self.artifacts_dir / "checksums.sha256"
         if checksum_path.exists():
             self._verify_checksums(checksum_path)
@@ -87,6 +124,7 @@ class EnsembleInferencer:
                 raise RuntimeError(f"checksum mismatch for {name}")
 
     def predict_window(self, window: np.ndarray) -> Prediction:
+        torch = self._torch
         scaled = self.scaler.transform(window)
         tensor = torch.from_numpy(window_to_tensor(scaled)).unsqueeze(0).to(self.device)
         with torch.no_grad():

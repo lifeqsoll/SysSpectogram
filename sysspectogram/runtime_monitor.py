@@ -10,7 +10,7 @@ from sysspectogram.audit.processes import list_top_processes
 from sysspectogram.audit.report import append_jsonl
 from sysspectogram.collect.daemon import CollectDaemon
 from sysspectogram.collect.metrics import MetricsCollector
-from sysspectogram.ml.infer import EnsembleInferencer
+from sysspectogram.ml.infer import load_inferencer
 from sysspectogram.notify import format_process_lines, notify
 from sysspectogram.preprocess.window import rows_to_matrix
 
@@ -27,7 +27,7 @@ def run_monitor(
     socket_sample_every: int = 5,
     jsonl_out: Path | None = None,
 ) -> None:
-    infer = EnsembleInferencer(artifacts_dir)
+    infer = load_inferencer(artifacts_dir, runtime="onnx" if (artifacts_dir / "cnn.onnx").exists() else "torch_ml")
     columns = infer.columns
     if not columns:
         raise RuntimeError("artifacts meta.json has empty columns; retrain/rebuild dataset")

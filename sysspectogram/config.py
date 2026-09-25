@@ -55,6 +55,23 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         web["public_url"] = os.environ["SYSPECTOGRAM_WEB_URL"]
     if os.environ.get("SYSSPECTOGRAM_LOAD_PROFILE"):
         data["load_profile"] = os.environ["SYSSPECTOGRAM_LOAD_PROFILE"]
+    if os.environ.get("SYSSPECTOGRAM_RUNTIME"):
+        data["runtime"] = os.environ["SYSSPECTOGRAM_RUNTIME"].strip().lower()
     from sysspectogram.load_profile import apply_load_profile
 
-    return apply_load_profile(data)
+    data = apply_load_profile(data)
+    # notorch: don't fuse host CNN weight unless user overrode
+    runtime = str(data.get("runtime") or "notorch").strip().lower()
+    data["runtime"] = runtime
+    if runtime == "notorch":
+        ens = data.setdefault("ensemble", {})
+        # YAML defaults host_weight=0.6 for onnx/torch; zero host CNN for notorch
+        # unless operator explicitly set SYSSPECTOGRAM_HOST_WEIGHT
+        if os.environ.get("SYSSPECTOGRAM_HOST_WEIGHT") is None:
+            ens["host_weight"] = 0.0
+            ens["agent_weight"] = 1.0
+        elif ens.get("agent_weight") is None:
+            ens["agent_weight"] = 1.0
+    if data.get("ensemble", {}).get("risk_threshold") is None:
+        data.setdefault("ensemble", {})["risk_threshold"] = 0.7
+    return data

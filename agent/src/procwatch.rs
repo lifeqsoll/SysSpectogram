@@ -150,7 +150,7 @@ impl ProcWatcher {
         }
         for name in now.difference(&self.modules) {
             let mut a = AgentAlert::new(
-                "agent_module_load",
+                "agent_kirk_module_load",
                 "high",
                 format!("new kernel module appeared: {name}"),
                 host_id,

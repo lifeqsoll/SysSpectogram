@@ -14,7 +14,7 @@ mod imp {
     use aya::util::online_cpus;
     use aya::Ebpf;
     use bytes::BytesMut;
-    use sysspectogram_common::{ProbeEvent, KIND_EXECVE, KIND_OPENAT};
+    use sysspectogram_common::{ProbeEvent, KIND_EXECVE, KIND_MODULE, KIND_OPENAT};
 
     use crate::types::AgentAlert;
 
@@ -117,6 +117,32 @@ mod imp {
             prog.attach("syscalls", "sys_enter_openat")
                 .map_err(|e| format!("openat attach: {e}"))?;
         }
+        for (name, cat, event) in [
+            (
+                "sysspectogram_finit_module",
+                "syscalls",
+                "sys_enter_finit_module",
+            ),
+            (
+                "sysspectogram_init_module",
+                "syscalls",
+                "sys_enter_init_module",
+            ),
+            (
+                "sysspectogram_delete_module",
+                "syscalls",
+                "sys_enter_delete_module",
+            ),
+        ] {
+            let prog: &mut TracePoint = bpf
+                .program_mut(name)
+                .ok_or(format!("missing {name}"))?
+                .try_into()
+                .map_err(|e| format!("{e}"))?;
+            prog.load().map_err(|e| format!("{name} load: {e}"))?;
+            prog.attach(cat, event)
+                .map_err(|e| format!("{name} attach: {e}"))?;
+        }
 
         let mut perf_map: PerfEventArray<_> = bpf
             .take_map("EVENTS")
@@ -202,13 +228,17 @@ mod imp {
             .position(|&c| c == 0)
             .unwrap_or(ev.path.len());
         let path = String::from_utf8_lossy(&ev.path[..end]).into_owned();
-        // openat is extremely noisy — keep sensitive / interesting paths only
-        if ev.kind == KIND_OPENAT && !path_interesting_openat(&path) {
-            return None;
+        match ev.kind {
+            KIND_OPENAT if !path_interesting_openat(&path) => return None,
+            KIND_EXECVE if !path_interesting_execve(&path) => return None,
+            KIND_MODULE => {}
+            _ if ev.kind != KIND_OPENAT && ev.kind != KIND_EXECVE && ev.kind != KIND_MODULE => {}
+            _ => {}
         }
         let (rule, sev, label) = match ev.kind {
             KIND_EXECVE => ("agent_ebpf_execve", "medium", "execve"),
             KIND_OPENAT => ("agent_ebpf_openat", "medium", "openat"),
+            KIND_MODULE => ("agent_kirk_module_load", "high", "module"),
             _ => ("agent_ebpf", "low", "syscall"),
         };
         let mut a = AgentAlert::new(
@@ -222,8 +252,18 @@ mod imp {
         Some(a)
     }
 
+    /// Drop routine opens (Cursor AppImage under /tmp/.mount_*, libc in shm, …).
+    /// Keep credential / persistence paths and *suspicious* writable dirs only.
     fn path_interesting_openat(path: &str) -> bool {
-        const HINTS: &[&str] = &[
+        if path.is_empty()
+            || path.starts_with("/proc/")
+            || path.starts_with("/sys/")
+            || path.starts_with("/tmp/.mount_")
+            || path.contains("/.mount_")
+        {
+            return false;
+        }
+        const SENSITIVE: &[&str] = &[
             "/.ssh/",
             "/etc/shadow",
             "/etc/passwd",
@@ -233,15 +273,72 @@ mod imp {
             "/var/spool/cron",
             "/etc/systemd/",
             "/usr/lib/systemd/",
-            "/root/",
-            "/tmp/",
-            "/dev/shm/",
-            "/var/tmp/",
+            "/root/.ssh",
+            "/root/.bashrc",
+            "/root/.profile",
         ];
-        if path.is_empty() || path.starts_with("/proc/") || path.starts_with("/sys/") {
+        if SENSITIVE.iter().any(|h| path.contains(h)) {
+            return true;
+        }
+        // Droppers often stage under writable dirs — but only odd payloads, not every .so
+        let in_writable = path.starts_with("/tmp/")
+            || path.starts_with("/dev/shm/")
+            || path.starts_with("/var/tmp/");
+        if !in_writable {
             return false;
         }
-        HINTS.iter().any(|h| path.contains(h))
+        let base = path.rsplit('/').next().unwrap_or("");
+        if base.is_empty() || base == "." || base == ".." {
+            return false;
+        }
+        // ignore shared libs / appimage guts in tmp
+        if base.ends_with(".so")
+            || base.contains(".so.")
+            || base.ends_with(".so.6")
+            || path.contains("/lib/")
+            || path.contains("/lib64/")
+        {
+            return false;
+        }
+        base.starts_with('.')
+            || base.ends_with(".sh")
+            || base.ends_with(".py")
+            || base.ends_with(".elf")
+            || !base.contains('.')
+    }
+
+    /// Most execve is noise (nvidia-smi, shells, IDE). Alert only odd locations.
+    fn path_interesting_execve(path: &str) -> bool {
+        if path.is_empty() {
+            return false;
+        }
+        // Allow common system / toolchain prefixes
+        const ALLOW: &[&str] = &[
+            "/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/", "/opt/", "/snap/", "/nix/",
+        ];
+        if ALLOW.iter().any(|p| path.starts_with(p)) {
+            return false;
+        }
+        // venv / go install / flatpak / appimage — normal desktop noise
+        if path.contains("/.venv/")
+            || path.contains("/venv/")
+            || path.contains("/go/bin/")
+            || path.contains("/.local/bin/")
+            || path.contains("/.cargo/bin/")
+            || path.contains("/.mount_")
+            || path.starts_with("/tmp/.mount_")
+        {
+            return false;
+        }
+        path.starts_with("/tmp/")
+            || path.starts_with("/dev/shm/")
+            || path.starts_with("/var/tmp/")
+            || path.contains("/.ssh/")
+            || path.contains("/Downloads/") && (path.ends_with(".sh") || path.ends_with(".elf"))
+            || {
+                let base = path.rsplit('/').next().unwrap_or("");
+                base.starts_with('.') && base.len() > 1
+            }
     }
 }
 

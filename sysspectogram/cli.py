@@ -64,6 +64,11 @@ def _cmd_build_dataset(args: argparse.Namespace) -> int:
 
 
 def _cmd_train(args: argparse.Namespace) -> int:
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        console.print("[red]train needs PyTorch[/]: pip install -e '.[ml]'")
+        return 2
     from sysspectogram.ml.train import train_models
 
     cfg = load_config(args.config)
@@ -79,6 +84,17 @@ def _cmd_train(args: argparse.Namespace) -> int:
         iforest_weight=float(t.get("iforest_weight", 0.4)),
         recall_target=float(t.get("recall_target", 0.9)),
     )
+    return 0
+
+
+def _cmd_export_onnx(args: argparse.Namespace) -> int:
+    from sysspectogram.ml.export_onnx import export_cnn_onnx
+
+    meta = export_cnn_onnx(
+        _resolve(args.model),
+        out_path=_resolve(args.out) if args.out else None,
+    )
+    console.print(f"[green]exported[/] {meta['onnx']} ({meta['height']}x{meta['width']})")
     return 0
 
 
@@ -331,6 +347,76 @@ def _cmd_train_agent_if(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_data(args: argparse.Namespace) -> int:
+    from sysspectogram.data_bridge import create_data_bundle, pull_cmd, unpack_data_bundle
+
+    if args.data_action == "bundle":
+        meta = create_data_bundle(
+            [_resolve(p) for p in args.csv],
+            _resolve(args.out),
+            note=args.note or "",
+            host_id=args.host_id,
+        )
+        console.print(
+            f"[green]bundled[/] {meta['path']} sha256={meta['sha256'][:16]}… csv={meta['csv']}"
+        )
+        return 0
+    if args.data_action == "unpack":
+        info = unpack_data_bundle(_resolve(args.tar), _resolve(args.dest))
+        console.print(f"[green]unpacked[/] csv_dir={info['csv_dir']}")
+        return 0
+    if args.data_action == "pull-cmd":
+        console.print(pull_cmd(args.bundle, args.ssh))
+        return 0
+    console.print("unknown data action")
+    return 1
+
+
+def _cmd_artifacts(args: argparse.Namespace) -> int:
+    from sysspectogram.data_bridge import push_artifacts
+
+    if args.artifacts_action == "push":
+        info = push_artifacts(
+            _resolve(args.model),
+            ssh=args.ssh,
+            remote_dir=args.remote,
+            restart_unit=args.restart_systemd,
+        )
+        console.print(f"[green]pushed[/] → {info['ssh']}:{info['remote']}")
+        return 0
+    console.print("unknown artifacts action")
+    return 1
+
+
+def _cmd_setup(args: argparse.Namespace) -> int:
+    from sysspectogram.setup_wizard import run_setup
+
+    run_setup(prefix=_resolve(args.prefix))
+    return 0
+
+
+def _cmd_kirk(args: argparse.Namespace) -> int:
+    from sysspectogram.kirk_trust import probe_kirk_trust
+
+    if args.kirk_action == "trust":
+        report = probe_kirk_trust(require_tpm=bool(args.require_tpm))
+        console.print(f"[cyan]trust[/] {report.trust}")
+        console.print(
+            f"ima={report.ima_present} measurements={report.ima_measurements} "
+            f"secure_boot={report.secure_boot} tpm={report.tpm_present}"
+        )
+        for d in report.details:
+            console.print(f"  · {d}")
+        if report.trust == "best-effort":
+            console.print(
+                "[dim]Without IMA + Secure Boot/TPM this is best-effort, not integrity proof. "
+                "VMI → v1.0 (docs/VMI.md).[/]"
+            )
+        return 0
+    console.print("unknown kirk action")
+    return 1
+
+
 def _cmd_lab_nmap(args: argparse.Namespace) -> int:
     from sysspectogram.lab_nmap import main as lab_main
 
@@ -381,6 +467,11 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--out", required=True)
     t.add_argument("--epochs", type=int, default=None)
     t.set_defaults(func=_cmd_train)
+
+    eo = sub.add_parser("export-onnx", help="export cnn.pt → cnn.onnx (needs .[ml])")
+    eo.add_argument("--model", required=True, help="artifacts directory with cnn.pt")
+    eo.add_argument("--out", default=None, help="default: <model>/cnn.onnx")
+    eo.set_defaults(func=_cmd_export_onnx)
 
     m = sub.add_parser("monitor", help="realtime anomaly monitoring")
     m.add_argument("--model", required=True, help="artifacts directory")
@@ -467,6 +558,42 @@ def build_parser() -> argparse.ArgumentParser:
     pr_ft = pr_sub.add_parser("finetune-help", help="print local fine-tune recipe")
     pr_ft.add_argument("--host", default="artifacts/profiles/local/host")
     pr_ft.set_defaults(func=_cmd_profiles)
+
+    data = sub.add_parser("data", help="VPS↔PC train bridge (bundle CSV / unpack)")
+    data_sub = data.add_subparsers(dest="data_action", required=True)
+    db = data_sub.add_parser("bundle", help="pack CSVs into data bundle tar.gz")
+    db.add_argument("--csv", nargs="+", required=True)
+    db.add_argument("--out", required=True)
+    db.add_argument("--note", default="")
+    db.add_argument("--host-id", default=None)
+    db.set_defaults(func=_cmd_data)
+    du = data_sub.add_parser("unpack", help="extract data bundle")
+    du.add_argument("tar")
+    du.add_argument("--dest", required=True)
+    du.set_defaults(func=_cmd_data)
+    dp = data_sub.add_parser("pull-cmd", help="print rsync one-liner")
+    dp.add_argument("--bundle", required=True, help="remote path on VPS")
+    dp.add_argument("--ssh", required=True, help="user@host")
+    dp.set_defaults(func=_cmd_data)
+
+    ap = sub.add_parser("artifacts", help="push model artifacts to VPS over SSH")
+    ap_sub = ap.add_subparsers(dest="artifacts_action", required=True)
+    app = ap_sub.add_parser("push", help="rsync model dir → remote (atomic .next swap)")
+    app.add_argument("--model", required=True)
+    app.add_argument("--ssh", required=True)
+    app.add_argument("--remote", required=True, help="e.g. /opt/sysspectogram/artifacts/live")
+    app.add_argument("--restart-systemd", default=None)
+    app.set_defaults(func=_cmd_artifacts)
+
+    st = sub.add_parser("setup", help="interactive .env / Telegram setup")
+    st.add_argument("--prefix", default=".", help="install prefix (default: repo root)")
+    st.set_defaults(func=_cmd_setup)
+
+    kk = sub.add_parser("kirk", help="kernel integrity trust probe (IMA/SB/TPM)")
+    kk_sub = kk.add_subparsers(dest="kirk_action", required=True)
+    kk_t = kk_sub.add_parser("trust", help="probe best-effort vs measured")
+    kk_t.add_argument("--require-tpm", action="store_true")
+    kk_t.set_defaults(func=_cmd_kirk)
 
     w = sub.add_parser("web", help="live local / Telegram Mini App dashboard")
     w.add_argument("--model", default=None, help="optional artifacts for scoring")

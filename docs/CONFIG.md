@@ -69,22 +69,23 @@ Fusion is renormalized so the two weights sum to 1.
 
 See `configs/default.yaml` and the Russian config doc for full tables. Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `WEBAPP_URL`.
 
-Notable **v0.4** keys:
+Notable **v0.5** keys:
 
 | Section | Key | Default | Meaning |
 | --- | --- | --- | --- |
 | `load_profile` | `lite` / `full` | `lite` | CPU budget (VPS vs VDS) |
+| `runtime` | `prefer` | `notorch` | `notorch` \| `onnx` \| `torch_ml` |
+| `response` | `mode` | `observe` | `observe` \| `shield` \| `aggressive` |
 | `telegram` | `require_console_unlock` | `true` | Gate TG + web actions until `/unlock` |
-| `telegram` | `unlock_ttl_sec` | `7200` | Unlock session TTL (2h) |
-| `agent` | `enabled` / `auto_start` | off / on | Spawn Rust integrity agent from guard |
 | `agent` | `mode` | `userspace` | `userspace` or `ebpf` (attach needs root) |
-| `agent` | `socket` | `null` | `null` → `$XDG_RUNTIME_DIR/…sock` mode 0600 |
-| `agent` | `metrics` | `true` | Emit light metrics for live web |
+| `kirk` | `trust` | `auto` | Probe IMA+SB/TPM → `best-effort` \| `measured` |
+| `kirk` | `auto_isolate` | `false` | CRITICAL kirk → nft `ss_kirk` (set `allow_ssh_cidrs`) |
+| `kirk` | `vmi` | `false` | Reserved; live VMI → **v1.0** ([VMI.md](VMI.md)) |
 | `ensemble` | `host_weight` / `agent_weight` | see yaml | Fuse host ML + agent IF → `risk` |
 
 ---
 
 ## Environment notes
 
-- v0.4: fuse risk, profile packs, lite/full, FIM/flow in `full`, optional eBPF (clang + root). Console unlock gates TG/web kill/ban.  
+- v0.5: ONNX/notorch VPS runtime, train bridge, Kirk trust (IMA/SB/TPM), isolate API. VMI deferred to v1.0.  
 - Changing `max_cores` or feature schema requires rebuilding the dataset and retraining; old artifacts will not match new column layouts.
