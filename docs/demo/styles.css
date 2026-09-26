@@ -99,6 +99,26 @@ body {
   font-weight: 400;
 }
 
+.hero-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  list-style: none;
+  margin: 1.1rem 0 0;
+  padding: 0;
+  max-width: 40rem;
+}
+
+.hero-chips li {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--teal-deep);
+  background: rgba(15, 118, 110, 0.1);
+  border: 1px solid rgba(15, 118, 110, 0.25);
+  border-radius: var(--radius);
+}
+
 .hero-ctas {
   display: flex;
   flex-wrap: wrap;
@@ -320,6 +340,46 @@ body {
   align-self: center;
 }
 
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.28rem 0.5rem;
+  font-size: 0.68rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+}
+
+.pill.ok {
+  border-color: rgba(27, 122, 74, 0.35);
+  color: var(--ok);
+  background: rgba(27, 122, 74, 0.08);
+}
+
+.pill.warn {
+  border-color: rgba(181, 71, 8, 0.4);
+  color: var(--high);
+  background: rgba(181, 71, 8, 0.08);
+}
+
+.pill.crit {
+  border-color: rgba(180, 35, 24, 0.45);
+  color: var(--crit);
+  background: rgba(180, 35, 24, 0.08);
+  animation: pulse 1.4s ease infinite;
+}
+
+.pill.muted {
+  opacity: 0.85;
+}
+
 .charts {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -457,6 +517,37 @@ body {
   background: var(--paper);
   font-size: 0.68rem;
   color: var(--ink);
+}
+
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+
+.tg-btn {
+  appearance: none;
+  border: 1px solid rgba(15, 118, 110, 0.35);
+  background: rgba(15, 118, 110, 0.08);
+  color: var(--teal-deep);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 0.28rem 0.45rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.tg-btn:hover {
+  background: var(--teal);
+  color: #f5fffb;
+}
+
+.tg-btn.clicked {
+  background: var(--ink-soft);
+  border-color: var(--ink-soft);
+  color: #f5fffb;
 }
 
 .alert.empty {

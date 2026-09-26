@@ -24,11 +24,13 @@
       net: [55, 20],
       score: [0.91, 0.03],
       amplify: "cpu",
+      pills: { mode: "mode: observe" },
       alert: {
         severity: "high",
         kind: "host",
         title: "HOST ANOMALY · CPU spike / compute",
         body: "Template: high CPU load (cpu≈88%); top: python(pid=4242,cpu=99%). Miner / runaway compute possible.",
+        actions: ["Kill PID 4242", "As anomaly", "Ignore"],
       },
     },
     mem: {
@@ -43,6 +45,7 @@
         kind: "host",
         title: "HOST ANOMALY · memory pressure",
         body: "Template: elevated mem≈86% / swap pressure. Leak or heavy alloc possible.",
+        actions: ["As anomaly", "Ignore"],
       },
     },
     net: {
@@ -57,6 +60,7 @@
         kind: "host",
         title: "HOST ANOMALY · network flood",
         body: "Template: packet/byte rates far above baseline. Local flood or exfil-like burst.",
+        actions: ["Lockdown", "Send report"],
       },
     },
     brute: {
@@ -66,12 +70,14 @@
       net: [90, 25],
       score: [0.18, 0.05],
       amplify: null,
+      pills: { mode: "mode: shield" },
       alert: {
         severity: "critical",
         kind: "perimeter",
         title: "PERIMETER · bruteforce_ssh",
         body: "Template: SSH auth failures spike from 203.0.113.50 (12 fails / 60s). Credential stuffing likely.",
         ip: "203.0.113.50",
+        actions: ["Ban IP 1h", "Mute 1h", "Recon"],
       },
     },
     egress: {
@@ -81,6 +87,7 @@
       net: [180, 40],
       score: [0.22, 0.05],
       amplify: "net",
+      pills: { mode: "mode: shield" },
       alert: {
         severity: "critical",
         kind: "perimeter",
@@ -88,6 +95,71 @@
         body: "Template: outbound to denylisted 198.51.100.66:4444. Possible beacon / C2.",
         ip: "198.51.100.66",
         recon: "PTR: none · ASN: EXAMPLE-NET · country: ZZ · nmap: lab-gated (skipped)",
+        actions: ["Ban IP 1h", "Recon", "Ignore"],
+      },
+    },
+    root: {
+      label: "unexpected root (agent)",
+      cpu: [16, 4],
+      mem: [36, 2],
+      net: [60, 20],
+      score: [0.72, 0.05],
+      amplify: "cpu",
+      pills: { root: "root_watch: ALERT", agent: "agent: up · HMAC ok" },
+      alert: {
+        severity: "critical",
+        kind: "agent",
+        title: "ROOT · agent_unexpected_root",
+        body: "New uid=0 pid=9182 comm=curl exe=/usr/bin/curl (after learn). Cannot revoke uid=0 in-place — Kill ends the process.",
+        actions: ["Kill root curl(9182)", "Lockdown", "Ignore proc"],
+      },
+    },
+    ssh: {
+      label: "unexpected SSH session",
+      cpu: [11, 3],
+      mem: [34, 2],
+      net: [75, 22],
+      score: [0.28, 0.05],
+      amplify: null,
+      pills: { sess: "sessions: ALERT", mode: "mode: shield" },
+      alert: {
+        severity: "high",
+        kind: "session",
+        title: "SESSION · unexpected_ssh_session",
+        body: "user=deploy tty=pts/3 from=198.51.100.20 — not in learn baseline / allowlist.",
+        actions: ["Kick pts/3", "Ban IP", "Ignore"],
+      },
+    },
+    kirk: {
+      label: "kirk module hide",
+      cpu: [18, 5],
+      mem: [37, 3],
+      net: [50, 15],
+      score: [0.95, 0.02],
+      amplify: "cpu",
+      pills: { trust: "kirk: best-effort", agent: "agent: CRITICAL · HMAC" },
+      alert: {
+        severity: "critical",
+        kind: "kirk",
+        title: "KIRK · agent_kirk_module_hide",
+        body: "Module name in /sys/module but missing from /proc/modules (cross-view). HMAC signed. auto_isolate off (demo).",
+        actions: ["Lockdown", "Send report", "Ignore"],
+      },
+    },
+    ebpf: {
+      label: "eBPF sensitive openat",
+      cpu: [20, 5],
+      mem: [36, 2],
+      net: [55, 18],
+      score: [0.68, 0.04],
+      amplify: "mem",
+      pills: { agent: "agent: ebpf · HMAC" },
+      alert: {
+        severity: "high",
+        kind: "agent",
+        title: "AGENT · agent_ebpf_openat",
+        body: "openat path=/root/.ssh/id_rsa pid=4410 comm=python3 — unusual vs baseline (eBPF probe).",
+        actions: ["Kill PID 4410", "As anomaly", "Ignore"],
       },
     },
     train: {
@@ -99,6 +171,14 @@
       amplify: "cpu",
       alert: null,
     },
+  };
+
+  const PILL_DEFAULTS = {
+    agent: "agent: up · HMAC",
+    trust: "kirk: best-effort",
+    root: "root_watch: learn",
+    sess: "sessions: learn",
+    mode: "mode: observe",
   };
 
   function randn() {
@@ -240,6 +320,29 @@
     return `rgb(${r},${g},${bl})`;
   }
 
+  function setPills(cfg) {
+    const map = { ...PILL_DEFAULTS, ...(cfg.pills || {}) };
+    const ids = {
+      agent: "pill-agent",
+      trust: "pill-trust",
+      root: "pill-root",
+      sess: "pill-sess",
+      mode: "pill-mode",
+    };
+    Object.keys(ids).forEach((k) => {
+      const el = document.getElementById(ids[k]);
+      if (!el) return;
+      const t = String(map[k]);
+      el.textContent = t;
+      el.classList.remove("ok", "warn", "crit", "muted");
+      const low = t.toLowerCase();
+      if (low.includes("alert") || low.includes("critical")) el.classList.add("crit");
+      else if (low.includes("shield") || low.includes("ebpf")) el.classList.add("warn");
+      else if (low.includes("learn") || low.includes("observe")) el.classList.add("muted");
+      else el.classList.add("ok");
+    });
+  }
+
   function setScenario(name) {
     if (!SCENARIOS[name]) return;
     state.scenario = name;
@@ -248,6 +351,7 @@
       btn.classList.toggle("active", btn.dataset.scenario === name);
     });
     document.getElementById("pattern-label").textContent = `pattern: ${SCENARIOS[name].label}`;
+    setPills(SCENARIOS[name]);
 
     const trainPanel = document.getElementById("train-panel");
     if (name === "train") {
@@ -283,6 +387,7 @@
 
     pushCharts();
     if (state.tick % 2 === 0) drawHeatmap();
+    if (cfg.alert && cfg.alert.kind === "host") maybeAlert(false);
   }
 
   function maybeAlert(force) {
@@ -326,8 +431,28 @@
       recon.textContent = alert.recon;
       el.appendChild(recon);
     }
+    if (alert.actions && alert.actions.length) {
+      const row = document.createElement("div");
+      row.className = "alert-actions";
+      alert.actions.forEach((label) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "tg-btn";
+        b.textContent = label;
+        b.addEventListener("click", () => {
+          b.classList.add("clicked");
+          b.textContent = "sim only";
+          setTimeout(() => {
+            b.textContent = label;
+            b.classList.remove("clicked");
+          }, 900);
+        });
+        row.appendChild(b);
+      });
+      el.appendChild(row);
+    }
     box.prepend(el);
-    while (box.children.length > 6) box.removeChild(box.lastChild);
+    while (box.children.length > 8) box.removeChild(box.lastChild);
   }
 
   function ensureEmptyAlert() {
@@ -403,6 +528,7 @@
     ensureEmptyAlert();
     initCharts();
     drawHeatmap();
+    setPills(SCENARIOS.idle);
     setInterval(tick, TICK_MS);
   }
 

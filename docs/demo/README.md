@@ -1,6 +1,7 @@
 # Interactive demo (GitHub Pages)
 
-Synthetic browser demo of SysSpectogram scenarios (CPU / mem / net / SSH brute / egress / fake train). **No real host metrics, models, or Telegram.**
+Synthetic browser demo of SysSpectogram (v0.6): host ML, perimeter, unexpected root / SSH,
+Kirk, eBPF openat, fake TG buttons, fuse risk pills. **No real host metrics, models, or Telegram.**
 
 ## Local preview
 

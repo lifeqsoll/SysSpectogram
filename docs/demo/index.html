@@ -19,7 +19,14 @@
   <header class="hero" id="top">
     <p class="sim-badge">SIMULATION — not connected to your machine</p>
     <h1 class="brand">SysSpectogram</h1>
-    <p class="tagline">Press a scenario. Watch metrics shift and alerts fire — the same story the real Linux guard tells, without touching your host.</p>
+    <p class="tagline">Press a scenario. Watch metrics, fuse risk, and Telegram-style alerts — host ML + perimeter + Rust agent (v0.6), without touching your host.</p>
+    <ul class="hero-chips" aria-label="v0.6 highlights">
+      <li>CNN + Isolation Forest</li>
+      <li>Rust agent / eBPF</li>
+      <li>HMAC + root watch</li>
+      <li>SSH kick / TG SOAR</li>
+      <li>notorch / ONNX on VPS</li>
+    </ul>
     <div class="hero-ctas">
       <a class="btn btn-primary" href="#workbench">Try scenarios</a>
       <a class="btn btn-ghost" href="https://github.com/lifeqsoll/SysSpectogram" rel="noopener">Clone on GitHub</a>
@@ -37,6 +44,10 @@
         <button type="button" class="scenario" data-scenario="net">Net flood</button>
         <button type="button" class="scenario" data-scenario="brute">SSH brute</button>
         <button type="button" class="scenario" data-scenario="egress">Egress denylist</button>
+        <button type="button" class="scenario" data-scenario="root">Unexpected root</button>
+        <button type="button" class="scenario" data-scenario="ssh">Unexpected SSH</button>
+        <button type="button" class="scenario" data-scenario="kirk">Kirk module hide</button>
+        <button type="button" class="scenario" data-scenario="ebpf">eBPF sensitive open</button>
         <button type="button" class="scenario scenario-wide" data-scenario="train">Fake train pipeline</button>
       </div>
 
@@ -57,9 +68,17 @@
       <div class="stage-head">
         <div>
           <h2>Live stage</h2>
-          <p class="host-line"><span class="dot"></span> host <strong>demo-vps</strong> · score <strong id="score-val">0.12</strong> · thr 0.75</p>
+          <p class="host-line"><span class="dot"></span> host <strong>demo-vps</strong> · fuse risk <strong id="score-val">0.12</strong> · thr 0.75</p>
         </div>
         <p class="pattern" id="pattern-label">pattern: idle baseline</p>
+      </div>
+
+      <div class="status-strip" aria-label="Agent status (simulated)">
+        <span class="pill ok" id="pill-agent">agent: up · HMAC</span>
+        <span class="pill ok" id="pill-trust">kirk: best-effort</span>
+        <span class="pill muted" id="pill-root">root_watch: learn</span>
+        <span class="pill muted" id="pill-sess">sessions: learn</span>
+        <span class="pill muted" id="pill-mode">mode: observe</span>
       </div>
 
       <div class="charts">
@@ -92,11 +111,11 @@
   </main>
 
   <footer class="footer">
-    <p>Ready for the real thing? Install on Linux, train on <em>your</em> data, run <code>guard --telegram</code>.</p>
+    <p>Ready for the real thing? Day-0 on a small VPS with <code>notorch</code>, then <code>guard --telegram</code> + Rust agent. Buttons here are fake — real Kill / Kick need console <code>/unlock</code>.</p>
     <div class="footer-links">
       <a href="https://github.com/lifeqsoll/SysSpectogram">GitHub</a>
-      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/README.md">Install</a>
-      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/RECIPES.md">Recipes</a>
+      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/DAY0_VPS.md">Day-0</a>
+      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/RELEASE_v0.6.0.md">v0.6 notes</a>
       <a href="https://github.com/lifeqsoll/SysSpectogram/releases">Releases</a>
     </div>
   </footer>
