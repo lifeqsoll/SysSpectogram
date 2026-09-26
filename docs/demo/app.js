@@ -293,12 +293,6 @@
         ctx.fillRect(c * cellW, r * cellH, Math.ceil(cellW) + 0.5, Math.ceil(cellH) + 0.5);
       }
     }
-
-    // second strip label feel (process heat)
-    ctx.fillStyle = "rgba(245,255,251,0.55)";
-    ctx.font = "10px IBM Plex Mono";
-    ctx.fillText("metrics", 8, 14);
-    ctx.fillText("top-PID heat (fake)", 8, ch - 8);
   }
 
   function heatColor(v) {

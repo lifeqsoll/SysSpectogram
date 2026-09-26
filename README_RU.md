@@ -8,7 +8,7 @@ Linux-утилита для **защиты VPS / хоста**: ML по «спе�
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
-**Документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.6](docs/RELEASE_v0.6.0.md) · [Симуляции](simulations/README_RU.md)
+**Документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.6](docs/RELEASE_v0.6.0.md) · [Симуляции](simulations/README_RU.md)
 
 ### Что нового в v0.6
 
@@ -53,6 +53,25 @@ SYSSPECTOGRAM_LOAD_PROFILE=full python -m sysspectogram guard --model artifacts/
 ---
 
 ## Что делает
+
+### Метрики → спектрограмма → CNN (ядро DL)
+
+Телеметрия хоста как **вход для computer vision**: каждая секунда — строка rates (CPU, mem, net, disk, GPU, …); окно **60×N** становится одноканальным heatmap («спектрограммой») для маленького **ConvNet**, Isolation Forest видит то же окно как tabular stats. Скор сливается в один host risk.
+
+```mermaid
+flowchart LR
+  A["collect 1 Hz<br/>CSV rates"] --> B["окно 60×N<br/>MinMax"]
+  B --> C["heatmap<br/>(1, 60, N)"]
+  C --> D["CNN<br/>P(anomaly)"]
+  B --> E["stats<br/>mean/std/max/p95"]
+  E --> F["Isolation Forest"]
+  D --> G["fuse<br/>0.6·CNN + 0.4·IF"]
+  F --> G
+```
+
+![Пайплайн SysSpectogram: quiet vs miner-like спектрограммы](docs/assets/spectrogram-pipeline.png)
+
+*Рисунок: quiet baseline vs CPU/GPU miner-like burst так, как это видит CNN. Превью окон: [`build-dataset --png`](#build-dataset) → [normal](docs/assets/window-preview-normal.png) / [anomaly](docs/assets/window-preview-anomaly.png). Демо: [GitHub Pages](https://lifeqsoll.github.io/SysSpectogram/demo/).*
 
 | Этап | Назначение |
 | --- | --- |
@@ -115,17 +134,20 @@ python -m sysspectogram --help
 
 В колонках: CPU (общий и до `max_cores` ядер), память/swap, page faults, сетевые байты/пакеты в секунду, число сокетов ESTABLISHED/LISTEN (опрос раз в N секунд), дисковый I/O.
 
-### Окна
+### Окна → «картинка» для CNN
 
-- Окно по умолчанию: **60 секунд** × N признаков  
-- Шаг при сборке датасета: **5 секунд** (перекрывающиеся окна)  
-- `MinMax`-скейлер учится **только на train** и сохраняется для inference  
+- Окно по умолчанию: **60 секунд** × N признаков → тензор **`(1, 60, N)`** после `window_to_tensor`
+- Шаг при сборке датасета: **5 секунд** (перекрывающиеся окна)
+- `MinMax`-скейлер учится **только на train** и сохраняется для inference
+- Опциональные PNG: `build-dataset --png` (для глаз; модель учится на `.npy`)
+
+CNN не смотрит сырые процессы. Она смотрит, **как выглядит весь хост за минуту** — та же идея, что спектрограммы / heatmaps в CV и audio DL.
 
 ### Ансамбль
 
-- **CNN** — маленькая сеть по одноканальному тензору 60×N  
-- **Isolation Forest** — статистики по тому же окну (mean/std/max/p95)  
-- Артефакты в одной папке: `cnn.pt`, `iforest.joblib`, `scaler.joblib`, `meta.json`  
+- **CNN** — маленькая сеть по одноканальному тензору 60×N
+- **Isolation Forest** — статистики по тому же окну (mean/std/max/p95)
+- Артефакты в одной папке: `cnn.pt`, `iforest.joblib`, `scaler.joblib`, `meta.json`
 
 ### Разметка
 
@@ -172,7 +194,17 @@ python -m sysspectogram build-dataset \
   --stride 5
 ```
 
-Флаг `--png` пишет превью; обучение идёт по `.npy`.
+Флаг `--png` пишет inferno heatmap рядом с каждым `.npy` (только превью; обучение по тензорам). Пример:
+
+```bash
+python -m sysspectogram build-dataset \
+  --normal data/normal.csv \
+  --anomaly data/anomaly.csv \
+  --out dataset/real \
+  --window 60 --stride 5 \
+  --png
+# → dataset/real/train/anomaly/*.png  (+ .npy)
+```
 
 ### 4. Обучение
 
@@ -294,7 +326,7 @@ python -m sysspectogram build-dataset \
 | `--out` | **да** | — | Корень датасета |
 | `--window` | нет | `window.size` (60) | Число строк в окне |
 | `--stride` | нет | `window.stride` (5) | Шаг между окнами |
-| `--png` | нет | выкл. | Дополнительно PNG-превью |
+| `--png` | нет | выкл. | Inferno heatmap PNG рядом с каждым `.npy` (превью; train по тензорам) |
 
 Создаёт `meta.json` и `scaler.joblib` в корне датасета.
 
