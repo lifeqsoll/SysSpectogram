@@ -30,7 +30,7 @@ pip install -e "${PREFIX}[${EXTRAS}]"
 if command -v cargo >/dev/null 2>&1; then
   (cd "$PREFIX/agent" && cargo build --release)
 else
-  echo "WARN: cargo not found — skip agent binary"
+  echo "WARN: cargo not found - skip agent binary"
 fi
 
 # Persist load profile + default runtime

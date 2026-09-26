@@ -1,0 +1,27 @@
+[Unit]
+Description=SysSpectogram integrity agent (eBPF / userspace)
+Documentation=https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/AGENT_PROTECT.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sysspectogram
+# Prefer: install binary to /usr/local/sbin/sysspectogram-agent (root-owned)
+ExecStart=/usr/local/sbin/sysspectogram-agent --mode ebpf --phoenix \
+  --socket /run/sysspectogram/agent.sock \
+  --pidfile /run/sysspectogram/agent.pid \
+  --hmac-secret /opt/sysspectogram/state/agent_hmac.secret \
+  --host-id %H
+ExecStop=/bin/kill -s TERM $MAINPID
+Restart=always
+RestartSec=2
+WatchdogSec=0
+KillMode=control-group
+TimeoutStopSec=20
+OOMPolicy=continue
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_NET_ADMIN
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

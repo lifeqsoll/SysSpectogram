@@ -58,7 +58,12 @@ def _window_ok(
             return False
         return True
 
-    # anomaly: accept if any attack signature is strong enough
+    if (
+        min_anomaly_cpu_mean is None
+        and min_anomaly_mem_mean is None
+        and min_anomaly_pkt_mean is None
+    ):
+        return True
     cpu_hit = min_anomaly_cpu_mean is not None and cpu_mean >= min_anomaly_cpu_mean
     if cpu_hit and min_anomaly_cpu_std_max is not None and cpu_std > min_anomaly_cpu_std_max:
         cpu_hit = False

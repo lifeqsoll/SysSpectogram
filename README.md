@@ -4,21 +4,22 @@
 
 Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
 
-**Scope (v0.5):** Linux VPS defense — **notorch / ONNX** runtime, train bridge, fuse risk, profile packs, Rust agent (userspace + eBPF), **Kirk** in-guest integrity + **IMA/TPM/Secure Boot trust** (`best-effort` | `measured`). Live **VMI** binary deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Scope (v0.6):** Linux VPS defense — **notorch / ONNX** runtime, train bridge, fuse risk, profile packs, Rust agent (userspace + eBPF), **Kirk** trust labels, **HMAC / PID allowlist / exe seal**, **agent root watch**, Role Lab, operator feedback. Live **VMI** deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
-**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_V3.md) · [Quality roadmap](docs/ROADMAP_QUALITY.md) · [Simulations](simulations/README.md)
+**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Role lab](docs/ROLE_LAB.md) · [Day-0](docs/DAY0_VPS.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.6](docs/RELEASE_v0.6.0.md) · [Simulations](simulations/README.md)
 
-### What’s new in v0.5
+### What's new in v0.6
 
 | Piece | Status |
 | --- | --- |
-| Runtime `notorch` / `onnx` / `torch_ml` | yes |
-| Train bridge (VPS collect → PC train → artifacts push) | yes |
-| `response.mode` observe\|shield\|aggressive | yes |
-| Kirk module eBPF + cross-view + kallsyms seal | yes |
-| IMA / Secure Boot / TPM **measured** trust | yes — `sysspectogram kirk trust` |
-| `kirk_isolate` / auto_isolate (opt-in) | yes |
-| VMI out-of-band | **v1.0** — see [docs/VMI.md](docs/VMI.md) |
+| Agent HMAC + PID allowlist + exe seal | yes |
+| Phoenix / CLEAN_SHUTDOWN / Dead-man | yes |
+| Unexpected root via Rust ProcWatcher | yes — [ROOT_WATCH.md](docs/ROOT_WATCH.md) |
+| Unexpected SSH Kick / Ban | yes |
+| Role Lab train/pack | yes |
+| TG feedback → learner | yes |
+| Pack HMAC `.sig` | yes |
+| VMI out-of-band | **v1.0** — [docs/VMI.md](docs/VMI.md) |
 
 ```bash
 source .venv/bin/activate
@@ -551,4 +552,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v0.4** ships fuse `risk`, profile packs, lite/full load, FIM, flow lite, console unlock, and optional eBPF (`execve`/`openat`). See [docs/AGENT.md](docs/AGENT.md), [docs/PROFILES.md](docs/PROFILES.md), [docs/EBPF_SETUP.md](docs/EBPF_SETUP.md), [docs/ROADMAP_V3.md](docs/ROADMAP_V3.md). Next: XDP/TC flow counters; role-specific lab packs.
+**v0.6** ships agent HMAC + PID allowlist + exe seal, Rust root watch, Role Lab, TG feedback, pack `.sig`. See [docs/AGENT.md](docs/AGENT.md), [docs/ROOT_WATCH.md](docs/ROOT_WATCH.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [docs/RELEASE_v0.6.0.md](docs/RELEASE_v0.6.0.md). Next: v0.7 FP/flow/UX — roadmap.

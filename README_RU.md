@@ -4,22 +4,23 @@
 
 Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
 
-**Область (v0.4):** Linux VPS/хосты. **Profile packs** (`tar.gz` в GitHub Release) + бюджеты `lite`/`full`. Userspace-агент (`/proc` + inotify + FIM) всегда; опционально **eBPF** `execve`/`openat` (clang BPF + Aya, attach от root).
+**Область (v0.6):** защита Linux VPS — notorch/ONNX, train bridge, Kirk trust, HMAC/PID allowlist/exe seal, **root watch в Rust-агенте**, Role Lab, feedback. Live **VMI** → **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
-**Документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [eBPF](docs/EBPF_SETUP.md) · [Profiles](docs/PROFILES.md) · [Roadmap](docs/ROADMAP_V3.md) · [Симуляции](simulations/README_RU.md)
+**Документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.6](docs/RELEASE_v0.6.0.md) · [Симуляции](simulations/README_RU.md)
 
-### Что нового в v0.4
+### Что нового в v0.6
 
 | Часть | Статус |
 | --- | --- |
-| Fuse `risk` = host + agent | да |
-| Profile packs (GitHub tar.gz) | да — `profiles pack/pull/install` |
-| Load `lite` / `full` | да — маленький VPS vs большой VDS |
-| FIM sha256 + flow lite | да (`full`) |
-| Console unlock + Mini App gate | да |
-| eBPF `execve`/`openat` | да — clang BPF + Aya; attach нужен **root** (`sudo -E`) |
+| HMAC + PID allowlist + exe seal | да |
+| Phoenix / Dead-man | да |
+| Unexpected root (Rust ProcWatcher) | да — [ROOT_WATCH.md](docs/ROOT_WATCH.md) |
+| SSH Kick / Ban | да |
+| Role Lab | да |
+| TG feedback → learner | да |
+| VMI | **v1.0** |
 
 ```bash
 source .venv/bin/activate
@@ -545,4 +546,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-**v0.4:** fuse `risk`, profile packs, lite/full, FIM, flow lite, console unlock, опциональный eBPF. См. [AGENT.md](docs/AGENT.md), [PROFILES.md](docs/PROFILES.md), [EBPF_SETUP.md](docs/EBPF_SETUP.md), [ROADMAP_V3.md](docs/ROADMAP_V3.md). Дальше: XDP/TC flow; роль-специфичные lab packs.
+**v0.6:** HMAC + PID allowlist, root watch в агенте, Role Lab, feedback. См. [AGENT.md](docs/AGENT.md), [ROOT_WATCH.md](docs/ROOT_WATCH.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.6.0.md](docs/RELEASE_v0.6.0.md). Дальше: v0.7 FP/flow/UX.

@@ -88,7 +88,16 @@ def pack_profile(
     digest = _sha256_file(out_tar)
     sidecar = out_tar.with_suffix(out_tar.suffix + ".sha256")
     sidecar.write_text(f"{digest}  {out_tar.name}\n", encoding="utf-8")
-    return {"path": str(out_tar), "sha256": digest, "manifest": manifest}
+    result = {"path": str(out_tar), "sha256": digest, "manifest": manifest}
+    try:
+        from sysspectogram.pack_sign import ensure_pack_key, sign_file
+
+        key = ensure_pack_key(Path("state/pack_signing.key"))
+        sig = sign_file(out_tar, key)
+        result["sig"] = str(sig)
+    except Exception:
+        pass
+    return result
 
 
 def install_profile(
@@ -97,6 +106,8 @@ def install_profile(
     *,
     expected_sha256: str | None = None,
     insecure_no_verify: bool = False,
+    require_sig: bool = False,
+    pack_key: str | None = None,
 ) -> dict[str, Any]:
     tar_path = tar_path.resolve()
     if not tar_path.is_file():
@@ -106,6 +117,14 @@ def install_profile(
         raise ValueError("sha256 required (pass expected_sha256 or insecure_no_verify=True)")
     if expected_sha256 and digest.lower() != expected_sha256.lower().strip():
         raise ValueError(f"sha256 mismatch: got {digest}, expected {expected_sha256}")
+    if require_sig or pack_key or tar_path.with_suffix(tar_path.suffix + ".sig").exists():
+        from sysspectogram.pack_sign import load_pack_key, verify_file
+
+        key = pack_key or load_pack_key(Path("state/pack_signing.key"))
+        if not key:
+            raise ValueError("pack .sig present or require_sig but no SYSSPECTOGRAM_PACK_KEY / state/pack_signing.key")
+        if not verify_file(tar_path, key):
+            raise ValueError("pack signature verification failed")
 
     dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -159,32 +178,42 @@ def pull_profile(
 
 
 def list_builtin_roles() -> list[dict[str, str]]:
-    """Catalog entries (assets published on GitHub Releases)."""
+    """Catalog entries (assets published on GitHub Releases / local dist/)."""
     return [
-        {
-            "role": "ubuntu-nginx",
-            "name": "profile-ubuntu-nginx-v1",
-            "note": "Web VPS: nginx + ssh baseline",
-        },
-        {
-            "role": "docker-host",
-            "name": "profile-docker-host-v1",
-            "note": "Docker/container host metrics shape",
-        },
-        {
-            "role": "3x-ui",
-            "name": "profile-3x-ui-v1",
-            "note": "Panel / proxy panel host (3x-ui class)",
-        },
         {
             "role": "generic-linux",
             "name": "profile-generic-linux-v1",
             "note": "Generic quiet Linux VPS (Release asset)",
         },
         {
+            "role": "nginx",
+            "name": "profile-nginx-v1",
+            "note": "Web VPS: nginx/http baseline from role-lab",
+        },
+        {
+            "role": "ssh",
+            "name": "profile-ssh-v1",
+            "note": "Quiet ssh-only VPS",
+        },
+        {
+            "role": "docker",
+            "name": "profile-docker-v1",
+            "note": "Docker/container host metrics shape",
+        },
+        {
+            "role": "panel",
+            "name": "profile-panel-v1",
+            "note": "Panel / 3x-ui class host",
+        },
+        {
             "role": "wireguard",
             "name": "profile-wireguard-v1",
-            "note": "VPN endpoint (wireguard) — pack TBD / fine-tune locally",
+            "note": "VPN endpoint (wireguard)",
+        },
+        {
+            "role": "python",
+            "name": "profile-python-v1",
+            "note": "App VPS with sustained CPU/mem",
         },
     ]
 
@@ -192,9 +221,9 @@ def list_builtin_roles() -> list[dict[str, str]]:
 def finetune_note(host_dir: Path) -> str:
     return (
         f"Fine-tune (builder PC, not 1GB VPS):\n"
-        f"  1) On VPS: collect → data bundle (see docs/TRAIN_BRIDGE.md)\n"
-        f"  2) On PC: unpack → build-dataset → train --out {host_dir}\n"
+        f"  1) On VPS: collect + data bundle (see docs/TRAIN_BRIDGE.md)\n"
+        f"  2) On PC: unpack, build-dataset, train --out {host_dir}\n"
         f"  3) export-onnx --model {host_dir}\n"
-        f"  4) artifacts push --model {host_dir} --ssh user@vps --remote …/artifacts/live\n"
+        f"  4) artifacts push --model {host_dir} --ssh user@vps --remote .../artifacts/live\n"
         f"  5) optional: train-agent-if on local agent JSONL\n"
     )

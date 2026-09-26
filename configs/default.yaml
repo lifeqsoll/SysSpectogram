@@ -1,12 +1,12 @@
-# Resource budget: lite = small VPS (~1–2 vCPU); full = large VDS (4+ vCPU).
-# Rates (poll/interval/cores) come from the preset — only override if you need a custom mix.
+# Resource budget: lite = small VPS (~1-2 vCPU); full = large VDS (4+ vCPU).
+# Rates (poll/interval/cores) come from the preset; override only if needed.
 # Env: SYSSPECTOGRAM_LOAD_PROFILE=full
 load_profile: lite
 
 # Infer backend on this host:
-#   notorch  — perimeter + agent only (no CNN; default for 1GB VPS)
-#   onnx     — cnn.onnx via onnxruntime (no PyTorch)
-#   torch_ml — cnn.pt via PyTorch (builder / fat VDS)
+#   notorch  - perimeter + agent only (no CNN; default for 1GB VPS)
+#   onnx     - cnn.onnx via onnxruntime (no PyTorch)
+#   torch_ml - cnn.pt via PyTorch (builder / fat VDS)
 # Env: SYSSPECTOGRAM_RUNTIME=onnx
 runtime: notorch
 
@@ -63,7 +63,7 @@ perimeter:
 # Graduated response (A2): observe = alerts only; shield = auto SSH/honeypot ban; aggressive = +scan/egress
 response:
   mode: observe          # observe | shield | aggressive
-  never_ban_cidrs: []    # e.g. ["1.2.3.4/32"] — never auto-ban these
+  never_ban_cidrs: []    # e.g. ["1.2.3.4/32"] - never auto-ban these
   learn_hours: 24
 
 recon:
@@ -80,6 +80,7 @@ telegram:
   allow_destructive_sims: false
   require_console_unlock: true
   unlock_ttl_sec: 7200
+  health_ping_hours: 0
 
 web:
   enabled: false
@@ -101,6 +102,26 @@ honeypot:
   enabled: false
   port: 2222
 
+canary:
+  enabled: false
+  ports: [3377, 4488, 5599]
+  bind: "0.0.0.0"
+
+sessions:
+  enabled: true
+  learn_sec: 120
+  poll_sec: 15
+  allow_users: []
+  allow_cidrs: []
+
+# Python /proc root poller. Prefer agent.root_watch (same walk, lite-safe).
+# Enable only when agent.enabled is false.
+root_watch:
+  enabled: false
+  learn_sec: 300
+  poll_sec: 60
+  allow_comms: []
+
 flow: {}
 
 agent:
@@ -113,16 +134,21 @@ agent:
   score_threshold: 0.65
   iforest: null
   require_same_uid: true
+  require_hmac: true
+  hmac_secret: state/agent_hmac.secret
+  # Unexpected uid=0 via ProcWatcher (no extra /proc walk).
+  root_watch: true
+  root_learn_sec: 300
 
-# Kernel integrity (Kirk) — in-guest best-effort; trust auto-probed (IMA/SB/TPM)
+# Kernel integrity (Kirk) - in-guest best-effort; trust auto-probed (IMA/SB/TPM)
 kirk:
   enabled: true
   trust: auto          # auto | best-effort | measured (auto probes IMA+SB/TPM)
   require_tpm: false   # if true, measured needs TPM device
-  auto_isolate: false  # CRITICAL kirk → nft ss_kirk (needs allow_ssh_cidrs!)
+  auto_isolate: false  # CRITICAL kirk -> nft ss_kirk (needs allow_ssh_cidrs!)
   isolate_ttl_sec: 3600
   allow_ssh_cidrs: []
   ima_watch: true
   ima_state_path: state/ima_offset.txt
   baseline_path: state/kirk-baseline.json
-  vmi: false           # reserved — live VMI binary deferred to v1.0 (docs/VMI.md)
+  vmi: false           # reserved - live VMI binary deferred to v1.0 (docs/VMI.md)

@@ -338,6 +338,27 @@ def _cmd_profiles(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_feedback(args: argparse.Namespace) -> int:
+    if args.feedback_action == "retrain":
+        from sysspectogram.feedback_retrain import retrain_from_feedback
+
+        info = retrain_from_feedback(
+            _resolve(args.feedback_dir),
+            out_artifacts=_resolve(args.out),
+            epochs=int(args.epochs),
+        )
+        console.print(f"[green]feedback retrain[/] {info}")
+        return 0
+    if args.feedback_action == "status":
+        from sysspectogram.feedback_learn import FeedbackLearner
+
+        fl = FeedbackLearner(_resolve(args.feedback_dir))
+        console.print(f"counts={fl.counts()} bias={fl.threshold_bias():+.3f}")
+        return 0
+    console.print("unknown feedback action")
+    return 1
+
+
 def _cmd_train_agent_if(args: argparse.Namespace) -> int:
     from sysspectogram.agent_score import train_agent_iforest
 
@@ -391,7 +412,7 @@ def _cmd_artifacts(args: argparse.Namespace) -> int:
 def _cmd_setup(args: argparse.Namespace) -> int:
     from sysspectogram.setup_wizard import run_setup
 
-    run_setup(prefix=_resolve(args.prefix))
+    run_setup(prefix=_resolve(args.prefix), role=getattr(args, "role", None))
     return 0
 
 
@@ -406,14 +427,51 @@ def _cmd_kirk(args: argparse.Namespace) -> int:
             f"secure_boot={report.secure_boot} tpm={report.tpm_present}"
         )
         for d in report.details:
-            console.print(f"  · {d}")
+            console.print(f"  - {d}")
         if report.trust == "best-effort":
             console.print(
                 "[dim]Without IMA + Secure Boot/TPM this is best-effort, not integrity proof. "
-                "VMI → v1.0 (docs/VMI.md).[/]"
+                "VMI deferred to v1.0 (docs/VMI.md).[/]"
             )
         return 0
     console.print("unknown kirk action")
+    return 1
+
+
+def _cmd_role_lab(args: argparse.Namespace) -> int:
+    from sysspectogram.rolelab import list_roles, run_role_collect, train_role_pack
+
+    if args.rolelab_action == "list":
+        for r in list_roles():
+            console.print(r)
+        return 0
+    if args.rolelab_action == "run":
+        man = run_role_collect(
+            args.role,
+            out_dir=_resolve(args.out),
+            duration_sec=float(args.duration),
+            hybrid=not bool(args.synthetic_only),
+        )
+        console.print(
+            f"[green]role-lab[/] role={man['role']} samples_n={man['samples_normal']} "
+            f"samples_a={man['samples_anomaly']} → {args.out}"
+        )
+        return 0
+    if args.rolelab_action == "train":
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            console.print("[red]train needs PyTorch[/]: pip install -e '.[ml]'")
+            return 2
+        info = train_role_pack(
+            _resolve(args.role_dir),
+            out_artifacts=_resolve(args.out),
+            pack_out=_resolve(args.pack) if args.pack else None,
+            epochs=int(args.epochs),
+        )
+        console.print(f"[green]trained[/] {info}")
+        return 0
+    console.print("unknown role-lab action")
     return 1
 
 
@@ -587,6 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("setup", help="interactive .env / Telegram setup")
     st.add_argument("--prefix", default=".", help="install prefix (default: repo root)")
+    st.add_argument("--role", default=None, help="role pack hint: nginx|ssh|docker|...")
     st.set_defaults(func=_cmd_setup)
 
     kk = sub.add_parser("kirk", help="kernel integrity trust probe (IMA/SB/TPM)")
@@ -594,6 +653,38 @@ def build_parser() -> argparse.ArgumentParser:
     kk_t = kk_sub.add_parser("trust", help="probe best-effort vs measured")
     kk_t.add_argument("--require-tpm", action="store_true")
     kk_t.set_defaults(func=_cmd_kirk)
+
+    rl = sub.add_parser("role-lab", help="simulate VPS roles on PC and train baseline packs (no VMs)")
+    rl_sub = rl.add_subparsers(dest="rolelab_action", required=True)
+    rl_list = rl_sub.add_parser("list", help="list recipes")
+    rl_list.set_defaults(func=_cmd_role_lab)
+    rl_run = rl_sub.add_parser("run", help="collect CSV under role workload")
+    rl_run.add_argument("--role", required=True, help="ssh|nginx|python|docker")
+    rl_run.add_argument("--out", required=True, help="output dir (normal.csv + anomaly.csv)")
+    rl_run.add_argument("--duration", type=float, default=600.0, help="seconds of normal collect")
+    rl_run.add_argument(
+        "--synthetic-only",
+        action="store_true",
+        help="never touch nginx/docker; pure synthetic load",
+    )
+    rl_run.set_defaults(func=_cmd_role_lab)
+    rl_tr = rl_sub.add_parser("train", help="build-dataset + train (+pack) from role-lab dir")
+    rl_tr.add_argument("--role-dir", required=True, help="dir from role-lab run")
+    rl_tr.add_argument("--out", required=True, help="artifacts output dir")
+    rl_tr.add_argument("--pack", default=None, help="optional profile-*.tar.gz path")
+    rl_tr.add_argument("--epochs", type=int, default=12)
+    rl_tr.set_defaults(func=_cmd_role_lab)
+
+    fb = sub.add_parser("feedback", help="operator feedback samples / retrain on builder PC")
+    fb_sub = fb.add_subparsers(dest="feedback_action", required=True)
+    fb_st = fb_sub.add_parser("status", help="show counts + threshold bias")
+    fb_st.add_argument("--feedback-dir", default="artifacts/feedback")
+    fb_st.set_defaults(func=_cmd_feedback)
+    fb_tr = fb_sub.add_parser("retrain", help="train CNN/IF from feedback npy (builder PC)")
+    fb_tr.add_argument("--feedback-dir", default="artifacts/feedback")
+    fb_tr.add_argument("--out", required=True, help="artifacts output dir")
+    fb_tr.add_argument("--epochs", type=int, default=8)
+    fb_tr.set_defaults(func=_cmd_feedback)
 
     w = sub.add_parser("web", help="live local / Telegram Mini App dashboard")
     w.add_argument("--model", default=None, help="optional artifacts for scoring")

@@ -100,7 +100,7 @@ def run_guard(
     jsonl_out: Path | None = None,
     enable_web: bool = False,
 ) -> None:
-    # Container metrics are cgroup-scoped — warn early.
+    # Container metrics are cgroup-scoped - warn early.
     if Path("/.dockerenv").exists():
         console.print(
             "[yellow]WARNING[/] running inside Docker: host CPU/mem/net may not match bare metal. "
@@ -129,6 +129,13 @@ def run_guard(
 
     host_id = host_cfg.get("id") or socket.gethostname()
     state_path = _resolve(per_cfg.get("state_path", "state/perimeter.json"))
+    # Agent self-protect: publish guard pid for Rust twin watch
+    try:
+        gp = _resolve("state/guard.pid")
+        gp.parent.mkdir(parents=True, exist_ok=True)
+        gp.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    except OSError:
+        pass
     denylist_paths = [_resolve(p) for p in per_cfg.get("denylist_paths", [])]
     suspicious_domains = set(per_cfg.get("suspicious_domains") or [])
 
@@ -138,7 +145,7 @@ def run_guard(
     )
     if not tg_cfg.get("token_secret"):
         console.print(
-            "[yellow]WARNING[/] telegram.token_secret / TELEGRAM_TOKEN_SECRET unset — "
+            "[yellow]WARNING[/] telegram.token_secret / TELEGRAM_TOKEN_SECRET unset - "
             "ephemeral HMAC secret for this process only"
         )
     tokens = TokenStore(secret=tg_cfg.get("token_secret"))
@@ -177,14 +184,21 @@ def run_guard(
             # reject out-of-band / trash labels until VMI ships
             kirk_status["trust"] = "best-effort"
             console.print(
-                f"[yellow]kirk[/] unknown trust={trust_mode!r} → best-effort "
+                f"[yellow]kirk[/] unknown trust={trust_mode!r} -> best-effort "
                 "(out-of-band / VMI deferred to v1.0)"
             )
         if kirk_cfg.get("vmi"):
             console.print(
-                "[dim]kirk.vmi=true ignored until v1.0 — see docs/VMI.md[/]"
+                "[dim]kirk.vmi=true ignored until v1.0 - see docs/VMI.md[/]"
             )
 
+    from sysspectogram.operator_feedback import OperatorFeedback
+    from sysspectogram.feedback_learn import FeedbackLearner
+    from sysspectogram.agent_auth import ensure_secret
+
+    feedback = OperatorFeedback(_resolve("state/operator_feedback.json"))
+    learner = FeedbackLearner(_resolve("artifacts/feedback"))
+    hmac_secret = ensure_secret(_resolve("state/agent_hmac.secret"))
     bot_holder: dict[str, TelegramBot | None] = {"bot": None}
 
     siem_cfg = config.get("siem") or {}
@@ -199,26 +213,27 @@ def run_guard(
         auto_ban_rules: set[str] = set()
     elif resp_mode == "shield":
         auto_ban_cfg["enabled"] = True
-        auto_ban_rules = {"bruteforce_ssh", "honeypot_hit"}
+        auto_ban_rules = {"bruteforce_ssh", "honeypot_hit", "canary_hit"}
     elif resp_mode == "aggressive":
         auto_ban_cfg["enabled"] = True
         auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or {
             "bruteforce_ssh",
             "honeypot_hit",
+            "canary_hit",
             "egress_denylist_hit",
             "port_scan_suspected",
         }
     else:
         auto_ban_rules = set(auto_ban_cfg.get("rules") or []) if auto_ban_cfg.get("enabled") else set()
     auto_ban_ttl = float(auto_ban_cfg.get("ttl_sec", 3600))
-    console.print(f"[cyan]response.mode[/] {resp_mode} auto_ban_rules={sorted(auto_ban_rules) or '—'}")
+    console.print(f"[cyan]response.mode[/] {resp_mode} auto_ban_rules={sorted(auto_ban_rules) or '-'}")
 
     def on_alert(alert, recon):
         GLOBAL_BUS.push_alert(
             LiveAlert(
                 ts=getattr(alert, "ts", None) or __import__("time").time(),
                 severity=str(getattr(alert, "severity", "medium")),
-                title=f"PERIMETER · {getattr(alert, 'rule_id', 'alert')}",
+                title=f"PERIMETER | {getattr(alert, 'rule_id', 'alert')}",
                 body=str(getattr(alert, "message", "")),
                 kind="perimeter",
                 rule_id=getattr(alert, "rule_id", None),
@@ -247,21 +262,41 @@ def run_guard(
     def on_auto_ban(alert):
         if not alert.ip:
             return
-        try:
-            import ipaddress
+        from ipaddress import ip_network, ip_address
 
-            ip_obj = ipaddress.ip_address(alert.ip)
+        try:
+            addr = ip_address(alert.ip)
             for cidr in never_ban:
                 try:
-                    if ip_obj in ipaddress.ip_network(cidr, strict=False):
-                        console.print(f"[yellow]auto-ban skipped[/] {alert.ip} in never_ban {cidr}")
+                    if addr in ip_network(cidr, strict=False):
+                        console.print(f"[yellow]never_ban[/] skip {alert.ip} ({cidr})")
                         return
                 except ValueError:
                     continue
         except ValueError:
             pass
-        msg = nft.ban_ip(alert.ip, ttl_sec=auto_ban_ttl, dry_run=dry_run_actions)
-        console.print(f"[red]auto-ban[/] {msg}")
+        ttl = auto_ban_ttl
+        # OSINT 2.0: scale ban TTL by recon_score when present on extras / recent dossier
+        score = None
+        try:
+            score = float((alert.extras or {}).get("recon_score"))
+        except (TypeError, ValueError):
+            score = None
+        if score is None:
+            try:
+                from sysspectogram.osint.score import load_recent_hits
+
+                for row in load_recent_hits(_resolve("reports/recon/recon_dossier.jsonl"), window_sec=900):
+                    if row.get("ip") == alert.ip:
+                        score = float(row.get("recon_score") or 0)
+                        break
+            except Exception:
+                pass
+        if score is not None:
+            # 0.0 -> 0.5x ttl, 1.0 -> 3x ttl
+            ttl = max(300.0, auto_ban_ttl * (0.5 + 2.5 * min(1.0, max(0.0, score))))
+        msg = nft.ban_ip(alert.ip, ttl_sec=ttl, dry_run=dry_run_actions)
+        console.print(f"[red]auto-ban[/] {msg} (ttl={ttl:.0f}s score={score})")
         if bot_holder["bot"] is not None:
             try:
                 bot_holder["bot"].client.send_message(
@@ -299,7 +334,7 @@ def run_guard(
 
     def _print_unlock(code: str) -> None:
         console.print("")
-        console.print("[bold red]TELEGRAM UNLOCK CODE[/] (TG: /unlock CODE · Mini App also accepts it)")
+        console.print("[bold red]TELEGRAM UNLOCK CODE[/] (TG: /unlock CODE | Mini App also accepts it)")
         console.print(f"[bold white on red]  {code}  [/]")
         console.print("[dim]Stolen bot token alone cannot control the host without this code.[/]")
         console.print("")
@@ -337,6 +372,8 @@ def run_guard(
             unlock=unlock_gate,
             kirk_status=kirk_status,
             response_mode=resp_mode,
+            feedback=feedback,
+            learner=learner,
         )
         if unlock_gate.enabled:
             try:
@@ -387,7 +424,7 @@ def run_guard(
             try:
                 res = client.set_chat_menu_button_webapp("Dashboard", webapp_url)
                 if res.get("ok"):
-                    console.print("[green]Telegram menu button → Dashboard[/]")
+                    console.print("[green]Telegram menu button -> Dashboard[/]")
             except Exception as exc:
                 console.print(f"[yellow]menu button[/] {exc}")
 
@@ -407,14 +444,22 @@ def run_guard(
         if bot is None:
             return
         t0 = time.monotonic()
+        health_h = float(tg_cfg.get("health_ping_hours") or 0)
+        health_period = health_h * 3600.0 if health_h > 0 else 0.0
+        last_health = time.monotonic()
         while not stop.is_set():
             try:
                 bot.poll_once(timeout=2)
             except Exception as exc:
                 console.print(f"[yellow]tg poll[/] {exc}")
+            if health_period > 0 and (time.monotonic() - last_health) >= health_period:
+                last_health = time.monotonic()
+                try:
+                    bot.client.send_message(bot.prefix(bot._status_text()))
+                except Exception as exc:
+                    console.print(f"[yellow]health ping[/] {exc}")
             if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                 break
-            # ban TTL cleanup + kirk isolate TTL
             try:
                 nft.list_bans()
                 if kirk_status.get("isolated") and getattr(nft, "_kirk_expires", None) is None:
@@ -427,7 +472,7 @@ def run_guard(
         runtime = str(config.get("runtime") or "notorch").strip().lower()
         if runtime == "notorch" or artifacts_dir is None or not artifacts_dir.exists():
             if runtime == "notorch":
-                console.print("[cyan]runtime=notorch[/] host CNN off — perimeter + agent risk only")
+                console.print("[cyan]runtime=notorch[/] host CNN off - perimeter + agent risk only")
             elif artifacts_dir is None or not artifacts_dir.exists():
                 console.print("[yellow]no model artifacts; host ML monitor disabled[/]")
             if not web_on and runtime == "notorch":
@@ -533,7 +578,20 @@ def run_guard(
                 pass
             matrix = rows_to_matrix(list(buf), columns)
             pred = infer.predict_window(matrix)
-            recent_scores.append(pred.score)
+            host_score = float(pred.score)
+            try:
+                tops_peek = list_top_processes(limit=3)
+            except Exception:
+                tops_peek = []
+            for p in tops_peek:
+                host_score = feedback.adjust_score(
+                    host_score,
+                    name=str(p.get("name") or ""),
+                    comm=str(p.get("name") or ""),
+                )
+                if feedback.is_ignored(name=str(p.get("name") or "")):
+                    host_score = min(host_score, pred.threshold * 0.5)
+            recent_scores.append(host_score)
             if len(recent_scores) > 60:
                 del recent_scores[:30]
             if not pred.is_anomaly and len(recent_scores) >= 10:
@@ -543,17 +601,18 @@ def run_guard(
 
             ascore = risk_state.get("agent", 0.0)
             risk = fuse_host_agent(
-                pred.score, ascore, host_weight=host_weight, agent_weight=agent_weight
+                host_score, ascore, host_weight=host_weight, agent_weight=agent_weight
             )
             risk_thr = ens_cfg.get("risk_threshold")
             if risk_thr is None:
                 risk_thr = pred.threshold
             else:
                 risk_thr = float(risk_thr)
-            is_anom = bool(risk >= risk_thr) if agent_weight > 0 else pred.is_anomaly
+            risk_thr = learner.apply_bias(float(risk_thr))
+            is_anom = bool(risk >= risk_thr) if agent_weight > 0 else (host_score >= risk_thr)
             status = "ANOMALY" if is_anom else "ok"
             console.print(
-                f"host {status} risk={risk:.3f} host={pred.score:.3f} agent={ascore:.3f} "
+                f"host {status} risk={risk:.3f} host={host_score:.3f} agent={ascore:.3f} "
                 f"cnn={pred.cnn_prob:.3f} iforest={pred.iforest_score:.3f}"
             )
             GLOBAL_BUS.set_host(host_id, float(risk_thr), model_loaded=True)
@@ -565,7 +624,7 @@ def run_guard(
                     or row.get("net_packets_recv_per_s")
                     or 0.0
                 ),
-                score=pred.score,
+                score=host_score,
                 cnn=pred.cnn_prob,
                 iforest=pred.iforest_score,
                 agent_score=ascore,
@@ -581,23 +640,37 @@ def run_guard(
                     last_drift_notify = now
                     msg = "[yellow]drift suspected vs host calibration baseline[/]"
                     if hint is not None:
-                        msg += f" — consider threshold≈{hint} (current={infer.threshold:.3f})"
+                        msg += f" - consider threshold~{hint} (current={infer.threshold:.3f})"
                     console.print(msg)
                     if bot is not None and hint is not None:
                         try:
                             bot.client.send_message(
                                 bot.prefix(
-                                    f"DRIFT: scores shifted; suggested threshold≈{hint} "
+                                    f"DRIFT: scores shifted; suggested threshold~{hint} "
                                     f"(current={infer.threshold:.3f})"
                                 )
                             )
                         except Exception:
                             pass
             if not is_anom:
+                if bot is not None:
+                    try:
+                        bot.last_host_window = matrix
+                        bot.last_host_columns = list(columns)
+                        bot.last_host_score = float(host_score)
+                    except Exception:
+                        pass
                 return
             if now - last_alert < cooldown_sec:
                 return
             last_alert = now
+            if bot is not None:
+                try:
+                    bot.last_host_window = matrix
+                    bot.last_host_columns = list(columns)
+                    bot.last_host_score = float(host_score)
+                except Exception:
+                    pass
             tops = list_top_processes(limit=max(top_n, 5))
             means = matrix.mean(axis=0)
             col_map = {c: float(means[i]) for i, c in enumerate(columns)}
@@ -612,13 +685,13 @@ def run_guard(
             }
             pattern = detect_host_pattern(top_procs=tops, **{k: v for k, v in expl_kw.items() if k != "top_features"})
             body = explain_host_anomaly(top_procs=tops, **expl_kw)
-            body = f"{body}\nrisk={risk:.2f} host={pred.score:.2f} agent={ascore:.2f}"
+            body = f"{body}\nrisk={risk:.2f} host={host_score:.2f} agent={ascore:.2f}"
             console.print(f"[red bold]HOST ALERT[/] pattern={pattern}\n{body}")
             GLOBAL_BUS.push_alert(
                 LiveAlert(
                     ts=__import__("time").time(),
                     severity="high",
-                    title=f"HOST ANOMALY · {pattern}",
+                    title=f"HOST ANOMALY | {pattern}",
                     body=body,
                     kind="host",
                     score=risk,
@@ -671,7 +744,7 @@ def run_guard(
                         png = None
                 caption = format_host_alert_caption(
                     host_id=host_id,
-                    score=pred.score,
+                    score=host_score,
                     threshold=pred.threshold,
                     pattern=pattern,
                     explain=body,
@@ -679,7 +752,7 @@ def run_guard(
                     top_features=feats,
                 )
                 bot.send_host_alert(
-                    score=pred.score,
+                    score=host_score,
                     threshold=pred.threshold,
                     top_procs=tops,
                     explain_kwargs=expl_kw,
@@ -735,6 +808,55 @@ def run_guard(
 
         threads.append(threading.Thread(target=honeypot_loop, name="honeypot", daemon=True))
 
+    canary = None
+    canary_cfg = config.get("canary") or {}
+    if canary_cfg.get("enabled"):
+        from sysspectogram.perimeter.canary import CanaryBank
+        from sysspectogram.perimeter.rules import Alert as PAlert
+
+        ports = list(canary_cfg.get("ports") or [3377, 4488, 5599])
+        canary = CanaryBank(ports=ports, bind=str(canary_cfg.get("bind", "0.0.0.0")))
+        bound = canary.start()
+        console.print(f"[cyan]canary[/] ports={bound}")
+
+        def canary_loop():
+            seen = 0
+            t0 = time.monotonic()
+            while not stop.is_set():
+                if len(canary.hits) > seen:
+                    for hit in canary.hits[seen:]:
+                        a = PAlert(
+                            rule_id="canary_hit",
+                            severity="critical",
+                            message=f"Canary touch from {hit.remote} to :{hit.port}",
+                            ip=hit.remote,
+                            port=hit.port,
+                            extras={"recon_score": 1.0, "canary": True},
+                        )
+                        watcher.emit(a)
+                    seen = len(canary.hits)
+                if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
+                    break
+                stop.wait(1.0)
+
+        threads.append(threading.Thread(target=canary_loop, name="canary", daemon=True))
+
+    # OSINT Tor exit list background refresh
+    if bool((config.get("osint") or {}).get("tor_refresh", True)):
+        def tor_refresh_loop():
+            from sysspectogram.osint.cache import tor_exit_refresh
+
+            while not stop.is_set():
+                try:
+                    n = tor_exit_refresh()
+                    if n:
+                        console.print(f"[cyan]osint[/] tor exits cached={n}")
+                except Exception as exc:
+                    console.print(f"[yellow]osint tor[/] {exc}")
+                stop.wait(float((config.get("osint") or {}).get("tor_refresh_sec", 21600)))
+
+        threads.append(threading.Thread(target=tor_refresh_loop, name="tor-refresh", daemon=True))
+
     flow_cfg = config.get("flow") or {}
     if bool(flow_cfg.get("enabled")):
         from sysspectogram.flow import FlowWatcher
@@ -747,7 +869,7 @@ def run_guard(
         )
         console.print(
             f"[cyan]flow lite[/] window={flow.window_sec}s "
-            f"syn≥{flow.syn_threshold} ports≥{flow.unique_port_threshold}"
+            f"syn>={flow.syn_threshold} ports>={flow.unique_port_threshold}"
         )
 
         def flow_loop():
@@ -790,6 +912,8 @@ def run_guard(
         agent_score_threshold = float(agent_cfg.get("score_threshold", 0.65))
         last_agent_seen = {"ts": time.time()}
         agent_heartbeat_sec = float(agent_cfg.get("heartbeat_sec", 180))
+        clean_shutdown_grace = {"until": 0.0}
+
 
         raw_sock = agent_cfg.get("socket")
         if not raw_sock:
@@ -801,7 +925,32 @@ def run_guard(
         def on_agent_alert(alert) -> None:
             from sysspectogram.perimeter.rules import Alert as PAlert
 
-            last_agent_seen["ts"] = time.time()
+            if str(alert.rule_id) == "agent_kirk_clean_shutdown":
+                if getattr(alert, "hmac_ok", None) is not True:
+                    console.print("[yellow]agent[/] clean_shutdown ignored (HMAC required)")
+                    return
+                last_agent_seen["ts"] = time.time()
+                clean_shutdown_grace["until"] = time.time() + 120.0
+                console.print("[cyan]agent[/] CLEAN_SHUTDOWN received - Dead-man suppressed 120s")
+                GLOBAL_BUS.push_alert(
+                    LiveAlert(
+                        ts=alert.ts,
+                        severity="info",
+                        title="AGENT | clean_shutdown",
+                        body=str(alert.message),
+                        kind="agent",
+                        rule_id=alert.rule_id,
+                        extras={},
+                    )
+                )
+                return
+
+            # metrics channel is primary liveness; signed alerts also count
+            if getattr(alert, "hmac_ok", None) is True:
+                last_agent_seen["ts"] = time.time()
+
+            if feedback.is_ignored(comm=getattr(alert, "comm", None), path=getattr(alert, "path", None)):
+                return
 
             extras = dict(getattr(alert, "extras", None) or {})
             agent_feat.push(
@@ -810,6 +959,11 @@ def run_guard(
                 path=getattr(alert, "path", None),
             )
             ascore = agent_scorer.score(agent_feat.vector())
+            ascore = feedback.adjust_score(
+                ascore,
+                comm=getattr(alert, "comm", None),
+                path=getattr(alert, "path", None),
+            )
             raw_thr = (config.get("ensemble") or {}).get("risk_threshold", 0.7)
             risk_thr = float(raw_thr if raw_thr is not None else 0.7)
             ascore = apply_kirk_override(
@@ -838,9 +992,13 @@ def run_guard(
                 and str(alert.rule_id) in _AUTO_ISOLATE_RULES
                 and str(alert.severity).lower() == "critical"
             ):
-                if not kirk_allow_cidrs:
+                if getattr(alert, "hmac_ok", None) is not True:
                     console.print(
-                        "[red]kirk auto_isolate skipped[/] — set kirk.allow_ssh_cidrs first"
+                        f"[red]kirk auto_isolate blocked[/] missing/invalid HMAC for {alert.rule_id}"
+                    )
+                elif not kirk_allow_cidrs:
+                    console.print(
+                        "[red]kirk auto_isolate skipped[/] - set kirk.allow_ssh_cidrs first"
                     )
                 else:
                     try:
@@ -909,7 +1067,7 @@ def run_guard(
                 LiveAlert(
                     ts=alert.ts,
                     severity=str(alert.severity),
-                    title=f"AGENT · {alert.rule_id}",
+                    title=f"AGENT | {alert.rule_id}",
                     body=body,
                     kind="agent",
                     rule_id=alert.rule_id,
@@ -954,9 +1112,23 @@ def run_guard(
             bot = bot_holder["bot"]
             if bot is not None and notify_tg:
                 try:
-                    # ensure message reflects score
-                    alert.message = body
-                    bot.send_agent_alert(alert)
+                    if str(alert.rule_id) == "agent_unexpected_root":
+                        from types import SimpleNamespace
+
+                        extras_r = getattr(alert, "extras", None) or {}
+                        if not isinstance(extras_r, dict):
+                            extras_r = {}
+                        bot.send_root_alert(
+                            SimpleNamespace(
+                                pid=int(getattr(alert, "pid", 0) or 0),
+                                comm=str(getattr(alert, "comm", "") or ""),
+                                exe=str(getattr(alert, "path", "") or ""),
+                                cmdline=str(extras_r.get("cmdline") or ""),
+                            )
+                        )
+                    else:
+                        alert.message = body
+                        bot.send_agent_alert(alert)
                 except Exception:
                     pass
             webhook = siem_cfg.get("webhook_url")
@@ -996,7 +1168,39 @@ def run_guard(
             cooldown_sec=float(agent_cfg.get("cooldown_sec", 60)),
             max_alerts_per_min=int(agent_cfg.get("max_alerts_per_min", 20)),
             require_same_uid=bool(agent_cfg.get("require_same_uid", True)),
+            hmac_secret=hmac_secret,
+            require_hmac_critical=bool(agent_cfg.get("require_hmac", True)),
         )
+        agent_exe_seal: dict[str, str] = {}
+
+def _on_exe_mismatch(pid: int, exe: str) -> None:
+            console.print(f"[red]agent exe mismatch[/] pid={pid} exe={exe}")
+            bot = bot_holder["bot"]
+            if bot is not None:
+                try:
+                    from types import SimpleNamespace
+
+                    bot.send_root_alert(
+                        SimpleNamespace(
+                            pid=pid,
+                            comm="agent-swap?",
+                            exe=exe,
+                            cmdline="agent_exe_mismatch (binary seal failed)",
+                        )
+                    )
+                except Exception:
+                    try:
+                        bot.client.send_message(
+                            bot.prefix(
+                                f"KIRK [critical] agent_exe_mismatch\n"
+                                f"pid={pid} exe={exe}\n"
+                                f"expected={agent_exe_seal.get('path')}"
+                            )
+                        )
+                    except Exception:
+                        pass
+
+        agent_listener.on_exe_mismatch = _on_exe_mismatch
         try:
             agent_listener.start()
             console.print(f"[cyan]agent socket[/] listening {sock_path}")
@@ -1007,10 +1211,13 @@ def run_guard(
         def agent_heartbeat_loop():
             last_alert_sent = 0.0
             while not stop.is_set():
+                if time.time() < float(clean_shutdown_grace.get("until") or 0):
+                    stop.wait(5.0)
+                    continue
                 silence = time.time() - last_agent_seen["ts"]
                 if silence >= agent_heartbeat_sec and time.time() - last_alert_sent > agent_heartbeat_sec:
                     last_alert_sent = time.time()
-                    msg = f"agent heartbeat missing ({silence:.0f}s) — agent_kirk_agent_down"
+                    msg = f"agent heartbeat missing ({silence:.0f}s) - agent_kirk_agent_down"
                     console.print(f"[red]{msg}[/]")
                     bot = bot_holder["bot"]
                     if bot is not None:
@@ -1068,12 +1275,36 @@ def run_guard(
                 if cand.exists():
                     bin_path = str(cand)
             if bin_path:
+                try:
+                    from sysspectogram.trusted_pids import seal_binary
+
+                    agent_exe_seal.update(seal_binary(Path(bin_path)))
+                    agent_listener.set_exe_seal(
+                        {agent_exe_seal["path"], "/usr/local/sbin/sysspectogram-agent"},
+                        agent_exe_seal.get("sha256"),
+                    )
+                    seal_path = _resolve("state/agent_binary.seal.json")
+                    seal_path.parent.mkdir(parents=True, exist_ok=True)
+                    seal_path.write_text(
+                        __import__("json").dumps(agent_exe_seal, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                    console.print(
+                        f"[cyan]agent seal[/] {agent_exe_seal['path']} "
+                        f"sha256={agent_exe_seal['sha256'][:16]}..."
+                    )
+                except Exception as exc:
+                    console.print(f"[yellow]agent seal[/] {exc}")
                 cmd = [
                     str(bin_path),
                     "--socket",
                     sock_path,
                     "--host-id",
                     str(host_id),
+                    "--hmac-secret",
+                    str(_resolve("state/agent_hmac.secret")),
+                    "--pidfile",
+                    str(_resolve("state/agent.pid")),
                     "--mode",
                     str(agent_cfg.get("mode", "userspace")),
                     "--poll-ms",
@@ -1090,6 +1321,16 @@ def run_guard(
                 jpath = agent_cfg.get("jsonl")
                 if jpath:
                     cmd.extend(["--jsonl", str(_resolve(jpath))])
+                if bool(agent_cfg.get("root_watch", True)):
+                    cmd.append("--root-watch")
+                    cmd.extend(
+                        [
+                            "--root-learn-sec",
+                            str(int(agent_cfg.get("root_learn_sec", 300))),
+                        ]
+                    )
+                else:
+                    cmd.append("--no-root-watch")
                 try:
                     agent_proc = subprocess.Popen(
                         cmd,
@@ -1097,13 +1338,181 @@ def run_guard(
                         stderr=subprocess.DEVNULL,
                     )
                     console.print(f"[green]agent auto_start[/] pid={agent_proc.pid}")
+                    try:
+                        from sysspectogram.trusted_pids import collect_trusted_pids
+
+                        pids = collect_trusted_pids(
+                            agent_pidfile=_resolve("state/agent.pid"),
+                            watchdog_pidfile=_resolve("state/watchdog.pid"),
+                            child_of=int(agent_proc.pid),
+                            allowed_exe_paths=set(agent_listener.allowed_exe_paths)
+                            or {str(Path(bin_path).resolve())},
+                            expected_sha256=agent_exe_seal.get("sha256"),
+                        )
+                        agent_listener.set_allowed_pids(pids)
+                    except Exception:
+                        try:
+                            agent_listener.set_allowed_pids({int(agent_proc.pid)})
+                        except Exception:
+                            pass
                 except OSError as exc:
                     console.print(f"[yellow]agent auto_start[/] {exc}")
             else:
                 console.print(
-                    "[yellow]agent auto_start[/] binary not found — build agent/ "
+                    "[yellow]agent auto_start[/] binary not found - build agent/ "
                     "or put sysspectogram-agent on PATH"
                 )
+        elif agent_listener is not None:
+            # external agent (systemd): load prior seal if present
+            seal_path = _resolve("state/agent_binary.seal.json")
+            if seal_path.exists():
+                try:
+                    import json as _json
+
+                    agent_exe_seal.update(_json.loads(seal_path.read_text(encoding="utf-8")))
+                    agent_listener.set_exe_seal(
+                        {
+                            agent_exe_seal.get("path", ""),
+                            "/usr/local/sbin/sysspectogram-agent",
+                        },
+                        agent_exe_seal.get("sha256"),
+                    )
+                except Exception:
+                    pass
+
+        def pid_allowlist_loop():
+            from sysspectogram.trusted_pids import collect_trusted_pids
+
+            while not stop.is_set():
+                if agent_listener is not None:
+                    try:
+                        extra = set()
+                        if agent_proc is not None and agent_proc.poll() is None:
+                            extra.add(int(agent_proc.pid))
+                        paths = set(agent_listener.allowed_exe_paths) or {
+                            "/usr/local/sbin/sysspectogram-agent"
+                        }
+                        pids = collect_trusted_pids(
+                            agent_pidfile=_resolve(
+                                agent_cfg.get("pidfile") or "state/agent.pid"
+                            ),
+                            watchdog_pidfile=_resolve("state/watchdog.pid"),
+                            extra=extra,
+                            allowed_exe_paths=paths,
+                            expected_sha256=agent_exe_seal.get("sha256")
+                            or agent_listener.expected_exe_sha256,
+                        )
+                        if pids:
+                            agent_listener.set_allowed_pids(pids)
+                    except Exception:
+                        pass
+                stop.wait(5.0)
+
+        if agent_listener is not None:
+            threads.append(
+                threading.Thread(target=pid_allowlist_loop, name="pid-allow", daemon=True)
+            )
+
+        sess_cfg = config.get("sessions") or {}
+        if bool(sess_cfg.get("enabled", True)):
+            from sysspectogram.session_watch import SessionWatchState, poll_unexpected, session_key
+            from sysspectogram.perimeter.rules import Alert as PAlert
+
+            sess_state = SessionWatchState()
+            allow_users = set(str(x) for x in (sess_cfg.get("allow_users") or []))
+            allow_cidrs = list(sess_cfg.get("allow_cidrs") or kirk_allow_cidrs or [])
+
+            def session_loop():
+                t0 = time.monotonic()
+                while not stop.is_set():
+                    try:
+                        unexpected = poll_unexpected(
+                            sess_state,
+                            allow_users=allow_users,
+                            allow_cidrs=allow_cidrs,
+                            learn_sec=float(sess_cfg.get("learn_sec", 120)),
+                        )
+                        for s in unexpected:
+                            key = session_key(s)
+                            sess_state.seen.add(key)
+                            a = PAlert(
+                                rule_id="unexpected_ssh_session",
+                                severity="high",
+                                message=f"Unexpected login {s.user} on {s.tty} from {s.host or '?'}",
+                                ip=s.host if s.host and s.host[0].isdigit() else None,
+                                extras={"tty": s.tty, "user": s.user, "host": s.host},
+                            )
+                            watcher.emit(a)
+                            bot = bot_holder["bot"]
+                            if bot is not None:
+                                try:
+                                    bot.send_session_alert(s)
+                                except Exception:
+                                    pass
+                    except Exception as exc:
+                        console.print(f"[yellow]session watch[/] {exc}")
+                    if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
+                        break
+                    stop.wait(float(sess_cfg.get("poll_sec", 15)))
+
+            threads.append(threading.Thread(target=session_loop, name="sessions", daemon=True))
+
+        root_cfg = config.get("root_watch") or {}
+        agent_on = bool((config.get("agent") or {}).get("enabled"))
+        # Prefer Rust agent root_watch; Python poller only without agent.
+        if bool(root_cfg.get("enabled", False)) and not agent_on:
+            from sysspectogram.root_watch import RootWatchState, poll_new_root
+            from sysspectogram.perimeter.rules import Alert as PAlert
+
+            root_state = RootWatchState()
+            allow_comms = set(str(x) for x in (root_cfg.get("allow_comms") or [])) or None
+
+            def root_loop():
+                t0 = time.monotonic()
+                while not stop.is_set():
+                    try:
+                        news = poll_new_root(
+                            root_state,
+                            learn_sec=float(root_cfg.get("learn_sec", 300)),
+                            allow_comms=allow_comms,
+                        )
+                        for p in news:
+                            a = PAlert(
+                                rule_id="unexpected_root_process",
+                                severity="critical",
+                                message=(
+                                    f"New root process pid={p.pid} comm={p.comm} "
+                                    f"exe={p.exe or '?'}"
+                                ),
+                                extras={
+                                    "pid": p.pid,
+                                    "comm": p.comm,
+                                    "path": p.exe,
+                                    "cmdline": p.cmdline,
+                                },
+                            )
+                            watcher.emit(a)
+                            bot = bot_holder["bot"]
+                            if bot is not None:
+                                try:
+                                    bot.send_root_alert(p)
+                                except Exception:
+                                    pass
+                    except Exception as exc:
+                        console.print(f"[yellow]root watch[/] {exc}")
+                    if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
+                        break
+                    stop.wait(float(root_cfg.get("poll_sec", 60)))
+
+            threads.append(threading.Thread(target=root_loop, name="root-watch", daemon=True))
+            console.print(
+                f"[cyan]root watch[/] python fallback learn={float(root_cfg.get('learn_sec', 300)):.0f}s "
+                f"poll={float(root_cfg.get('poll_sec', 60)):.0f}s"
+            )
+        elif agent_on and bool((config.get("agent") or {}).get("root_watch", True)):
+            console.print(
+                f"[cyan]root watch[/] via agent learn={int((config.get('agent') or {}).get('root_learn_sec', 300))}s"
+            )
 
     for t in threads:
         t.start()
@@ -1116,7 +1525,7 @@ def run_guard(
                 break
             time.sleep(0.5)
     except KeyboardInterrupt:
-        console.print("stopping guard…")
+        console.print("stopping guard...")
     finally:
         stop.set()
         if httpd is not None:
@@ -1126,6 +1535,8 @@ def run_guard(
                 pass
         if honeypot is not None:
             honeypot.stop()
+        if canary is not None:
+            canary.stop()
         if agent_listener is not None:
             agent_listener.stop()
         if agent_proc is not None and agent_proc.poll() is None:

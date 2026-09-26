@@ -8,6 +8,7 @@
 #define KIND_EXECVE 1
 #define KIND_OPENAT 2
 #define KIND_MODULE 3
+#define KIND_KILL 4
 
 struct probe_event {
     __u8 kind;
@@ -91,6 +92,22 @@ int sysspectogram_delete_module(void *ctx)
     if (!name)
         return emit_label(ctx, KIND_MODULE, "delete_module");
     return emit_user_path(ctx, KIND_MODULE, name);
+}
+
+/* kill(2): encode target pid + sig in path bytes for userspace filter */
+SEC("tracepoint/syscalls/sys_enter_kill")
+int sysspectogram_kill(void *ctx)
+{
+    __s64 tpid = 0;
+    __s64 sig = 0;
+    bpf_probe_read_kernel(&tpid, sizeof(tpid), (char *)ctx + 16);
+    bpf_probe_read_kernel(&sig, sizeof(sig), (char *)ctx + 24);
+    struct probe_event e = {};
+    fill_meta(&e, KIND_KILL);
+    *(__u32 *)&e.path[0] = (__u32)tpid;
+    *(__u32 *)&e.path[4] = (__u32)sig;
+    bpf_perf_event_output(ctx, &EVENTS, BPF_F_CURRENT_CPU, &e, sizeof(e));
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";

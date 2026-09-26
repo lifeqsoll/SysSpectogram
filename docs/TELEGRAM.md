@@ -36,6 +36,8 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 `--dry-run`: ban/kill/shield print what would happen; no nft/SIGKILL.
 
+Alert buttons (after unlock): **Kill**, feedback (**Ignore** / **As normal** / **As anomaly**), root Kill, session **Kick tty** / **Ban IP**. See [FEEDBACK.md](FEEDBACK.md), [ROOT_WATCH.md](ROOT_WATCH.md), [SESSIONS.md](SESSIONS.md).
+
 ## Slash commands
 
 ### Status & help

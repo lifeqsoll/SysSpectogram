@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  py:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q --ignore=tests/test_rolelab.py
+        # role-lab short test is slow (~40s); run selectively
+      - run: pytest -q tests/test_rolelab.py
+
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: build agent (may skip bpf object if no clang bpf)
+        working-directory: agent
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libelf-dev
+          cargo test -q || cargo test -q --no-default-features
+          cargo build --release -q || cargo build --release -q --no-default-features
