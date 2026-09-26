@@ -17,12 +17,13 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
       - name: musl tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools clang llvm
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
       - name: build musl agent
         working-directory: agent
+        env:
+          SYSSPECTOGRAM_SKIP_EBPF: "1"
         run: |
-          cargo build --release --target x86_64-unknown-linux-musl --no-default-features || \
-          cargo build --release --target x86_64-unknown-linux-musl
+          cargo build --release --target x86_64-unknown-linux-musl --no-default-features
           cp target/x86_64-unknown-linux-musl/release/sysspectogram-agent \
             ../sysspectogram-agent-x86_64-linux-musl
           sha256sum ../sysspectogram-agent-x86_64-linux-musl | tee ../sysspectogram-agent-x86_64-linux-musl.sha256

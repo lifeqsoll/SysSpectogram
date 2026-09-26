@@ -42,6 +42,7 @@ artifacts/*
 *.joblib
 *.onnx
 *.png
+!docs/assets/*.png
 *.npy
 *.npz
 

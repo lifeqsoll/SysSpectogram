@@ -13,20 +13,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - name: install (dev + CPU torch for ML imports)
+        run: |
+          pip install -U pip
+          pip install -e ".[dev,ml]" --extra-index-url https://download.pytorch.org/whl/cpu
       - run: pytest -q --ignore=tests/test_rolelab.py
-        # role-lab short test is slow (~40s); run selectively
       - run: pytest -q tests/test_rolelab.py
 
   agent:
     runs-on: ubuntu-latest
+    env:
+      # CI runners lack bpf asm headers; userspace agent is enough for unit tests
+      SYSSPECTOGRAM_SKIP_EBPF: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: build agent (may skip bpf object if no clang bpf)
+      - name: test + build agent (userspace, skip BPF object)
         working-directory: agent
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq clang llvm libelf-dev
-          cargo test -q || cargo test -q --no-default-features
-          cargo build --release -q || cargo build --release -q --no-default-features
+          cargo test -q --no-default-features
+          cargo build --release -q --no-default-features

@@ -54,6 +54,25 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 ## What it does
 
+### Metrics → spectrogram → CNN (the DL core)
+
+Host telemetry is treated like a **computer-vision input**: each second is a row of rates (CPU, mem, net, disk, GPU, …); a **60×N** window becomes a single-channel heatmap (“spectrogram”) for a small **ConvNet**, while Isolation Forest sees the same window as tabular stats. Scores fuse into one host risk.
+
+```mermaid
+flowchart LR
+  A["collect 1 Hz<br/>CSV rates"] --> B["60×N window<br/>MinMax scale"]
+  B --> C["heatmap tensor<br/>(1, 60, N)"]
+  C --> D["CNN<br/>P(anomaly)"]
+  B --> E["tabular stats<br/>mean/std/max/p95"]
+  E --> F["Isolation Forest"]
+  D --> G["fuse risk<br/>0.6·CNN + 0.4·IF"]
+  F --> G
+```
+
+![SysSpectogram pipeline: quiet vs miner-like spectrograms](docs/assets/spectrogram-pipeline.png)
+
+*Figure: synthetic quiet baseline vs CPU/GPU miner-like burst as the CNN would see it. Window PNG previews: [`build-dataset --png`](#build-dataset) → e.g. [normal](docs/assets/window-preview-normal.png) / [anomaly](docs/assets/window-preview-anomaly.png). Interactive demo: [GitHub Pages](https://lifeqsoll.github.io/SysSpectogram/demo/).*
+
 | Stage | Purpose |
 | --- | --- |
 | `collect` | Write per-second metric rates to CSV |
@@ -118,17 +137,20 @@ Each CSV row is one second. Network/disk/context-switch fields are **per-second 
 
 Columns include CPU (total and up to `max_cores` cores), memory/swap, page faults, network byte/packet rates, socket counts (ESTABLISHED/LISTEN sampled every N seconds), and disk I/O rates.
 
-### Windows
+### Windows → “image” for the CNN
 
-- Default window: **60 seconds** × N feature columns  
-- Default stride when building a dataset: **5 seconds** (overlapping windows)  
-- Scaler (`MinMax`) is fit on **train** windows only and stored for inference  
+- Default window: **60 seconds** × N feature columns → shape **`(1, 60, N)`** after `window_to_tensor`
+- Default stride when building a dataset: **5 seconds** (overlapping windows)
+- Scaler (`MinMax`) is fit on **train** windows only and stored for inference
+- Optional PNG previews: `build-dataset --png` (human view; model trains on `.npy`)
+
+The CNN does not watch raw processes. It watches **how the whole host looks over a minute** — the same idea recruiters know from spectrograms / heatmaps in CV and audio DL.
 
 ### Ensemble
 
-- **CNN:** small ConvNet on a single-channel 60×N “heatmap” tensor  
-- **Isolation Forest:** tabular stats over the same window (mean/std/max/p95 per feature)  
-- Artifacts live in one directory (`cnn.pt`, `iforest.joblib`, `scaler.joblib`, `meta.json`)  
+- **CNN:** small ConvNet on a single-channel 60×N heatmap tensor
+- **Isolation Forest:** tabular stats over the same window (mean/std/max/p95 per feature)
+- Artifacts live in one directory (`cnn.pt`, `iforest.joblib`, `scaler.joblib`, `meta.json`)
 
 ### Labels for training data
 
@@ -177,7 +199,17 @@ python -m sysspectogram build-dataset \
   --stride 5
 ```
 
-Optional `--png` writes preview images (training still uses `.npy`).
+Optional `--png` writes inferno heatmap previews next to each `.npy` (human view only; training uses tensors). Example:
+
+```bash
+python -m sysspectogram build-dataset \
+  --normal data/normal.csv \
+  --anomaly data/anomaly.csv \
+  --out dataset/real \
+  --window 60 --stride 5 \
+  --png
+# → dataset/real/train/anomaly/*.png  (+ .npy)
+```
 
 ### 4. Train
 
