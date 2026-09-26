@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from sysspectogram.agent_auth import needs_hmac, verify as verify_hmac
+
 
 @dataclass
 class AgentAlert:
@@ -28,6 +30,7 @@ class AgentAlert:
     kind: str = "agent"
     ip: str | None = None
     port: int | None = None
+    hmac_ok: bool | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentAlert:
@@ -41,7 +44,7 @@ class AgentAlert:
             ppid=data.get("ppid"),
             comm=data.get("comm"),
             path=data.get("path"),
-            extras={},  # never trust socket extras for scoring
+            extras={},
             kind=str(data.get("kind") or "agent"),
         )
 
@@ -67,20 +70,16 @@ class MetricsSample:
         )
 
 
-def _peer_uid(sock: socket.socket) -> int | None:
-    """SO_PEERCRED uid for the last datagram (Linux)."""
+def _peer_cred(sock: socket.socket) -> tuple[int | None, int | None]:
     try:
-        # struct ucred { pid_t; uid_t; gid_t; } — typically 3 ints
         cred = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-        _pid, uid, _gid = struct.unpack("3i", cred)
-        return int(uid)
+        pid, uid, _gid = struct.unpack("3i", cred)
+        return int(pid), int(uid)
     except OSError:
-        return None
+        return None, None
 
 
 class AgentSocketListener:
-    """Bind Unix datagram path; dispatch alerts and optional metrics."""
-
     def __init__(
         self,
         path: str | Path,
@@ -88,9 +87,11 @@ class AgentSocketListener:
         *,
         on_metrics: Callable[[MetricsSample], None] | None = None,
         cooldown_sec: float = 60.0,
-        require_same_uid: bool = True,  # prefer same-uid; FS mode 0600 is primary control
+        require_same_uid: bool = True,
         max_alerts_per_min: int = 30,
         max_metrics_per_sec: float = 2.0,
+        hmac_secret: str | None = None,
+        require_hmac_critical: bool = True,
     ) -> None:
         self.path = Path(path)
         self.on_alert = on_alert
@@ -99,6 +100,8 @@ class AgentSocketListener:
         self.require_same_uid = require_same_uid
         self.max_alerts_per_min = max_alerts_per_min
         self.max_metrics_per_sec = max_metrics_per_sec
+        self.hmac_secret = hmac_secret
+        self.require_hmac_critical = require_hmac_critical
         self._sock: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -106,6 +109,17 @@ class AgentSocketListener:
         self._alert_times: list[float] = []
         self._last_metrics = 0.0
         self._self_uid = os.getuid()
+        self.allowed_pids: set[int] | None = None
+        self.allowed_exe_paths: set[str] = set()
+        self.expected_exe_sha256: str | None = None
+        self.on_exe_mismatch: Callable[[int, str], None] | None = None
+
+    def set_allowed_pids(self, pids: set[int] | None) -> None:
+        self.allowed_pids = pids
+
+    def set_exe_seal(self, paths: set[str], sha256: str | None = None) -> None:
+        self.allowed_exe_paths = {str(Path(p).resolve()) for p in paths if p}
+        self.expected_exe_sha256 = sha256
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -159,11 +173,29 @@ class AgentSocketListener:
                 if self._stop.is_set():
                     break
                 continue
-            if self.require_same_uid:
-                uid = _peer_uid(self._sock)
-                # Unbound datagram peers often report uid=-1; treat as unknown → rely on 0600.
-                if uid is not None and uid >= 0 and uid != self._self_uid:
-                    continue
+            if self.require_same_uid or self.allowed_pids is not None:
+                pid, uid = _peer_cred(self._sock)
+                if self.require_same_uid:
+                    if uid is None or uid < 0 or uid != self._self_uid:
+                        continue
+                if self.allowed_pids is not None:
+                    if pid is None or pid <= 0 or pid not in self.allowed_pids:
+                        continue
+                if pid and (self.allowed_exe_paths or self.expected_exe_sha256):
+                    from sysspectogram.trusted_pids import pid_matches_seal, resolve_exe
+
+                    if not pid_matches_seal(
+                        int(pid),
+                        allowed_paths=self.allowed_exe_paths,
+                        expected_sha256=self.expected_exe_sha256,
+                    ):
+                        exe = resolve_exe(int(pid))
+                        if self.on_exe_mismatch:
+                            try:
+                                self.on_exe_mismatch(int(pid), str(exe or "?"))
+                            except Exception:
+                                pass
+                        continue
             for line in data.decode("utf-8", errors="replace").splitlines():
                 line = line.strip()
                 if not line:
@@ -193,14 +225,33 @@ class AgentSocketListener:
                     continue
                 if not self._rate_ok_alert():
                     continue
+                rule = str(obj.get("rule_id") or "")
+                hmac_ok: bool | None = None
+                if self.hmac_secret:
+                    hmac_ok = verify_hmac(self.hmac_secret, obj)
+                    if needs_hmac(rule) and self.require_hmac_critical and not hmac_ok:
+                        continue
                 alert = AgentAlert.from_dict(obj)
-                # derive risky locally from comm, never from socket extras
+                alert.hmac_ok = hmac_ok
                 comm = (alert.comm or "").lower()
                 risky = any(
                     comm == x or comm.startswith(x)
-                    for x in ("bash", "sh", "zsh", "python", "perl", "ruby", "node", "curl", "wget", "nc", "ncat", "socat")
+                    for x in (
+                        "bash",
+                        "sh",
+                        "zsh",
+                        "python",
+                        "perl",
+                        "ruby",
+                        "node",
+                        "curl",
+                        "wget",
+                        "nc",
+                        "ncat",
+                        "socat",
+                    )
                 )
-                alert.extras = {"risky_comm": risky}
+                alert.extras = {"risky_comm": risky, "hmac_ok": hmac_ok}
                 key = f"{alert.rule_id}:{alert.pid}:{alert.path}"
                 now = time.time()
                 prev = self._cooldown.get(key, 0.0)
@@ -208,7 +259,6 @@ class AgentSocketListener:
                     continue
                 self._cooldown[key] = now
                 if len(self._cooldown) > 5000:
-                    # drop oldest half
                     items = sorted(self._cooldown.items(), key=lambda kv: kv[1])
                     self._cooldown = dict(items[len(items) // 2 :])
                 if self.on_alert:

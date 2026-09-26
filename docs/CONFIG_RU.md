@@ -105,7 +105,7 @@ CLI `--window` / `--stride` у `build-dataset` перекрывают эти з�
 | `require_console_unlock` | `true` — после старта TG/web actions LOCKED до `/unlock` |
 | `unlock_ttl_sec` | TTL сессии unlock (по умолчанию `7200` = 2ч) |
 
-## `agent` (v0.4)
+## `agent` (v0.6)
 
 | Ключ | Смысл |
 | --- | --- |
@@ -114,11 +114,16 @@ CLI `--window` / `--stride` у `build-dataset` перекрывают эти з�
 | `mode` | `userspace` (default) / `ebpf` (clang BPF + Aya; attach нужен **root**) |
 | `metrics` | Лёгкие метрики на live web |
 | `socket` | `null` → `$XDG_RUNTIME_DIR/sysspectogram-agent.sock` (0600) |
+| `require_hmac` | Отклонять unsigned critical (kirk + unexpected root) |
+| `root_watch` | Новый uid=0 через ProcWatcher ([ROOT_WATCH.md](ROOT_WATCH.md)) |
+| `root_learn_sec` | Окно обучения root PID (сек) |
 | `cooldown_sec` | Cooldown TG-алертов агента |
+
+`root_watch.enabled` (Python) — только если агент выключен. Сессии SSH: `sessions.*` ([SESSIONS.md](SESSIONS.md)).
 
 ---
 
 ## Замечания
 
-- v0.4: fuse risk, packs, lite/full, FIM/flow в `full`, опциональный eBPF. Console unlock гейтит TG/web kill/ban.  
+- v0.6: HMAC + PID allowlist, root watch в Rust, Role Lab, feedback. VMI → v1.0.  
 - Смена `max_cores` или схемы признаков требует нового датасета и переобучения.

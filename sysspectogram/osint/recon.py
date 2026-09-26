@@ -47,12 +47,16 @@ class ReconReport:
     passive_dns: list[str] = field(default_factory=list)
     nmap: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    recon_score: float = 0.0
+    score_notes: list[str] = field(default_factory=list)
 
     def summary_text(self, host_id: str = "") -> str:
         lines = []
         if host_id:
             lines.append(f"[{host_id}]")
-        lines.append(f"OSINT {self.ip}")
+        lines.append(f"OSINT {self.ip} score={self.recon_score:.2f}")
+        if self.score_notes:
+            lines.append("score_notes: " + ",".join(self.score_notes[:6]))
         if self.ptr:
             lines.append(f"PTR: {self.ptr}")
         if self.asn_org:
@@ -215,6 +219,7 @@ def run_full_recon(
     passive_dns_url: str | None = None,
     lab_targets: list[str] | None = None,
     require_lab_for_nmap: bool = True,
+    canary_hit: bool = False,
 ) -> ReconReport:
     report = ReconReport(ip=ip)
     try:
@@ -255,6 +260,18 @@ def run_full_recon(
             report.nmap = nmap_fast(ip)
             if report.nmap.get("skipped"):
                 report.errors.append(str(report.nmap.get("reason")))
+    try:
+        from sysspectogram.osint.score import compute_recon_score
+
+        report.recon_score, report.score_notes = compute_recon_score(
+            ip=ip,
+            asn_org=report.asn_org,
+            country=report.country,
+            open_ports=list(report.nmap.get("open_ports") or []),
+            canary_hit=bool(canary_hit),
+        )
+    except Exception as exc:
+        report.errors.append(f"score:{exc}")
     return report
 
 

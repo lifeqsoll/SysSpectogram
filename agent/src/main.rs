@@ -3,14 +3,18 @@
 //! Default: userspace `/proc` + inotify. `--mode ebpf` probes toolchain and falls back.
 
 mod aggregate;
+mod auth;
 mod baseline;
 mod crossview;
 mod ebpf;
 mod emit;
 mod fim;
 mod metrics;
+mod phoenix;
 mod procwatch;
+mod protect;
 mod rules;
+mod tg_notify;
 mod types;
 mod watch;
 
@@ -27,7 +31,11 @@ use crate::ebpf::probe_toolchain;
 use crate::emit::Emitter;
 use crate::fim::FimWatcher;
 use crate::metrics::MetricsSampler;
+use crate::phoenix::{run_watchdog_loop, write_pidfile};
 use crate::procwatch::ProcWatcher;
+use crate::protect::{
+    check_install, check_unit_file, emit_clean_shutdown, resolve_exe,
+};
 use crate::rules::RuleEngine;
 use crate::watch::PathWatcher;
 
@@ -37,6 +45,10 @@ struct Args {
     /// userspace = /proc+inotify (default). ebpf = Aya when toolchain ready (fallback today).
     #[arg(long, default_value = "userspace")]
     mode: String,
+
+    /// agent (default) or watchdog (phoenix twin).
+    #[arg(long, default_value = "agent")]
+    role: String,
 
     /// Unix datagram path where **guard listens** (agent send_to).
     #[arg(long, default_value = "/tmp/sysspectogram-agent.sock")]
@@ -90,11 +102,93 @@ struct Args {
 
     #[arg(long, default_value_t = 300)]
     kirk_baseline_interval_sec: u64,
+
+    /// Write our pid here (for phoenix / guard).
+    #[arg(long, default_value = "state/agent.pid")]
+    pidfile: PathBuf,
+
+    /// Spawn phoenix watchdog twin after start.
+    #[arg(long, default_value_t = false)]
+    phoenix: bool,
+
+    /// Watchdog: pidfile of peer to watch.
+    #[arg(long)]
+    watch_pidfile: Option<PathBuf>,
+
+    /// Watchdog: CLEAN_SHUTDOWN marker path.
+    #[arg(long, default_value = "state/agent.clean_shutdown")]
+    clean_marker: PathBuf,
+
+    /// Watchdog: executable to respawn.
+    #[arg(long)]
+    respawn_exe: Option<PathBuf>,
+
+    /// Watchdog: args for respawn (repeatable).
+    #[arg(long)]
+    respawn_arg: Vec<String>,
+
+    /// Shared HMAC secret file (same as guard state/agent_hmac.secret).
+    #[arg(long, default_value = "state/agent_hmac.secret")]
+    hmac_secret: PathBuf,
+
+    /// Optional systemd unit path to permission-check.
+    #[arg(long, default_value = "/etc/systemd/system/sysspectogram-agent.service")]
+    unit_file: PathBuf,
+
+    /// Guard pidfile — if guard dies unexpectedly, send TG via curl.
+    #[arg(long, default_value = "state/guard.pid")]
+    guard_pidfile: PathBuf,
+
+    /// Root-only Telegram notify env for agent→TG bypass.
+    #[arg(long, default_value = "/etc/sysspectogram/agent-notify.env")]
+    notify_env: PathBuf,
+
+    /// Detect unexpected uid=0 via same /proc walk (lite-friendly).
+    #[arg(long, default_value_t = true)]
+    root_watch: bool,
+
+    /// Learn existing root PIDs before alerting (seconds).
+    #[arg(long, default_value_t = 300)]
+    root_learn_sec: u64,
 }
 
 fn main() {
     let args = Args::parse();
     let host = args.host_id.unwrap_or_else(hostname_fallback);
+
+    if args.role == "watchdog" {
+        let running = Arc::new(AtomicBool::new(true));
+        {
+            let r = running.clone();
+            let marker = args.clean_marker.clone();
+            let _ = ctrlc::set_handler(move || {
+                let _ = std::fs::File::create(&marker);
+                r.store(false, Ordering::SeqCst);
+            });
+        }
+        let _ = write_pidfile(&args.pidfile, std::process::id());
+        let watch = args
+            .watch_pidfile
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("state/agent.pid"));
+        let exe = args
+            .respawn_exe
+            .clone()
+            .unwrap_or_else(resolve_exe);
+        eprintln!(
+            "[sysspectogram-watch] watching {} respawn={}",
+            watch.display(),
+            exe.display()
+        );
+        run_watchdog_loop(
+            &watch,
+            &args.clean_marker,
+            &exe,
+            &args.respawn_arg,
+            &running,
+        );
+        return;
+    }
 
     if args.kirk_seal {
         match SymbolBaseline::from_kallsyms(
@@ -120,6 +214,18 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+
+    let exe = resolve_exe();
+    let chk = check_install(&exe);
+    for w in &chk.warnings {
+        eprintln!("[sysspectogram-agent] install: {w}");
+    }
+    if !chk.ok {
+        eprintln!("[sysspectogram-agent] install check FAILED (continuing; harden path for prod)");
+    }
+    for w in check_unit_file(&args.unit_file) {
+        eprintln!("[sysspectogram-agent] unit: {w}");
     }
 
     let mut ebpf_rt = None;
@@ -157,7 +263,19 @@ fn main() {
         effective_mode = "userspace";
     }
 
-    let emitter = match Emitter::new(&args.socket, args.jsonl.as_deref()) {
+    let hmac = crate::auth::load_secret(&args.hmac_secret);
+    if hmac.is_some() {
+        eprintln!(
+            "[sysspectogram-agent] HMAC signing enabled ({})",
+            args.hmac_secret.display()
+        );
+    } else {
+        eprintln!(
+            "[sysspectogram-agent] HMAC secret missing - critical alerts unsigned ({})",
+            args.hmac_secret.display()
+        );
+    }
+    let emitter = match Emitter::new(&args.socket, args.jsonl.as_deref(), hmac) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("[sysspectogram-agent] emit init failed: {e}");
@@ -165,15 +283,63 @@ fn main() {
         }
     };
 
+    let _ = write_pidfile(&args.pidfile, std::process::id());
+    // clear stale clean marker
+    let _ = std::fs::remove_file(&args.clean_marker);
+
     let running = Arc::new(AtomicBool::new(true));
+    let clean_exit = Arc::new(AtomicBool::new(false));
     {
         let r = running.clone();
+        let c = clean_exit.clone();
         let _ = ctrlc::set_handler(move || {
+            c.store(true, Ordering::SeqCst);
             r.store(false, Ordering::SeqCst);
         });
     }
 
-    let mut watcher = ProcWatcher::new();
+    if args.phoenix {
+        let mut respawn_args: Vec<String> = vec![
+            "--mode".into(),
+            args.mode.clone(),
+            "--socket".into(),
+            args.socket.display().to_string(),
+            "--pidfile".into(),
+            args.pidfile.display().to_string(),
+            "--host-id".into(),
+            host.clone(),
+        ];
+            respawn_args.push("--hmac-secret".into());
+            respawn_args.push(args.hmac_secret.display().to_string());
+            if let Some(ref j) = args.jsonl {
+                respawn_args.push("--jsonl".into());
+                respawn_args.push(j.display().to_string());
+            }
+            if args.root_watch {
+                respawn_args.push("--root-watch".into());
+                respawn_args.push("--root-learn-sec".into());
+                respawn_args.push(args.root_learn_sec.to_string());
+            } else {
+                respawn_args.push("--no-root-watch".into());
+            }
+        match crate::phoenix::spawn_watchdog(
+            &exe,
+            &respawn_args,
+            &args.pidfile,
+            &PathBuf::from("state/watchdog.pid"),
+        ) {
+            Ok(_) => eprintln!("[sysspectogram-agent] phoenix watchdog spawned"),
+            Err(e) => eprintln!("[sysspectogram-agent] phoenix spawn failed: {e}"),
+        }
+    }
+
+    let mut watcher = ProcWatcher::with_root(args.root_watch, args.root_learn_sec);
+    if args.root_watch {
+        eprintln!(
+            "[sysspectogram-agent] root_watch learn={}s",
+            args.root_learn_sec
+        );
+    }
     let mut agg = Aggregator::new();
     let rules = RuleEngine::default_sensitive();
     let path_watch = PathWatcher::try_new(&PathWatcher::default_paths()).ok();
@@ -228,7 +394,8 @@ fn main() {
     };
     let mut last_flush = Instant::now();
     let mut last_metrics = Instant::now();
-    // warm metrics baseline
+    let mut last_guard_check = Instant::now();
+    let mut guard_alerted = false;
     let _ = metrics.sample();
 
     while running.load(Ordering::SeqCst) {
@@ -260,6 +427,39 @@ fn main() {
             }
         }
 
+        // Guard liveness (every 5s)
+        if last_guard_check.elapsed() >= Duration::from_secs(5) {
+            last_guard_check = Instant::now();
+            if let Some(gpid) = crate::phoenix::read_pidfile(&args.guard_pidfile) {
+                if !crate::phoenix::pid_alive(gpid) {
+                    if !guard_alerted {
+                        guard_alerted = true;
+                        let msg = format!(
+                            "CRITICAL [{host}] guard pid={gpid} gone — agent_kirk_guard_down"
+                        );
+                        eprintln!("[sysspectogram-agent] {msg}");
+                        match crate::tg_notify::send_critical(&msg, &args.notify_env) {
+                            Ok(true) => eprintln!("[sysspectogram-agent] TG notify sent"),
+                            Ok(false) => eprintln!(
+                                "[sysspectogram-agent] TG skipped (no {})",
+                                args.notify_env.display()
+                            ),
+                            Err(e) => eprintln!("[sysspectogram-agent] TG fail: {e}"),
+                        }
+                        let a = crate::types::AgentAlert::new(
+                            "agent_kirk_guard_down",
+                            "critical",
+                            msg,
+                            &host,
+                        );
+                        let _ = emitter.emit_alert(&a);
+                    }
+                } else {
+                    guard_alerted = false;
+                }
+            }
+        }
+
         if last_flush.elapsed() >= flush_every {
             let snaps = agg.flush();
             for snap in snaps {
@@ -271,6 +471,11 @@ fn main() {
                 }
             }
             for alert in watcher.module_alerts(&host) {
+                if let Err(e) = emitter.emit_alert(&alert) {
+                    eprintln!("[sysspectogram-agent] emit: {e}");
+                }
+            }
+            for alert in watcher.drain_root_alerts(&host) {
                 if let Err(e) = emitter.emit_alert(&alert) {
                     eprintln!("[sysspectogram-agent] emit: {e}");
                 }
@@ -315,6 +520,14 @@ fn main() {
         }
 
         std::thread::sleep(poll);
+    }
+
+    if clean_exit.load(Ordering::SeqCst) {
+        let _ = std::fs::File::create(&args.clean_marker);
+        if let Err(e) = emit_clean_shutdown(&emitter, &host) {
+            eprintln!("[sysspectogram-agent] clean_shutdown emit: {e}");
+        }
+        eprintln!("[sysspectogram-agent] CLEAN_SHUTDOWN");
     }
 
     eprintln!("[sysspectogram-agent] stopped");

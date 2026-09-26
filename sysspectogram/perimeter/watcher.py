@@ -175,8 +175,27 @@ class PerimeterWatcher:
                 passive_dns_url=self.passive_dns_url,
                 lab_targets=self.lab_nmap_targets,
                 require_lab_for_nmap=True,
+                canary_hit=str(alert.rule_id) in ("canary_hit", "honeypot_hit"),
             )
             save_report(report, self.recon_dir / "recon.jsonl")
+            try:
+                from sysspectogram.osint.score import DossierHit, append_dossier
+
+                append_dossier(
+                    self.recon_dir / "recon_dossier.jsonl",
+                    DossierHit(
+                        ip=str(alert.ip),
+                        ts=time.time(),
+                        rule_id=str(alert.rule_id),
+                        severity=str(alert.severity),
+                        asn_org=report.asn_org,
+                        country=report.country,
+                        recon_score=float(report.recon_score),
+                        notes=list(report.score_notes),
+                    ),
+                )
+            except Exception:
+                pass
             return report
         except Exception as exc:
             console.print(f"[yellow]recon soft-fail[/] {exc}")
@@ -186,6 +205,12 @@ class PerimeterWatcher:
         if not self._should_emit(alert):
             return
         recon = self._maybe_recon(alert)
+        if recon is not None:
+            try:
+                alert.extras = dict(alert.extras or {})
+                alert.extras["recon_score"] = float(getattr(recon, "recon_score", 0) or 0)
+            except Exception:
+                pass
         self.state.last_alerts.appendleft(alert)
         self.state.last_alert_ts = time.time()
         console.print(

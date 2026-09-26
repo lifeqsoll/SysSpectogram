@@ -69,7 +69,7 @@ Fusion is renormalized so the two weights sum to 1.
 
 See `configs/default.yaml` and the Russian config doc for full tables. Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `WEBAPP_URL`.
 
-Notable **v0.5** keys:
+Notable **v0.6** keys:
 
 | Section | Key | Default | Meaning |
 | --- | --- | --- | --- |
@@ -78,6 +78,11 @@ Notable **v0.5** keys:
 | `response` | `mode` | `observe` | `observe` \| `shield` \| `aggressive` |
 | `telegram` | `require_console_unlock` | `true` | Gate TG + web actions until `/unlock` |
 | `agent` | `mode` | `userspace` | `userspace` or `ebpf` (attach needs root) |
+| `agent` | `require_hmac` | `true` | Reject unsigned critical agent rules |
+| `agent` | `root_watch` | `true` | Unexpected uid=0 via ProcWatcher ([ROOT_WATCH.md](ROOT_WATCH.md)) |
+| `agent` | `root_learn_sec` | `300` | Baseline root PIDs before alert |
+| `root_watch` | `enabled` | `false` | Python poller — only if agent disabled |
+| `sessions` | `enabled` | `true` | Unexpected SSH → Kick / Ban |
 | `kirk` | `trust` | `auto` | Probe IMA+SB/TPM → `best-effort` \| `measured` |
 | `kirk` | `auto_isolate` | `false` | CRITICAL kirk → nft `ss_kirk` (set `allow_ssh_cidrs`) |
 | `kirk` | `vmi` | `false` | Reserved; live VMI → **v1.0** ([VMI.md](VMI.md)) |
@@ -87,5 +92,5 @@ Notable **v0.5** keys:
 
 ## Environment notes
 
-- v0.5: ONNX/notorch VPS runtime, train bridge, Kirk trust (IMA/SB/TPM), isolate API. VMI deferred to v1.0.  
+- v0.6: agent HMAC + PID allowlist + exe seal; root watch in Rust; Role Lab; feedback. VMI deferred to v1.0.
 - Changing `max_cores` or feature schema requires rebuilding the dataset and retraining; old artifacts will not match new column layouts.

@@ -1,6 +1,6 @@
-# Kirk — Kernel Integrity / Rootkit signals
+# Kirk - Kernel Integrity / Rootkit signals
 
-Status: **in-guest** integrity signals for v0.5. Honest trust labels — not a silver-bullet rootkit killer.
+Status: **in-guest** integrity signals for v0.5. Honest trust labels - not a silver-bullet rootkit killer.
 
 ## Trust labels
 
@@ -8,7 +8,7 @@ Status: **in-guest** integrity signals for v0.5. Honest trust labels — not a s
 | --- | --- |
 | `best-effort` | In-guest views (`/proc`, eBPF, cross-view). A sophisticated LKM can lie. |
 | `measured` | **IMA present** and (**Secure Boot on** or **TPM present**). Kernel/hardware hashes load path; TPM can record measurements. Still not remote attestation by itself. |
-| `out-of-band` | Host VMI — **deferred to v1.0** ([VMI.md](VMI.md)). |
+| `out-of-band` | Host VMI - **deferred to v1.0** ([VMI.md](VMI.md)). |
 
 Probe on guard start (`kirk.trust: auto`):
 
@@ -31,7 +31,7 @@ Without Secure Boot / IMA, SysSpectogram stays at **best-effort** and says so in
 
 ## Baseline seal
 
-Presence-only (not absolute addresses — KASLR / `kptr_restrict` safe):
+Presence-only (not absolute addresses - KASLR / `kptr_restrict` safe):
 
 ```bash
 # Seal and poll as the **same** user (prefer root for both if agent is root)
@@ -41,7 +41,7 @@ sudo ./agent/target/release/sysspectogram-agent --kirk-seal \
 
 ## Response
 
-`NftBackend.kirk_isolate` / `kirk_release` — nft table `inet ss_kirk`.
+`NftBackend.kirk_isolate` / `kirk_release` - nft table `inet ss_kirk`.
 **TTL is enforced** in-process (`expire_kirk_isolate` via ban cleanup loop). TG: `/kirk_release` (unlock-gated).
 
 ```yaml
@@ -55,13 +55,20 @@ kirk:
   vmi: false            # ignored until v1.0
 ```
 
-Never auto-`rmmod`. Prefer isolate → reboot to known-good.
+Never auto-`rmmod`. Prefer isolate -> reboot to known-good.
 
 ## Run eBPF agent (root)
 
+Prefer production path (root-owned):
+
 ```bash
-sudo -E ./agent/target/release/sysspectogram-agent \
-  --mode ebpf --socket "$XDG_RUNTIME_DIR/sysspectogram-agent.sock"
+sudo install -m 0755 agent/target/release/sysspectogram-agent /usr/local/sbin/sysspectogram-agent
+sudo -E /usr/local/sbin/sysspectogram-agent \
+  --mode ebpf --phoenix --socket "$XDG_RUNTIME_DIR/sysspectogram-agent.sock"
 ```
 
-See [EBPF_SETUP.md](EBPF_SETUP.md), [ROADMAP_V3.md](ROADMAP_V3.md), [VMI.md](VMI.md).
+Or systemd unit: [packaging/sysspectogram-agent.service](../packaging/sysspectogram-agent.service) - see [AGENT_PROTECT.md](AGENT_PROTECT.md).
+
+SIGTERM / `systemctl stop` -> `CLEAN_SHUTDOWN` (not Dead-man). `kill -9` -> restart + alert.
+
+See also [EBPF_SETUP.md](EBPF_SETUP.md), [AGENT_PROTECT.md](AGENT_PROTECT.md), [ROOT_WATCH.md](ROOT_WATCH.md), [ROADMAP_QUALITY.md](ROADMAP_QUALITY.md).

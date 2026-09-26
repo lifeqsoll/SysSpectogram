@@ -127,6 +127,8 @@ class TelegramBot:
         unlock: ConsoleUnlock | None = None,
         kirk_status: dict | None = None,
         response_mode: str | None = None,
+        feedback: Any | None = None,
+        learner: Any | None = None,
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -150,6 +152,11 @@ class TelegramBot:
         self.unlock_ttl_sec = self.unlock.ttl_sec
         self.kirk_status = kirk_status if kirk_status is not None else {}
         self.response_mode = response_mode or "observe"
+        self.feedback = feedback
+        self.learner = learner
+        self.last_host_window = None
+        self.last_host_columns: list[str] | None = None
+        self.last_host_score: float | None = None
         self._offset: int | None = None
         self._started = time.time()
         self._alert_count_day = 0
@@ -190,6 +197,75 @@ class TelegramBot:
     def allowed_chat(self, chat_id: Any) -> bool:
         return str(chat_id) == str(self.client.chat_id)
 
+    def _proc_feedback_payload(
+        self,
+        *,
+        pid: int | None = None,
+        comm: str | None = None,
+        path: str | None = None,
+        name: str | None = None,
+        rule_id: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "pid": int(pid or 0),
+            "comm": (comm or "")[:64],
+            "path": (path or "")[:200],
+            "name": (name or "")[:64],
+            "rule": (rule_id or "")[:64],
+        }
+
+    def _proc_feedback_row(
+        self,
+        *,
+        pid: int | None = None,
+        comm: str | None = None,
+        path: str | None = None,
+        name: str | None = None,
+        rule_id: str = "",
+    ) -> list[dict]:
+        base = self._proc_feedback_payload(
+            pid=pid, comm=comm, path=path, name=name, rule_id=rule_id
+        )
+        if not (base["comm"] or base["path"] or base["name"]):
+            return []
+        tign = self.tokens.issue("ignore_proc", base)
+        tbase = self.tokens.issue("baseline_proc", base)
+        tanom = self.tokens.issue("anomaly_proc", base)
+        return [
+            _btn("Ignore proc", f"do|{tign}"),
+            _btn("As normal", f"do|{tbase}"),
+            _btn("As anomaly", f"do|{tanom}"),
+        ]
+
+    def _offer_anomaly_after(self, chat_id: Any, payload: dict) -> None:
+        row = self._proc_feedback_row(
+            pid=int(payload.get("pid") or 0) or None,
+            comm=str(payload.get("comm") or payload.get("expect_comm") or "") or None,
+            path=str(payload.get("path") or "") or None,
+            name=str(payload.get("name") or "") or None,
+            rule_id=str(payload.get("rule") or ""),
+        )
+        if not row:
+            return
+        # only As anomaly after kill/ban of a process
+        tanom = self.tokens.issue(
+            "anomaly_proc",
+            self._proc_feedback_payload(
+                pid=int(payload.get("pid") or 0) or None,
+                comm=str(payload.get("comm") or payload.get("expect_comm") or "") or None,
+                path=str(payload.get("path") or "") or None,
+                name=str(payload.get("name") or "") or None,
+                rule_id=str(payload.get("rule") or ""),
+            ),
+        )
+        self.client.send_message(
+            self.prefix(
+                "Record this process as anomalous so similar ones keep triggering?"
+            ),
+            chat_id=chat_id,
+            reply_markup=_markup([[_btn("As anomaly", f"do|{tanom}")]]),
+        )
+
     def alert_keyboard(self, alert: Alert) -> dict:
         ip = alert.ip or ""
         port = alert.port
@@ -211,32 +287,100 @@ class TelegramBot:
             rows.append(
                 [
                     _btn("Allowlist", f"ask|{tallow}"),
-                    _btn("Mute 1h", f"ask|{tmute}"),
+                    _btn("Mute 1h", f"do|{tmute}"),
                     _btn("Refresh recon", f"do|{trecon}"),
                 ]
             )
         if port:
             tsh = self.tokens.issue("shield", {"port": port, "ttl": 3600})
             rows.append([_btn(f"Shield :{port}", f"ask|{tsh}")])
-        pid = (alert.extras or {}).get("pid")
+        extras = alert.extras or {}
+        pid = extras.get("pid")
+        comm = extras.get("comm") or extras.get("process")
+        path = extras.get("path")
         if pid:
             expect = read_proc_comm(int(pid))
             payload = {"pid": int(pid)}
             if expect:
                 payload["expect_comm"] = expect
+            if comm:
+                payload["comm"] = str(comm)
+            if path:
+                payload["path"] = str(path)
             tkill = self.tokens.issue("kill", payload)
             rows.append([_btn(f"Kill PID {pid}", f"ask|{tkill}")])
+        fb = self._proc_feedback_row(
+            pid=int(pid) if pid else None,
+            comm=str(comm) if comm else None,
+            path=str(path) if path else None,
+            rule_id=str(alert.rule_id),
+        )
+        if fb:
+            rows.append(fb)
         tign = self.tokens.issue("ignore", {"ip": ip})
         tlock = self.tokens.issue("lockdown", {})
         trep = self.tokens.issue("report", {})
         rows.append(
             [
-                _btn("Ignore", f"do|{tign}"),
+                _btn("Ignore alert", f"do|{tign}"),
                 _btn("Send report", f"do|{trep}"),
                 _btn("Lockdown", f"ask2|{tlock}"),
             ]
         )
         return _markup(rows)
+
+    def send_root_alert(self, proc) -> None:
+        if not self.client.configured:
+            return
+        pid = int(getattr(proc, "pid", 0) or 0)
+        comm = str(getattr(proc, "comm", "") or "")
+        exe = str(getattr(proc, "exe", "") or "")
+        cmdline = str(getattr(proc, "cmdline", "") or "")
+        text = self.prefix(
+            f"ROOT [critical] unexpected_root_process\n"
+            f"pid={pid} comm={comm}\n"
+            f"exe={exe or '?'}\n"
+            f"cmd={cmdline or '?'}\n"
+            f"Cannot revoke uid=0 in-place - Kill ends the process "
+            f"(needs privileges). Isolate locks network."
+        )
+        rows: list[list[dict]] = []
+        if pid > 1:
+            payload = {"pid": pid}
+            if comm:
+                payload["expect_comm"] = comm
+            tkill = self.tokens.issue("kill", payload)
+            rows.append([_btn(f"Kill root {comm}({pid})"[:40], f"ask|{tkill}")])
+        tlock = self.tokens.issue("lockdown", {})
+        rows.append([_btn("Lockdown", f"ask2|{tlock}")])
+        tign = self.tokens.issue(
+            "ignore_proc",
+            self._proc_feedback_payload(pid=pid, comm=comm, path=exe, rule_id="unexpected_root"),
+        )
+        rows.append([_btn("Ignore proc", f"do|{tign}")])
+        self.client.send_message(text, reply_markup=_markup(rows))
+
+    def send_session_alert(self, session) -> None:
+        if not self.client.configured:
+            return
+        user = getattr(session, "user", "?")
+        tty = getattr(session, "tty", "")
+        host = getattr(session, "host", "")
+        text = self.prefix(
+            f"SESSION [high] unexpected_ssh_session\n"
+            f"user={user} tty={tty} from={host or '?'}\n"
+            f"Learn window ended - new login not in allowlist."
+        )
+        rows: list[list[dict]] = []
+        if tty:
+            tkick = self.tokens.issue("kick_tty", {"tty": tty, "user": user, "host": host})
+            rows.append([_btn(f"Kick {tty}", f"ask|{tkick}")])
+        if host:
+            tban = self.tokens.issue("ban", {"ip": host, "ttl": 3600})
+            rows.append([_btn("Ban IP 1h", f"ask|{tban}")])
+        tign = self.tokens.issue("ignore", {"ip": host or ""})
+        rows.append([_btn("Ignore alert", f"do|{tign}")])
+        self.client.send_message(text, reply_markup=_markup(rows))
 
     def send_perimeter_alert(self, alert: Alert, recon=None) -> None:
         if not self.client.configured:
@@ -262,7 +406,6 @@ class TelegramBot:
         self.client.send_message(text, reply_markup=self.alert_keyboard(alert))
 
     def send_agent_alert(self, alert) -> None:
-        """Agent / integrity sensor alert with Kill PID + Ignore."""
         if not self.client.configured:
             return
         self._alert_count_day += 1
@@ -274,7 +417,6 @@ class TelegramBot:
         ppid = getattr(alert, "ppid", None)
         comm = getattr(alert, "comm", None)
         path = getattr(alert, "path", None)
-        # Re-resolve live /proc identity before offering Kill
         live_comm = read_proc_comm(int(pid)) if pid and int(pid) > 1 else None
         lines = [
             self.prefix(f"AGENT [{sev}] {rid}"),
@@ -292,18 +434,37 @@ class TelegramBot:
         if path:
             meta.append(f"path={path}")
         if meta:
-            lines.append(" · ".join(meta))
+            lines.append(" | ".join(meta))
         if self.dry_run:
             lines.append("(dry_run: Kill will not SIGKILL)")
         rows: list[list[dict]] = []
+        use_comm = live_comm or (str(comm) if comm else None)
         if pid and int(pid) > 1 and live_comm is not None:
-            tkill = self.tokens.issue("kill", {"pid": int(pid), "expect_comm": live_comm})
+            payload = {
+                "pid": int(pid),
+                "expect_comm": live_comm,
+                "comm": use_comm or live_comm,
+                "path": str(path or ""),
+                "rule": rid,
+            }
+            tkill = self.tokens.issue("kill", payload)
             label = f"Kill {live_comm}({pid})"
             rows.append([_btn(label[:40], f"ask|{tkill}")])
         elif pid and int(pid) > 1:
-            lines.append("(pid gone — Kill unavailable)")
-        tign = self.tokens.issue("ignore", {"pid": int(pid) if pid else 0, "rule": rid})
-        rows.append([_btn("Ignore", f"do|{tign}")])
+            lines.append("(pid gone - Kill unavailable)")
+        fb = self._proc_feedback_row(
+            pid=int(pid) if pid else None,
+            comm=use_comm,
+            path=str(path) if path else None,
+            rule_id=rid,
+        )
+        if fb:
+            rows.append(fb)
+        else:
+            tign = self.tokens.issue(
+                "ignore", {"pid": int(pid) if pid else 0, "rule": rid}
+            )
+            rows.append([_btn("Ignore alert", f"do|{tign}")])
         self.client.send_message("\n".join(lines), reply_markup=_markup(rows))
 
     def send_host_alert(
@@ -339,14 +500,29 @@ class TelegramBot:
         rows = []
         for p in top_procs[:3]:
             pid = int(p.get("pid") or 0)
+            name = str(p.get("name") or "")
             if pid > 1:
-                expect = read_proc_comm(pid) or str(p.get("name") or "")
-                payload: dict[str, Any] = {"pid": pid}
+                expect = read_proc_comm(pid) or name
+                payload: dict[str, Any] = {
+                    "pid": pid,
+                    "comm": expect,
+                    "name": name,
+                    "rule": "host_anomaly",
+                }
                 if expect:
                     payload["expect_comm"] = expect
                 tok = self.tokens.issue("kill", payload)
-                rows.append([_btn(f"Kill {p.get('name')}({pid})", f"ask|{tok}")])
-        rows.append([_btn("Ignore", f"do|{self.tokens.issue('ignore', {})}")])
+                rows.append([_btn(f"Kill {name}({pid})", f"ask|{tok}")])
+                fb = self._proc_feedback_row(
+                    pid=pid,
+                    comm=expect or name,
+                    name=name,
+                    rule_id="host_anomaly",
+                )
+                if fb:
+                    rows.append(fb)
+        if not any("Ignore" in (b.get("text") or "") for r in rows for b in r):
+            rows.append([_btn("Ignore alert", f"do|{self.tokens.issue('ignore', {})}")])
         markup = _markup(rows) if rows else None
         if png_bytes:
             self.client.send_photo_bytes(png_bytes, caption=text[:900], reply_markup=markup)
@@ -631,23 +807,17 @@ class TelegramBot:
         data = cq.get("data") or ""
         cq_id = cq.get("id", "")
         if not self.session_unlocked():
-            if data.startswith("ask|") or data.startswith("ask2|") or data.startswith("yes|"):
+            if data.startswith("ask|") or data.startswith("ask2|") or data.startswith("yes|") or data.startswith("do|"):
                 self.client.answer_callback(cq_id, "locked")
                 self.client.send_message(
-                    self.prefix("LOCKED — /unlock <console code> before actions"),
+                    self.prefix("LOCKED - /unlock <console code> before actions"),
                     chat_id=chat_id,
                 )
                 return
-            if data.startswith("do|"):
-                tok = data.split("|", 1)[1]
-                peeked = self.tokens.peek(tok)
-                if peeked is None or peeked[0] != "ignore":
-                    self.client.answer_callback(cq_id, "locked")
-                    return
             if data.startswith("menu|"):
                 self.client.answer_callback(cq_id, "locked")
                 self.client.send_message(
-                    self.prefix("LOCKED — /unlock <console code> first"),
+                    self.prefix("LOCKED - /unlock <console code> first"),
                     chat_id=chat_id,
                 )
                 return
@@ -697,6 +867,11 @@ class TelegramBot:
             result = self._run_action(action, payload)
             self.client.answer_callback(cq_id, "ok")
             self.client.send_message(self.prefix(result), chat_id=chat_id)
+            if action == "kill" and "skip" not in result.lower() and "refusing" not in result.lower():
+                try:
+                    self._offer_anomaly_after(chat_id, payload)
+                except Exception:
+                    pass
             return
         if data.startswith("unban|"):
             token = data.split("|", 1)[1]
@@ -726,6 +901,46 @@ class TelegramBot:
             pid = int(payload.get("pid") or 0)
             expect = payload.get("expect_comm")
             return kill_pid(pid, dry_run=self.dry_run, expect_comm=expect)
+        if action in ("ignore_proc", "baseline_proc", "anomaly_proc"):
+            if self.feedback is None:
+                return "feedback store not configured"
+            kind = {
+                "ignore_proc": "ignore",
+                "baseline_proc": "baseline",
+                "anomaly_proc": "anomaly",
+            }[action]
+            entry = self.feedback.remember(
+                kind,  # type: ignore[arg-type]
+                comm=str(payload.get("comm") or "") or None,
+                path=str(payload.get("path") or "") or None,
+                name=str(payload.get("name") or "") or None,
+                rule_id=str(payload.get("rule") or ""),
+                note=kind,
+            )
+            if entry is None:
+                return "no process identity to remember"
+            extra = ""
+            if self.learner is not None and kind in ("baseline", "anomaly"):
+                try:
+                    info = self.learner.record(
+                        "baseline" if kind == "baseline" else "anomaly",
+                        window=self.last_host_window,
+                        columns=self.last_host_columns,
+                        score=self.last_host_score,
+                        process_key=entry.key,
+                        note=kind,
+                    )
+                    extra = (
+                        f" sample+bias={info.get('threshold_bias')} "
+                        f"counts={info.get('counts')}"
+                    )
+                except Exception as exc:
+                    extra = f" learn_err={exc}"
+            return f"remembered {entry.kind}: {entry.key}{extra}"
+        if action == "kick_tty":
+            from sysspectogram.session_watch import kick_tty
+
+            return kick_tty(str(payload.get("tty") or ""), dry_run=self.dry_run)
         if action == "allow":
             ip = str(payload.get("ip"))
             if self.watcher:
@@ -751,6 +966,21 @@ class TelegramBot:
             save_report(report, self.recon_dir / "recon.jsonl")
             return report.summary_text(self.host_id)
         if action == "ignore":
+            ip = str(payload.get("ip") or "")
+            if ip and self.watcher:
+                self.watcher.state.mute(ip, 3600.0)
+                self.watcher.persist()
+                return f"ignored alert / muted {ip} 1h"
+            if self.feedback is not None:
+                entry = self.feedback.remember(
+                    "ignore",
+                    comm=str(payload.get("comm") or "") or None,
+                    path=str(payload.get("path") or "") or None,
+                    name=str(payload.get("name") or "") or None,
+                    rule_id=str(payload.get("rule") or ""),
+                )
+                if entry is not None:
+                    return f"ignored process {entry.key}"
             return "ignored"
         if action == "report":
             self._send_report(self.client.chat_id)

@@ -1,3 +1,4 @@
+use crate::auth;
 use crate::metrics::MetricsSample;
 use crate::types::AgentAlert;
 use std::fs;
@@ -5,28 +6,41 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 
-/// Agent is the **client**: send_to(path) where guard has bound a Unix datagram socket.
+/// Agent is the client: send_to(path) where guard has bound a Unix datagram socket.
 pub struct Emitter {
     sock: UnixDatagram,
     sock_path: PathBuf,
     jsonl: Option<PathBuf>,
+    hmac_secret: Option<String>,
 }
 
 impl Emitter {
-    pub fn new(socket: &Path, jsonl: Option<&Path>) -> io::Result<Self> {
+    pub fn new(socket: &Path, jsonl: Option<&Path>, hmac_secret: Option<String>) -> io::Result<Self> {
         Ok(Self {
             sock: UnixDatagram::unbound()?,
             sock_path: socket.to_path_buf(),
             jsonl: jsonl.map(|p| p.to_path_buf()),
+            hmac_secret,
         })
     }
 
     pub fn emit_alert(&self, alert: &AgentAlert) -> io::Result<()> {
-        self.emit_line(&serde_json::to_string(alert).map_err(io::Error::other)?, true)
+        let mut alert = alert.clone();
+        if let Some(secret) = &self.hmac_secret {
+            let canon = auth::canonical(
+                &alert.rule_id,
+                &alert.severity,
+                alert.ts,
+                alert.pid,
+                alert.path.as_deref().unwrap_or(""),
+                &alert.message,
+            );
+            alert.hmac = Some(auth::sign_hex(secret, &canon));
+        }
+        self.emit_line(&serde_json::to_string(&alert).map_err(io::Error::other)?, true)
     }
 
     pub fn emit_metrics(&self, sample: &MetricsSample) -> io::Result<()> {
-        // metrics are high-frequency — socket only, no jsonl spam
         self.emit_line(
             &serde_json::to_string(sample).map_err(io::Error::other)?,
             false,

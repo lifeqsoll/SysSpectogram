@@ -1,6 +1,6 @@
 # SysSpectogram agent (Rust)
 
-See [docs/AGENT.md](../docs/AGENT.md), [docs/EBPF_SETUP.md](../docs/EBPF_SETUP.md), [docs/ROADMAP_V3.md](../docs/ROADMAP_V3.md).
+See [docs/AGENT.md](../docs/AGENT.md), [docs/ROOT_WATCH.md](../docs/ROOT_WATCH.md), [docs/AGENT_PROTECT.md](../docs/AGENT_PROTECT.md), [docs/ROADMAP_QUALITY.md](../docs/ROADMAP_QUALITY.md).
 
 ```bash
 cargo build --release

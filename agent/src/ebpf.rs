@@ -14,7 +14,7 @@ mod imp {
     use aya::util::online_cpus;
     use aya::Ebpf;
     use bytes::BytesMut;
-    use sysspectogram_common::{ProbeEvent, KIND_EXECVE, KIND_MODULE, KIND_OPENAT};
+    use sysspectogram_common::{ProbeEvent, KIND_EXECVE, KIND_KILL, KIND_MODULE, KIND_OPENAT};
 
     use crate::types::AgentAlert;
 
@@ -133,6 +133,7 @@ mod imp {
                 "syscalls",
                 "sys_enter_delete_module",
             ),
+            ("sysspectogram_kill", "syscalls", "sys_enter_kill"),
         ] {
             let prog: &mut TracePoint = bpf
                 .program_mut(name)
@@ -140,8 +141,14 @@ mod imp {
                 .try_into()
                 .map_err(|e| format!("{e}"))?;
             prog.load().map_err(|e| format!("{name} load: {e}"))?;
-            prog.attach(cat, event)
-                .map_err(|e| format!("{name} attach: {e}"))?;
+            // kill attach is best-effort (some kernels rename events)
+            if let Err(e) = prog.attach(cat, event) {
+                if name.contains("kill") {
+                    eprintln!("[sysspectogram-agent] kill probe skip: {e}");
+                } else {
+                    return Err(format!("{name} attach: {e}"));
+                }
+            }
         }
 
         let mut perf_map: PerfEventArray<_> = bpf
@@ -222,6 +229,30 @@ mod imp {
     }
 
     fn event_to_alert(ev: &ProbeEvent, host: &str) -> Option<AgentAlert> {
+        if ev.kind == KIND_KILL {
+            let tpid = u32::from_ne_bytes(ev.path[0..4].try_into().ok()?);
+            let sig = u32::from_ne_bytes(ev.path[4..8].try_into().ok()?);
+            let self_pid = std::process::id();
+            // Only care when someone signals *us* (or common twin range — exact twin via path later)
+            if tpid != self_pid && sig != 9 && sig != 15 {
+                return None;
+            }
+            if tpid != self_pid {
+                return None;
+            }
+            // SIGTERM handled in userspace as CLEAN_SHUTDOWN — skip noise here for 15
+            if sig == 15 {
+                return None;
+            }
+            let mut a = AgentAlert::new(
+                "agent_kirk_agent_kill_attempt",
+                "critical",
+                format!("kill/signal toward agent pid={tpid} sig={sig} from uid={}", ev.uid),
+                host,
+            );
+            a.pid = Some(ev.pid);
+            return Some(a);
+        }
         let end = ev
             .path
             .iter()
@@ -232,7 +263,9 @@ mod imp {
             KIND_OPENAT if !path_interesting_openat(&path) => return None,
             KIND_EXECVE if !path_interesting_execve(&path) => return None,
             KIND_MODULE => {}
-            _ if ev.kind != KIND_OPENAT && ev.kind != KIND_EXECVE && ev.kind != KIND_MODULE => {}
+            _ if ev.kind != KIND_OPENAT && ev.kind != KIND_EXECVE && ev.kind != KIND_MODULE => {
+                return None;
+            }
             _ => {}
         }
         let (rule, sev, label) = match ev.kind {
