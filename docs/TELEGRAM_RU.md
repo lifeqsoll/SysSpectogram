@@ -34,6 +34,15 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 `--dry-run`: ban/kill/shield только текстом, без nft/SIGKILL.
 
+## Скриншоты
+
+Галерея dry-run (без unlock-кодов и home-путей): [assets/tg/](assets/tg/).
+
+| | |
+| --- | --- |
+| ![help](assets/tg/01-help.jpg) | ![menu](assets/tg/02-menu.jpg) |
+| ![root](assets/tg/08-alert-unexpected-root.jpg) | ![ssh](assets/tg/09-alert-ssh-session.jpg) |
+
 ## Slash-команды
 
 ### Статус
