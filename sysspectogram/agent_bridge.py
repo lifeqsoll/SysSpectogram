@@ -70,7 +70,17 @@ class MetricsSample:
         )
 
 
+def _peer_cred_from_ancillary(ancdata: list) -> tuple[int | None, int | None]:
+    """Parse SCM_CREDENTIALS from recvmsg (required for AF_UNIX SOCK_DGRAM)."""
+    for _level, typ, data in ancdata or []:
+        if typ == getattr(socket, "SCM_CREDENTIALS", None) and data and len(data) >= 12:
+            pid, uid, _gid = struct.unpack("3i", data[:12])
+            return int(pid), int(uid)
+    return None, None
+
+
 def _peer_cred(sock: socket.socket) -> tuple[int | None, int | None]:
+    """Legacy helper for connected sockets; prefer SCM_CREDENTIALS for datagram."""
     try:
         cred = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
         pid, uid, _gid = struct.unpack("3i", cred)
@@ -128,6 +138,11 @@ class AgentSocketListener:
             self.path.unlink(missing_ok=True)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            # Needed so recvmsg yields SCM_CREDENTIALS for datagram peers.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+        except OSError:
+            pass
         sock.bind(str(self.path))
         try:
             os.chmod(self.path, 0o600)
@@ -166,7 +181,7 @@ class AgentSocketListener:
         assert self._sock is not None
         while not self._stop.is_set():
             try:
-                data, _ = self._sock.recvfrom(65535)
+                data, anc, _flags, _addr = self._sock.recvmsg(65535, 1024)
             except socket.timeout:
                 continue
             except OSError:
@@ -174,7 +189,10 @@ class AgentSocketListener:
                     break
                 continue
             if self.require_same_uid or self.allowed_pids is not None:
-                pid, uid = _peer_cred(self._sock)
+                pid, uid = _peer_cred_from_ancillary(anc)
+                if pid is None and uid is None:
+                    # fallback for odd kernels / connected sockets
+                    pid, uid = _peer_cred(self._sock)
                 if self.require_same_uid:
                     if uid is None or uid < 0 or uid != self._self_uid:
                         continue

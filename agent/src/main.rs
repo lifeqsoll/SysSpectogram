@@ -143,9 +143,13 @@ struct Args {
     #[arg(long, default_value = "/etc/sysspectogram/agent-notify.env")]
     notify_env: PathBuf,
 
-    /// Detect unexpected uid=0 via same /proc walk (lite-friendly).
-    #[arg(long, default_value_t = true)]
+    /// Detect unexpected uid=0 via same /proc walk (lite-friendly). Default on.
+    #[arg(long = "root-watch", default_value_t = true, action = clap::ArgAction::SetTrue)]
     root_watch: bool,
+
+    /// Disable root_watch (overrides --root-watch / default).
+    #[arg(long = "no-root-watch", action = clap::ArgAction::SetTrue)]
+    no_root_watch: bool,
 
     /// Learn existing root PIDs before alerting (seconds).
     #[arg(long, default_value_t = 300)]
@@ -154,6 +158,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+    let root_watch = args.root_watch && !args.no_root_watch;
     let host = args.host_id.unwrap_or_else(hostname_fallback);
 
     if args.role == "watchdog" {
@@ -228,7 +233,10 @@ fn main() {
         eprintln!("[sysspectogram-agent] unit: {w}");
     }
 
-    let mut ebpf_rt = None;
+    #[cfg(feature = "ebpf")]
+    let mut ebpf_rt: Option<crate::ebpf::EbpfHandle> = None;
+    #[cfg(not(feature = "ebpf"))]
+    let _ebpf_rt: Option<()> = None;
     let mut effective_mode = args.mode.as_str();
     if args.mode == "ebpf" {
         let st = probe_toolchain();
@@ -315,7 +323,7 @@ fn main() {
                 respawn_args.push("--jsonl".into());
                 respawn_args.push(j.display().to_string());
             }
-            if args.root_watch {
+            if root_watch {
                 respawn_args.push("--root-watch".into());
                 respawn_args.push("--root-learn-sec".into());
                 respawn_args.push(args.root_learn_sec.to_string());
@@ -333,8 +341,8 @@ fn main() {
         }
     }
 
-    let mut watcher = ProcWatcher::with_root(args.root_watch, args.root_learn_sec);
-    if args.root_watch {
+    let mut watcher = ProcWatcher::with_root(root_watch, args.root_learn_sec);
+    if root_watch {
         eprintln!(
             "[sysspectogram-agent] root_watch learn={}s",
             args.root_learn_sec
@@ -419,6 +427,7 @@ fn main() {
                 }
             }
         }
+        #[cfg(feature = "ebpf")]
         if let Some(ref ebpf) = ebpf_rt {
             while let Some(alert) = ebpf.try_recv() {
                 if let Err(e) = emitter.emit_alert(&alert) {

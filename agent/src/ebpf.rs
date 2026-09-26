@@ -185,11 +185,17 @@ mod imp {
                     page.resize(4096, 0);
                     match buf.read_events(std::slice::from_mut(page)) {
                         Ok(ev) => {
+                            // Desktop (Chromium/Cursor) floods openat — log sparsely.
                             if ev.lost > 0 {
-                                eprintln!(
-                                    "[sysspectogram-agent] eBPF lost {} events on cpu buffer",
-                                    ev.lost
-                                );
+                                static LOST_LOG: std::sync::atomic::AtomicU64 =
+                                    std::sync::atomic::AtomicU64::new(0);
+                                let n = LOST_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if n < 5 || n % 64 == 0 {
+                                    eprintln!(
+                                        "[sysspectogram-agent] eBPF lost {} events on cpu buffer (log #{})",
+                                        ev.lost, n
+                                    );
+                                }
                             }
                             parse_and_send(page, ev.read, &host, &tx);
                         }
@@ -376,7 +382,7 @@ mod imp {
 }
 
 #[cfg(feature = "ebpf")]
-pub use imp::{probe_toolchain, start_runtime};
+pub use imp::{probe_toolchain, start_runtime, EbpfHandle};
 
 #[cfg(not(feature = "ebpf"))]
 pub struct EbpfStatus {
