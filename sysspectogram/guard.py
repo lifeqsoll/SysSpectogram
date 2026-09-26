@@ -1173,7 +1173,7 @@ def run_guard(
         )
         agent_exe_seal: dict[str, str] = {}
 
-def _on_exe_mismatch(pid: int, exe: str) -> None:
+        def _on_exe_mismatch(pid: int, exe: str) -> None:
             console.print(f"[red]agent exe mismatch[/] pid={pid} exe={exe}")
             bot = bot_holder["bot"]
             if bot is not None:
@@ -1332,29 +1332,52 @@ def _on_exe_mismatch(pid: int, exe: str) -> None:
                 else:
                     cmd.append("--no-root-watch")
                 try:
+                    agent_log = _resolve("state/agent.stderr.log")
+                    agent_log.parent.mkdir(parents=True, exist_ok=True)
+                    log_fh = open(agent_log, "ab", buffering=0)
                     agent_proc = subprocess.Popen(
                         cmd,
                         stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stderr=log_fh,
                     )
-                    console.print(f"[green]agent auto_start[/] pid={agent_proc.pid}")
                     try:
-                        from sysspectogram.trusted_pids import collect_trusted_pids
-
-                        pids = collect_trusted_pids(
-                            agent_pidfile=_resolve("state/agent.pid"),
-                            watchdog_pidfile=_resolve("state/watchdog.pid"),
-                            child_of=int(agent_proc.pid),
-                            allowed_exe_paths=set(agent_listener.allowed_exe_paths)
-                            or {str(Path(bin_path).resolve())},
-                            expected_sha256=agent_exe_seal.get("sha256"),
-                        )
-                        agent_listener.set_allowed_pids(pids)
+                        log_fh.close()
                     except Exception:
+                        pass
+                    time.sleep(0.4)
+                    rc = agent_proc.poll()
+                    if rc is not None:
+                        tail = ""
                         try:
-                            agent_listener.set_allowed_pids({int(agent_proc.pid)})
+                            tail = agent_log.read_bytes()[-800:].decode("utf-8", "replace")
                         except Exception:
                             pass
+                        console.print(
+                            f"[red]agent auto_start[/] exited rc={rc} — see {agent_log}\n{tail}"
+                        )
+                        agent_proc = None
+                    else:
+                        console.print(
+                            f"[green]agent auto_start[/] pid={agent_proc.pid} log={agent_log}"
+                        )
+                        try:
+                            from sysspectogram.trusted_pids import collect_trusted_pids
+
+                            pids = collect_trusted_pids(
+                                agent_pidfile=_resolve("state/agent.pid"),
+                                watchdog_pidfile=_resolve("state/watchdog.pid"),
+                                child_of=int(agent_proc.pid),
+                                allowed_exe_paths=set(agent_listener.allowed_exe_paths)
+                                or {str(Path(bin_path).resolve())},
+                                expected_sha256=agent_exe_seal.get("sha256"),
+                            )
+                            # Always assign (empty set = drop forgers; never keep stale PIDs).
+                            agent_listener.set_allowed_pids(pids if pids else {int(agent_proc.pid)})
+                        except Exception:
+                            try:
+                                agent_listener.set_allowed_pids({int(agent_proc.pid)})
+                            except Exception:
+                                pass
                 except OSError as exc:
                     console.print(f"[yellow]agent auto_start[/] {exc}")
             else:
@@ -1402,8 +1425,16 @@ def _on_exe_mismatch(pid: int, exe: str) -> None:
                             expected_sha256=agent_exe_seal.get("sha256")
                             or agent_listener.expected_exe_sha256,
                         )
+                        # Always refresh — empty means "no trusted sender" (fixes stale PID
+                        # after rebuild/seal mismatch that otherwise blocked live metrics).
                         if pids:
                             agent_listener.set_allowed_pids(pids)
+                        elif agent_listener.allowed_pids:
+                            console.print(
+                                "[yellow]agent allowlist[/] empty (dead pidfile or seal "
+                                "mismatch) — clearing stale PIDs; reseal after rebuild"
+                            )
+                            agent_listener.set_allowed_pids(set())
                     except Exception:
                         pass
                 stop.wait(5.0)
