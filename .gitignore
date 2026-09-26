@@ -41,10 +41,9 @@ artifacts/*
 *.pt
 *.joblib
 *.onnx
-*.png
-!docs/assets/*.png
 *.npy
 *.npz
+# docs/assets/** (png/jpg screenshots) are tracked on purpose
 
 # --- Editor / OS ---
 .DS_Store

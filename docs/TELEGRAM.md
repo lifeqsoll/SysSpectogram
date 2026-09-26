@@ -38,6 +38,18 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 Alert buttons (after unlock): **Kill**, feedback (**Ignore** / **As normal** / **As anomaly**), root Kill, session **Kick tty** / **Ban IP**. See [FEEDBACK.md](FEEDBACK.md), [ROOT_WATCH.md](ROOT_WATCH.md), [SESSIONS.md](SESSIONS.md).
 
+## Screenshots
+
+Dry-run gallery (safe for public docs):
+
+| | |
+| --- | --- |
+| ![help](assets/tg/01-help.jpg) | ![menu](assets/tg/02-menu.jpg) |
+| ![rootkit](assets/tg/03-rootkit-kirk.jpg) | ![host](assets/tg/07-host-anomaly-buttons.jpg) |
+| ![root](assets/tg/08-alert-unexpected-root.jpg) | ![ssh](assets/tg/09-alert-ssh-session.jpg) |
+
+More: [assets/tg/](assets/tg/).
+
 ## Slash commands
 
 ### Status & help
