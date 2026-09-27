@@ -1051,14 +1051,17 @@ class TelegramBot:
                 self.watcher.persist()
                 return f"ignored alert / muted {ip} 1h"
             if self.feedback is not None:
+                rid = str(payload.get("rule") or "")
                 entry = self.feedback.remember(
                     "ignore",
                     comm=str(payload.get("comm") or "") or None,
                     path=str(payload.get("path") or "") or None,
                     name=str(payload.get("name") or "") or None,
-                    rule_id=str(payload.get("rule") or ""),
+                    rule_id=rid,
                 )
                 if entry is not None:
+                    if entry.match == "rule_id":
+                        return f"muted rule {entry.pattern}"
                     return f"ignored process {entry.key}"
             return "ignored"
         if action == "report":

@@ -37,14 +37,25 @@ pub fn scan_proc_modules() -> HashSet<String> {
 }
 
 /// sysfs module list — often harder for simple LKM hide tricks that only patch /proc.
+/// Only count *loadable* modules (have `initstate`); builtins litter /sys/module and are not in /proc/modules.
 pub fn scan_sysfs_modules() -> HashSet<String> {
     let Ok(rd) = fs::read_dir("/sys/module") else {
         return HashSet::new();
     };
     rd.filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.is_empty() && n != "." && n != "..")
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.is_empty() || name == "." || name == ".." {
+                return None;
+            }
+            // Built-in / virtual entries lack initstate — comparing them to /proc is pure FP.
+            let initstate = e.path().join("initstate");
+            if !initstate.is_file() {
+                return None;
+            }
+            Some(name)
+        })
         .collect()
 }
 
@@ -170,5 +181,13 @@ mod tests {
         let d = diff_sets(&kernel, &proc);
         assert_eq!(d.kernel_only, vec!["9".to_string()]);
         assert!(is_hide_signal(&d));
+    }
+
+    #[test]
+    fn empty_diff_not_hide() {
+        let a: HashSet<_> = ["ext4", "xfs"].into_iter().map(str::to_string).collect();
+        let b = a.clone();
+        let d = diff_sets(&a, &b);
+        assert!(!is_hide_signal(&d));
     }
 }

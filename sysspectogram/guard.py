@@ -984,7 +984,10 @@ def run_guard(
             if getattr(alert, "hmac_ok", None) is True:
                 last_agent_seen["ts"] = time.time()
 
-            if feedback.is_ignored(comm=getattr(alert, "comm", None), path=getattr(alert, "path", None)):
+            if feedback.is_ignored(
+                comm=getattr(alert, "comm", None),
+                path=getattr(alert, "path", None),
+            ) or feedback.is_rule_muted(str(alert.rule_id)):
                 return
 
             extras = dict(getattr(alert, "extras", None) or {})

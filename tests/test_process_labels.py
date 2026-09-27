@@ -70,3 +70,16 @@ def test_seed_ssh(tmp_path: Path):
     n = seed_role_labels(store, "ssh")
     assert n > 3
     assert store.is_baseline(comm="sshd")
+
+
+def test_mute_rule_id(tmp_path: Path):
+    store = ProcessLabelStore(tmp_path / "labels.json")
+    # No process identity — remember still mutes by rule_id
+    entry = store.remember("ignore", rule_id="agent_kirk_module_hide")
+    assert entry is not None
+    assert entry.match == "rule_id"
+    assert store.is_rule_muted("agent_kirk_module_hide")
+    assert not store.is_rule_muted("agent_kirk_pid_hide")
+    # Persists
+    store2 = ProcessLabelStore(tmp_path / "labels.json")
+    assert store2.is_rule_muted("agent_kirk_module_hide")
