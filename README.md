@@ -4,32 +4,33 @@
 
 Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
 
-**Scope (v0.6):** Linux VPS defense — **notorch / ONNX** runtime, train bridge, fuse risk, profile packs, Rust agent (userspace + eBPF), **Kirk** trust labels, **HMAC / PID allowlist / exe seal**, **agent root watch**, Role Lab, operator feedback. Live **VMI** deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Scope (v0.7):** Linux VPS defense — **configure** Day-0 TUI, **ProcessLabelRules** (As normal/anomaly on VPS), optional IF refit, flow netview, response audit, eBPF setuid assist, **notorch / ONNX**, Rust agent, Kirk trust. Live **VMI** deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
-**Related docs:** [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Role lab](docs/ROLE_LAB.md) · [Day-0](docs/DAY0_VPS.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.6](docs/RELEASE_v0.6.0.md) · [Simulations](simulations/README.md)
+**Related docs:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Role lab](docs/ROLE_LAB.md) · [Day-0](docs/DAY0_VPS.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.7](docs/RELEASE_v0.7.0.md) · [Simulations](simulations/README.md)
 
-### What's new in v0.6
+### What's new in v0.7
 
 | Piece | Status |
 | --- | --- |
-| Agent HMAC + PID allowlist + exe seal | yes |
-| Phoenix / CLEAN_SHUTDOWN / Dead-man | yes |
-| Unexpected root via Rust ProcWatcher | yes — [ROOT_WATCH.md](docs/ROOT_WATCH.md) |
-| Unexpected SSH Kick / Ban | yes |
-| Role Lab train/pack | yes |
-| TG feedback → learner | yes |
-| Pack HMAC `.sig` | yes |
-| VMI out-of-band | **v1.0** — [docs/VMI.md](docs/VMI.md) |
+| `sysspectogram configure` Day-0 TUI + host probe | yes — [CONFIGURE.md](docs/CONFIGURE.md) |
+| ProcessLabelRules (As normal / anomaly / + similar) | yes — [FEEDBACK.md](docs/FEEDBACK.md) |
+| Role FP label seeds + richer `/digest` | yes |
+| Flow netview (`ss`) | yes |
+| Response audit JSONL + web kirk badge | yes |
+| Optional IF-only refit on VPS (CNN frozen) | yes |
+| eBPF setuid→0 assist | yes (ProcWatcher fallback) |
+| Cold-install checklist | yes — [COLD_INSTALL.md](docs/COLD_INSTALL.md) |
 
 ```bash
 source .venv/bin/activate
+# Day-0: terminal configure UI (Rich menu in THIS terminal — not a browser)
+python -m sysspectogram configure
+# or non-interactive:
+# python -m sysspectogram configure --accept-recommended --role ssh
+
 cd agent && cargo build --release && cd ..
 python -m sysspectogram kirk trust
-# seal kallsyms once (root helps readability)
-sudo ./agent/target/release/sysspectogram-agent --kirk-seal
-# small VPS
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
-# eBPF agent (root): see docs/EBPF_SETUP.md / docs/KIRK.md
 ```
 
 ---
@@ -123,6 +124,11 @@ pip install -e ".[dev]"
 cp .env.example .env
 
 python -m sysspectogram --help
+
+# Day-0 setup UI (runs in the terminal — answers prompts with keyboard)
+python -m sysspectogram configure
+# headless / CI-style defaults from host probe:
+# python -m sysspectogram configure --accept-recommended --role ssh
 ```
 
 Editable install exposes the `sysspectogram` console script and `python -m sysspectogram`.
@@ -279,6 +285,28 @@ python -m sysspectogram [--config PATH] [--version] <command> ...
 | `--config` | no | `configs/default.yaml` | YAML with collector/window/train/monitor settings |
 | `--version` | no | — | Print package version and exit |
 | `-h` / `--help` | no | — | Help for the program or a subcommand |
+
+---
+
+### `configure` (Day-0 killer feature)
+
+Interactive **terminal** setup (Rich tables + prompts). Not a web page and not a separate GUI window — open a terminal in the repo and run:
+
+```bash
+source .venv/bin/activate
+python -m sysspectogram configure
+```
+
+| Flag | Description |
+| --- | --- |
+| `--accept-recommended` | Apply host_probe recommendations without menu |
+| `--role ssh\|nginx\|…` | Role for FP label seed |
+| `--prefix PATH` | Install root (default `.`) |
+| `--no-seed-fp` | Skip seeding process labels |
+
+See [docs/CONFIGURE.md](docs/CONFIGURE.md) and [docs/COLD_INSTALL.md](docs/COLD_INSTALL.md).
+
+Related: `labels list|seed|del`, `feedback retrain-if`, `feedback status`.
 
 ---
 
@@ -584,4 +612,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v0.6** ships agent HMAC + PID allowlist + exe seal, Rust root watch, Role Lab, TG feedback, pack `.sig`. See [docs/AGENT.md](docs/AGENT.md), [docs/ROOT_WATCH.md](docs/ROOT_WATCH.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [docs/RELEASE_v0.6.0.md](docs/RELEASE_v0.6.0.md). Next: v0.7 FP/flow/UX — roadmap.
+**v0.7** ships `configure` Day-0 TUI, ProcessLabelRules, flow netview, response audit, optional IF refit, eBPF setuid assist. See [docs/CONFIGURE.md](docs/CONFIGURE.md), [docs/FEEDBACK.md](docs/FEEDBACK.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [docs/RELEASE_v0.7.0.md](docs/RELEASE_v0.7.0.md). Next: v0.8 supply chain.

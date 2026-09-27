@@ -1,21 +1,10 @@
-# Resource budget: lite = small VPS (~1-2 vCPU); full = large VDS (4+ vCPU).
-# Rates (poll/interval/cores) come from the preset; override only if needed.
-# Env: SYSSPECTOGRAM_LOAD_PROFILE=full
-load_profile: lite
-
-# Infer backend on this host:
-#   notorch  - perimeter + agent only (no CNN; default for 1GB VPS)
-#   onnx     - cnn.onnx via onnxruntime (no PyTorch)
-#   torch_ml - cnn.pt via PyTorch (builder / fat VDS)
-# Env: SYSSPECTOGRAM_RUNTIME=onnx
-runtime: notorch
-
-# Semantic defaults (not rate-budget). Rate keys live in load_profile presets.
+load_profile: full
+runtime:
+  prefer: torch
 collector: {}
 window:
   size: 60
   stride: 5
-
 train:
   epochs: 25
   batch_size: 32
@@ -25,19 +14,14 @@ train:
   cnn_weight: 0.55
   iforest_weight: 0.45
   recall_target: 0.85
-
 monitor: {}
-
 ensemble:
   default_threshold: 0.5
-  # host_weight overridden to 0.0 when runtime=notorch (see config.py)
   host_weight: 0.6
   agent_weight: 0.4
   risk_threshold: 0.7
-
 host:
   id: null
-
 perimeter:
   fail_threshold: 8
   fail_window_sec: 60
@@ -46,33 +30,29 @@ perimeter:
   state_path: state/perimeter.json
   jsonl_out: reports/perimeter.jsonl
   denylist_paths:
-    - configs/denylist.txt
+  - configs/denylist.txt
   alert_new_egress: false
   suspicious_domains:
-    - malware.test
-    - c2.example
+  - malware.test
+  - c2.example
   auto_ban:
     enabled: false
     rules:
-      - bruteforce_ssh
-      - egress_denylist_hit
-      - honeypot_hit
-      - lockdown_inbound
+    - bruteforce_ssh
+    - egress_denylist_hit
+    - honeypot_hit
+    - lockdown_inbound
     ttl_sec: 3600
-
-# Graduated response (A2): observe = alerts only; shield = auto SSH/honeypot ban; aggressive = +scan/egress
 response:
-  mode: observe          # observe | shield | aggressive
-  never_ban_cidrs: []    # e.g. ["1.2.3.4/32"] - never auto-ban these
+  mode: observe
+  never_ban_cidrs: []
   learn_hours: 24
-
 recon:
   auto: false
   nmap: false
   cooldown_sec: 900
   dir: reports/recon
   passive_dns_url: null
-
 telegram:
   bot_token: null
   chat_id: null
@@ -81,49 +61,46 @@ telegram:
   require_console_unlock: true
   unlock_ttl_sec: 7200
   health_ping_hours: 0
-
 web:
   enabled: false
   host: 127.0.0.1
   port: 8765
   public_url: null
-
 siem:
   webhook_url: null
   webhook_secret: null
-
 lab:
   mode: false
   nmap_targets:
-    - 127.0.0.1
-    - "::1"
-
+  - 127.0.0.1
+  - ::1
 honeypot:
   enabled: false
   port: 2222
-
 canary:
   enabled: false
-  ports: [3377, 4488, 5599]
-  bind: "0.0.0.0"
-
+  ports:
+  - 3377
+  - 4488
+  - 5599
+  bind: 0.0.0.0
 sessions:
   enabled: true
   learn_sec: 120
   poll_sec: 15
   allow_users: []
   allow_cidrs: []
-
-# Python /proc root poller. Prefer agent.root_watch (same walk, lite-safe).
-# Enable only when agent.enabled is false.
 root_watch:
   enabled: false
   learn_sec: 300
   poll_sec: 60
   allow_comms: []
-
-flow: {}
-
+flow:
+  enabled: true
+  backend: netview
+  window_sec: 30
+  syn_threshold: 120
+  unique_port_threshold: 60
 agent:
   enabled: true
   auto_start: true
@@ -136,19 +113,24 @@ agent:
   require_same_uid: true
   require_hmac: true
   hmac_secret: state/agent_hmac.secret
-  # Unexpected uid=0 via ProcWatcher (no extra /proc walk).
   root_watch: true
   root_learn_sec: 300
-
-# Kernel integrity (Kirk) - in-guest best-effort; trust auto-probed (IMA/SB/TPM)
+  mode: ebpf
+feedback:
+  if_refit: false
+  widen_rules: comm_prefix
+  model_dir: artifacts
 kirk:
   enabled: true
-  trust: auto          # auto | best-effort | measured (auto probes IMA+SB/TPM)
-  require_tpm: false   # if true, measured needs TPM device
-  auto_isolate: false  # CRITICAL kirk -> nft ss_kirk (needs allow_ssh_cidrs!)
+  trust: auto
+  require_tpm: false
+  auto_isolate: false
   isolate_ttl_sec: 3600
   allow_ssh_cidrs: []
   ima_watch: true
   ima_state_path: state/ima_offset.txt
   baseline_path: state/kirk-baseline.json
-  vmi: false           # reserved - live VMI binary deferred to v1.0 (docs/VMI.md)
+  vmi: false
+role: generic-linux
+model:
+  path: artifacts

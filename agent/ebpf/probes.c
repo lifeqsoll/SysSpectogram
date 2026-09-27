@@ -9,6 +9,7 @@
 #define KIND_OPENAT 2
 #define KIND_MODULE 3
 #define KIND_KILL 4
+#define KIND_SETUID 5
 
 struct probe_event {
     __u8 kind;
@@ -107,6 +108,56 @@ int sysspectogram_kill(void *ctx)
     *(__u32 *)&e.path[0] = (__u32)tpid;
     *(__u32 *)&e.path[4] = (__u32)sig;
     bpf_perf_event_output(ctx, &EVENTS, BPF_F_CURRENT_CPU, &e, sizeof(e));
+    return 0;
+}
+
+/* Privilege escalation assist — setuid/setreuid/setresuid toward uid 0.
+ * ProcWatcher root_watch remains the lite fallback when eBPF is off. */
+static __always_inline int emit_setuid_target(void *ctx, __u32 target_uid, const char *label)
+{
+    /* Only care when elevating to root (or already interesting setuid-root path). */
+    if (target_uid != 0)
+        return 0;
+    struct probe_event e = {};
+    fill_meta(&e, KIND_SETUID);
+    *(__u32 *)&e.path[0] = target_uid;
+    if (label)
+        bpf_probe_read_kernel_str(e.path + 4, sizeof(e.path) - 4, label);
+    bpf_perf_event_output(ctx, &EVENTS, BPF_F_CURRENT_CPU, &e, sizeof(e));
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_setuid")
+int sysspectogram_setuid(void *ctx)
+{
+    __s64 uid = 0;
+    bpf_probe_read_kernel(&uid, sizeof(uid), (char *)ctx + 16);
+    return emit_setuid_target(ctx, (__u32)uid, "setuid");
+}
+
+SEC("tracepoint/syscalls/sys_enter_setreuid")
+int sysspectogram_setreuid(void *ctx)
+{
+    __s64 ruid = 0;
+    __s64 euid = 0;
+    bpf_probe_read_kernel(&ruid, sizeof(ruid), (char *)ctx + 16);
+    bpf_probe_read_kernel(&euid, sizeof(euid), (char *)ctx + 24);
+    if ((__u32)ruid == 0 || (__u32)euid == 0)
+        return emit_setuid_target(ctx, 0, "setreuid");
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_setresuid")
+int sysspectogram_setresuid(void *ctx)
+{
+    __s64 ruid = 0;
+    __s64 euid = 0;
+    __s64 suid = 0;
+    bpf_probe_read_kernel(&ruid, sizeof(ruid), (char *)ctx + 16);
+    bpf_probe_read_kernel(&euid, sizeof(euid), (char *)ctx + 24);
+    bpf_probe_read_kernel(&suid, sizeof(suid), (char *)ctx + 32);
+    if ((__u32)ruid == 0 || (__u32)euid == 0 || (__u32)suid == 0)
+        return emit_setuid_target(ctx, 0, "setresuid");
     return 0;
 }
 

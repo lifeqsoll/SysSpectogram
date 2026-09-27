@@ -47,6 +47,24 @@ class LiveBus:
         self.quiet = False
         self.lockdown = False
         self.processes: list[dict[str, Any]] = []
+        self.kirk_trust: str = "best-effort"
+        self.kirk_isolated: bool = False
+        self.kirk_details: list[str] = []
+
+    def set_kirk(
+        self,
+        *,
+        trust: str | None = None,
+        isolated: bool | None = None,
+        details: list[str] | None = None,
+    ) -> None:
+        with self._lock:
+            if trust is not None:
+                self.kirk_trust = str(trust)
+            if isolated is not None:
+                self.kirk_isolated = bool(isolated)
+            if details is not None:
+                self.kirk_details = list(details)[:8]
 
     def set_host(self, host_id: str, threshold: float, model_loaded: bool) -> None:
         with self._lock:
@@ -123,6 +141,9 @@ class LiveBus:
                 "net": list(self.net),
                 "processes": list(self.processes),
                 "alerts": [a.to_dict() for a in self.alerts],
+                "kirk_trust": self.kirk_trust,
+                "kirk_isolated": self.kirk_isolated,
+                "kirk_details": list(self.kirk_details),
                 "ts": time.time(),
             }
 

@@ -8,6 +8,7 @@ pub const KIND_EXECVE: u8 = 1;
 pub const KIND_OPENAT: u8 = 2;
 pub const KIND_MODULE: u8 = 3;
 pub const KIND_KILL: u8 = 4;
+pub const KIND_SETUID: u8 = 5;
 
 /// Fixed-size event pushed through RingBuf / PerfEventArray.
 #[repr(C)]
