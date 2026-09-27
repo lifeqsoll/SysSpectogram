@@ -23,6 +23,7 @@ MatchKind = Literal[
     "path_glob",
     "path_contains",
     "cmdline_contains",
+    "rule_id",
 ]
 
 _LABEL_PRIORITY = {"anomaly": 3, "ignore": 2, "baseline": 1}
@@ -74,9 +75,18 @@ def _norm(s: str | None) -> str:
     return (s or "").strip().lower()
 
 
-def _rule_matches(rule: ProcessLabelRule, *, comm: str, path: str, cmdline: str) -> bool:
+def _rule_matches(
+    rule: ProcessLabelRule,
+    *,
+    comm: str,
+    path: str,
+    cmdline: str,
+    alert_rule_id: str = "",
+) -> bool:
     pat = rule.pattern
     kind = rule.match
+    if kind == "rule_id":
+        return bool(alert_rule_id) and alert_rule_id == pat
     if kind == "exact":
         key = process_key(comm=comm or None, path=path or None)
         return bool(key) and key == pat.lower()
@@ -141,6 +151,7 @@ class ProcessLabelStore:
                 "path_glob",
                 "path_contains",
                 "cmdline_contains",
+                "rule_id",
             ):
                 match = "exact"
             out.append(
@@ -304,23 +315,58 @@ class ProcessLabelStore:
         path: str | None = None,
         name: str | None = None,
         cmdline: str | None = None,
+        rule_id: str | None = None,
     ) -> ProcessLabelRule | None:
         c = comm or name or ""
         p = path or ""
         cmd = cmdline or ""
+        rid = (rule_id or "").strip()
         now = time.time()
         best: ProcessLabelRule | None = None
         best_pri = -1
         with self._lock:
             active = [r for r in self.rules if not r.expired(now)]
             for r in active:
-                if not _rule_matches(r, comm=c, path=p, cmdline=cmd):
+                if not _rule_matches(r, comm=c, path=p, cmdline=cmd, alert_rule_id=rid):
                     continue
                 pri = _LABEL_PRIORITY.get(r.label, 0)
                 if pri > best_pri:
                     best = r
                     best_pri = pri
         return best
+
+    def mute_rule(
+        self,
+        rule_id: str,
+        *,
+        label: Label = "ignore",
+        note: str = "",
+        source: str = "tg",
+        expires_at: float | None = None,
+    ) -> ProcessLabelRule | None:
+        """Mute/baseline an entire alert rule_id (e.g. kirk module_hide FP)."""
+        rid = (rule_id or "").strip()
+        if not rid:
+            return None
+        return self.add_rule(
+            ProcessLabelRule(
+                id=uuid.uuid4().hex[:12],
+                label=label,
+                match="rule_id",
+                pattern=rid,
+                source=source,
+                note=note or f"mute:{rid}",
+                rule_id=rid,
+                expires_at=expires_at,
+            )
+        )
+
+    def is_rule_muted(self, rule_id: str | None) -> bool:
+        rid = (rule_id or "").strip()
+        if not rid:
+            return False
+        e = self.match(rule_id=rid)
+        return e is not None and e.label == "ignore"
 
     # --- OperatorFeedback-compatible API ---
 
@@ -344,7 +390,12 @@ class ProcessLabelStore:
             note=note,
             widen=widen,
         )
-        return created[0] if created else None
+        if created:
+            return created[0]
+        # No process identity — still mute by alert rule_id when present
+        if kind == "ignore" and rule_id:
+            return self.mute_rule(rule_id, note=note or "tg-ignore")
+        return None
 
     def lookup(self, **kwargs: Any) -> ProcessLabelRule | None:
         return self.match(**kwargs)
