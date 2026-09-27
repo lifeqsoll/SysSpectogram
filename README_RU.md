@@ -4,32 +4,34 @@
 
 Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
 
-**Область (v0.6):** защита Linux VPS — notorch/ONNX, train bridge, Kirk trust, HMAC/PID allowlist/exe seal, **root watch в Rust-агенте**, Role Lab, feedback. Live **VMI** → **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Область (v0.7):** защита Linux VPS — **configure** (Day-0 в терминале), **ProcessLabelRules** (As normal/anomaly), опциональный IF refit, flow netview, audit, eBPF setuid, notorch/ONNX, Rust-агент, Kirk. Live **VMI** → **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
-**Документы:** [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.6](docs/RELEASE_v0.6.0.md) · [Симуляции](simulations/README_RU.md)
+**Документы:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.7](docs/RELEASE_v0.7.0.md) · [Симуляции](simulations/README_RU.md)
 
-### Что нового в v0.6
+### Что нового в v0.7
 
 | Часть | Статус |
 | --- | --- |
-| HMAC + PID allowlist + exe seal | да |
-| Phoenix / Dead-man | да |
-| Unexpected root (Rust ProcWatcher) | да — [ROOT_WATCH.md](docs/ROOT_WATCH.md) |
-| SSH Kick / Ban | да |
-| Role Lab | да |
-| TG feedback → learner | да |
-| VMI | **v1.0** |
+| `sysspectogram configure` — Day-0 TUI + host probe | да — [CONFIGURE.md](docs/CONFIGURE.md) |
+| ProcessLabelRules (As normal / anomaly / + similar) | да — [FEEDBACK.md](docs/FEEDBACK.md) |
+| Role FP labels + `/digest` | да |
+| Flow netview (`ss`) | да |
+| Response audit + kirk badge в web | да |
+| IF-only refit на VPS (CNN не трогаем) | да |
+| eBPF setuid→0 | да (fallback ProcWatcher) |
+| Cold-install чеклист | да — [COLD_INSTALL.md](docs/COLD_INSTALL.md) |
 
 ```bash
 source .venv/bin/activate
+# Day-0: меню в ЭТОМ терминале (не браузер и не отдельное окно)
+python -m sysspectogram configure
+# или без вопросов:
+# python -m sysspectogram configure --accept-recommended --role ssh
+
 cd agent && cargo build --release && cd ..
-# маленький VPS (default: lite)
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
-# большой VDS
-SYSSPECTOGRAM_LOAD_PROFILE=full python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-run
-# eBPF-агент (root): docs/EBPF_SETUP.md
 ```
 
 ---
@@ -120,6 +122,11 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[dev]"
 
 python -m sysspectogram --help
+
+# Day-0: интерфейс в терминале (клавиатура, не браузер)
+python -m sysspectogram configure
+# без меню — принять рекомендации probe:
+# python -m sysspectogram configure --accept-recommended --role ssh
 ```
 
 После установки доступны команда `sysspectogram` и `python -m sysspectogram`.
@@ -285,6 +292,28 @@ python -m sysspectogram [--config PATH] [--version] <command> ...
 | `--config` | нет | `configs/default.yaml` | YAML с настройками collector/window/train/monitor |
 | `--version` | нет | — | Версия пакета |
 | `-h` / `--help` | нет | — | Справка по программе или подкоманде |
+
+---
+
+### `configure` (главная фича Day-0)
+
+Интерактивная настройка **в терминале** (таблицы Rich + вопросы). Это не веб-страница и не отдельное GUI-окно — открой терминал в репо:
+
+```bash
+source .venv/bin/activate
+python -m sysspectogram configure
+```
+
+| Флаг | Описание |
+| --- | --- |
+| `--accept-recommended` | Применить рекомендации host_probe без меню |
+| `--role ssh\|nginx\|…` | Роль для FP-меток процессов |
+| `--prefix PATH` | Корень установки (по умолчанию `.`) |
+| `--no-seed-fp` | Не сидить process labels |
+
+См. [docs/CONFIGURE.md](docs/CONFIGURE.md), [docs/COLD_INSTALL.md](docs/COLD_INSTALL.md).
+
+Также: `labels list|seed|del`, `feedback retrain-if`, `feedback status`.
 
 ---
 
@@ -578,4 +607,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-**v0.6:** HMAC + PID allowlist, root watch в агенте, Role Lab, feedback. См. [AGENT.md](docs/AGENT.md), [ROOT_WATCH.md](docs/ROOT_WATCH.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.6.0.md](docs/RELEASE_v0.6.0.md). Дальше: v0.7 FP/flow/UX.
+**v0.7:** `configure` Day-0, ProcessLabelRules, netview, audit, IF refit, eBPF setuid. См. [CONFIGURE.md](docs/CONFIGURE.md), [FEEDBACK.md](docs/FEEDBACK.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.7.0.md](docs/RELEASE_v0.7.0.md). Дальше: v0.8 supply chain.

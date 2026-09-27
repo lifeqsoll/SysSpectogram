@@ -349,6 +349,15 @@ def _cmd_feedback(args: argparse.Namespace) -> int:
         )
         console.print(f"[green]feedback retrain[/] {info}")
         return 0
+    if args.feedback_action == "retrain-if":
+        from sysspectogram.feedback_iforest import refit_host_iforest
+
+        info = refit_host_iforest(
+            _resolve(args.model),
+            _resolve(args.feedback_dir),
+        )
+        console.print(f"[green]IF refit[/] {info}")
+        return 0
     if args.feedback_action == "status":
         from sysspectogram.feedback_learn import FeedbackLearner
 
@@ -414,6 +423,42 @@ def _cmd_setup(args: argparse.Namespace) -> int:
 
     run_setup(prefix=_resolve(args.prefix), role=getattr(args, "role", None))
     return 0
+
+
+def _cmd_configure(args: argparse.Namespace) -> int:
+    from sysspectogram.configure_tui import run_configure
+
+    run_configure(
+        prefix=_resolve(args.prefix),
+        config_path=_resolve(args.config) if args.config else None,
+        accept_recommended=bool(args.accept_recommended),
+        non_interactive=bool(args.non_interactive or args.accept_recommended),
+        role=getattr(args, "role", None),
+        seed_fp=not bool(args.no_seed_fp),
+    )
+    return 0
+
+
+def _cmd_labels(args: argparse.Namespace) -> int:
+    from sysspectogram.process_labels import ProcessLabelStore
+    from sysspectogram.role_fp import list_seed_roles, seed_role_labels
+
+    store = ProcessLabelStore(_resolve(args.store))
+    if args.labels_action == "list":
+        for r in store.list_rules():
+            console.print(f"{r.id} {r.label} {r.match} {r.pattern} src={r.source}")
+        console.print(f"total={len(store.list_rules())}")
+        return 0
+    if args.labels_action == "seed":
+        n = seed_role_labels(store, args.role)
+        console.print(f"[green]seeded[/] role={args.role} rules={n} roles={list_seed_roles()}")
+        return 0
+    if args.labels_action == "del":
+        ok = store.delete(args.id)
+        console.print("deleted" if ok else "not found")
+        return 0 if ok else 1
+    console.print("unknown labels action")
+    return 1
 
 
 def _cmd_kirk(args: argparse.Namespace) -> int:
@@ -643,10 +688,37 @@ def build_parser() -> argparse.ArgumentParser:
     app.add_argument("--restart-systemd", default=None)
     app.set_defaults(func=_cmd_artifacts)
 
-    st = sub.add_parser("setup", help="interactive .env / Telegram setup")
+    st = sub.add_parser("setup", help="interactive .env / Telegram setup (legacy)")
     st.add_argument("--prefix", default=".", help="install prefix (default: repo root)")
     st.add_argument("--role", default=None, help="role pack hint: nginx|ssh|docker|...")
     st.set_defaults(func=_cmd_setup)
+
+    cfg = sub.add_parser("configure", help="unified Day-0 TUI: probe + profile + agent + TG + labels")
+    cfg.add_argument("--prefix", default=".", help="install prefix")
+    cfg.add_argument("--config", default=None, help="yaml config to write (default configs/default.yaml)")
+    cfg.add_argument("--role", default=None)
+    cfg.add_argument(
+        "--accept-recommended",
+        action="store_true",
+        help="non-interactive: apply host_probe recommendations",
+    )
+    cfg.add_argument("--non-interactive", action="store_true")
+    cfg.add_argument("--no-seed-fp", action="store_true", help="skip role FP label seed")
+    cfg.set_defaults(func=_cmd_configure)
+
+    lb = sub.add_parser("labels", help="process label rules (As normal / As anomaly store)")
+    lb_sub = lb.add_subparsers(dest="labels_action", required=True)
+    lb_list = lb_sub.add_parser("list")
+    lb_list.add_argument("--store", default="state/process_labels.json")
+    lb_list.set_defaults(func=_cmd_labels)
+    lb_seed = lb_sub.add_parser("seed", help="seed role FP baselines")
+    lb_seed.add_argument("--role", required=True)
+    lb_seed.add_argument("--store", default="state/process_labels.json")
+    lb_seed.set_defaults(func=_cmd_labels)
+    lb_del = lb_sub.add_parser("del")
+    lb_del.add_argument("id")
+    lb_del.add_argument("--store", default="state/process_labels.json")
+    lb_del.set_defaults(func=_cmd_labels)
 
     kk = sub.add_parser("kirk", help="kernel integrity trust probe (IMA/SB/TPM)")
     kk_sub = kk.add_subparsers(dest="kirk_action", required=True)
@@ -685,6 +757,13 @@ def build_parser() -> argparse.ArgumentParser:
     fb_tr.add_argument("--out", required=True, help="artifacts output dir")
     fb_tr.add_argument("--epochs", type=int, default=8)
     fb_tr.set_defaults(func=_cmd_feedback)
+    fb_if = fb_sub.add_parser(
+        "retrain-if",
+        help="VPS-safe: refit IsolationForest only (CNN unchanged)",
+    )
+    fb_if.add_argument("--feedback-dir", default="artifacts/feedback")
+    fb_if.add_argument("--model", required=True, help="artifacts dir with iforest.joblib")
+    fb_if.set_defaults(func=_cmd_feedback)
 
     w = sub.add_parser("web", help="live local / Telegram Mini App dashboard")
     w.add_argument("--model", default=None, help="optional artifacts for scoring")

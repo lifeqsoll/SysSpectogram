@@ -1,4 +1,7 @@
-"""Minimal interactive setup after bootstrap."""
+"""Minimal interactive setup after bootstrap (legacy).
+
+Prefer: `python -m sysspectogram configure`
+"""
 
 from __future__ import annotations
 
@@ -13,7 +16,11 @@ def run_setup(
     env_path: Path | None = None,
     role: str | None = None,
 ) -> dict[str, str]:
-    """Write/update .env with Telegram credentials (interactive)."""
+    """Write/update .env with Telegram credentials (interactive).
+
+    For full Day-0 (profile/agent/probe), use configure_tui.run_configure.
+    """
+    print("Note: prefer `python -m sysspectogram configure` for full Day-0 setup.")
     env_path = env_path or (prefix / ".env")
     example = prefix / ".env.example"
     if not env_path.exists() and example.exists():

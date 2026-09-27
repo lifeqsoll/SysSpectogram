@@ -50,6 +50,8 @@ Dry-run gallery (safe for public docs):
 
 More: [assets/tg/](assets/tg/).
 
+v0.7: `/labels`, `/digest` includes bias + kirk + label counts; **+ similar** widens rules. See [FEEDBACK.md](FEEDBACK.md), [CONFIGURE.md](CONFIGURE.md).
+
 ## Slash commands
 
 ### Status & help

@@ -269,6 +269,15 @@
       lockEl.textContent = locked ? "LOCKED" : "unlocked";
       lockEl.style.color = locked ? "var(--crit)" : "inherit";
     }
+    const kirkEl = document.getElementById("kirk-badge");
+    if (kirkEl) {
+      const trust = snap.kirk_trust || "best-effort";
+      kirkEl.textContent = trust;
+      kirkEl.className = "kirk-badge kirk-" + String(trust).replace(/[^a-z-]/g, "");
+      kirkEl.title = (snap.kirk_details || []).join("; ") || trust;
+    }
+    const isoEl = document.getElementById("kirk-iso");
+    if (isoEl) isoEl.textContent = snap.kirk_isolated ? "yes" : "no";
     const anom = !!snap.is_anomaly;
     document.getElementById("score-val").style.color = anom ? "var(--crit)" : "inherit";
     document.getElementById("status-dot").classList.toggle("warn", anom);

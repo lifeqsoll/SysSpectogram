@@ -177,6 +177,14 @@ def run_guard(
                 f"ima={report.ima_present} meas={report.ima_measurements} "
                 f"sb={report.secure_boot} tpm={report.tpm_present}"
             )
+            try:
+                GLOBAL_BUS.set_kirk(
+                    trust=str(kirk_status["trust"]),
+                    isolated=False,
+                    details=list(report.details or [])[:6],
+                )
+            except Exception:
+                pass
         elif trust_mode in allowed_labels:
             kirk_status["trust"] = trust_mode
             console.print(f"[cyan]kirk trust[/] {kirk_status['trust']} (forced)")
@@ -192,14 +200,33 @@ def run_guard(
                 "[dim]kirk.vmi=true ignored until v1.0 - see docs/VMI.md[/]"
             )
 
-    from sysspectogram.operator_feedback import OperatorFeedback
+    from sysspectogram.process_labels import ProcessLabelStore
     from sysspectogram.feedback_learn import FeedbackLearner
     from sysspectogram.agent_auth import ensure_secret
+    from sysspectogram.response_audit import ResponseAudit
+    from sysspectogram.host_probe import recommend, save_probe
 
-    feedback = OperatorFeedback(_resolve("state/operator_feedback.json"))
+    feedback = ProcessLabelStore(_resolve("state/process_labels.json"))
+    # also migrate legacy path if present
+    legacy_fb = _resolve("state/operator_feedback.json")
+    if legacy_fb.exists() and not feedback.list_rules():
+        from sysspectogram.process_labels import ProcessLabelStore as _PLS
+
+        tmp = _PLS(legacy_fb)
+        for r in tmp.list_rules():
+            feedback.add_rule(r)
     learner = FeedbackLearner(_resolve("artifacts/feedback"))
+    audit = ResponseAudit(_resolve("reports/response_audit.jsonl"))
     hmac_secret = ensure_secret(_resolve("state/agent_hmac.secret"))
     bot_holder: dict[str, TelegramBot | None] = {"bot": None}
+    fb_cfg = config.get("feedback") or {}
+    widen_rules = fb_cfg.get("widen_rules", "comm_prefix")
+    if_refit_enabled = bool(fb_cfg.get("if_refit", False))
+    try:
+        save_probe(_resolve("state/host_probe.json"), recommend())
+    except Exception:
+        pass
+
 
     siem_cfg = config.get("siem") or {}
     lab_cfg = config.get("lab") or {}
@@ -374,6 +401,9 @@ def run_guard(
             response_mode=resp_mode,
             feedback=feedback,
             learner=learner,
+            audit=audit,
+            widen_rules=widen_rules,
+            if_refit=if_refit_enabled,
         )
         if unlock_gate.enabled:
             try:
@@ -464,6 +494,10 @@ def run_guard(
                 nft.list_bans()
                 if kirk_status.get("isolated") and getattr(nft, "_kirk_expires", None) is None:
                     kirk_status["isolated"] = False
+                    try:
+                        GLOBAL_BUS.set_kirk(isolated=False)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -866,9 +900,10 @@ def run_guard(
             window_sec=float(flow_cfg.get("window_sec", 30)),
             syn_threshold=int(flow_cfg.get("syn_threshold", 80)),
             unique_port_threshold=int(flow_cfg.get("unique_port_threshold", 40)),
+            backend=str(flow_cfg.get("backend") or ("netview" if load_name == "full" else "proc")),
         )
         console.print(
-            f"[cyan]flow lite[/] window={flow.window_sec}s "
+            f"[cyan]flow[/] backend={flow.backend} window={flow.window_sec}s "
             f"syn>={flow.syn_threshold} ports>={flow.unique_port_threshold}"
         )
 
@@ -1011,6 +1046,10 @@ def run_guard(
                             console.print(f"[yellow]kirk isolate[/] {msg_iso}")
                         else:
                             kirk_status["isolated"] = not dry_run_actions
+                            try:
+                                GLOBAL_BUS.set_kirk(isolated=bool(kirk_status["isolated"]))
+                            except Exception:
+                                pass
                             console.print(f"[red]kirk isolate[/] {msg_iso}")
                             bot = bot_holder["bot"]
                             if bot is not None:

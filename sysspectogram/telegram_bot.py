@@ -23,6 +23,7 @@ SysSpectogram TG control (allowlisted chat only)
 
 Status:
 /ping /help /menu /version /status /digest /last [n]
+/labels             # process label rules (As normal/anomaly)
 /dashboard          # open live Mini App (needs WEBAPP_URL)
 /unlock <code>      # console pairing code (required after guard start)
 /lock               # re-lock control plane
@@ -129,6 +130,9 @@ class TelegramBot:
         response_mode: str | None = None,
         feedback: Any | None = None,
         learner: Any | None = None,
+        audit: Any | None = None,
+        widen_rules: str | bool | None = "comm_prefix",
+        if_refit: bool = False,
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -154,6 +158,9 @@ class TelegramBot:
         self.response_mode = response_mode or "observe"
         self.feedback = feedback
         self.learner = learner
+        self.audit = audit
+        self.widen_rules = widen_rules
+        self.if_refit = bool(if_refit)
         self.last_host_window = None
         self.last_host_columns: list[str] | None = None
         self.last_host_score: float | None = None
@@ -162,6 +169,8 @@ class TelegramBot:
         self._alert_count_day = 0
         self._digest_counts: dict[str, int] = {}
         self._busy = False
+        self._if_refit_lock = False
+        self.last_if_refit: dict | None = None
 
     def begin_console_unlock(self) -> str:
         return self.unlock.begin()
@@ -235,6 +244,7 @@ class TelegramBot:
             _btn("Ignore proc", f"do|{tign}"),
             _btn("As normal", f"do|{tbase}"),
             _btn("As anomaly", f"do|{tanom}"),
+            _btn("+ similar", f"do|{self.tokens.issue('widen_proc', {**base, 'kind': 'baseline'})}"),
         ]
 
     def _offer_anomaly_after(self, chat_id: Any, payload: dict) -> None:
@@ -663,6 +673,20 @@ class TelegramBot:
                 )
             elif cmd == "/digest":
                 self.client.send_message(self.prefix(self._digest_text()), chat_id=chat_id)
+            elif cmd == "/labels":
+                self.client.send_message(self.prefix(self._labels_text()), chat_id=chat_id)
+            elif cmd.startswith("/label-del") or cmd == "/label-del":
+                if not self.session_unlocked():
+                    self.client.send_message(self.prefix("LOCKED — /unlock first"), chat_id=chat_id)
+                elif not args:
+                    self.client.send_message(self.prefix("usage: /label-del <id|pattern>"), chat_id=chat_id)
+                elif self.feedback is None or not hasattr(self.feedback, "delete"):
+                    self.client.send_message(self.prefix("no label store"), chat_id=chat_id)
+                else:
+                    ok = self.feedback.delete(args[0])
+                    self.client.send_message(
+                        self.prefix("deleted" if ok else "not found"), chat_id=chat_id
+                    )
             elif cmd == "/quiet":
                 on = (args[0].lower() == "on") if args else True
                 if self.watcher:
@@ -864,7 +888,27 @@ class TelegramBot:
                 self.client.answer_callback(cq_id, "expired/used")
                 return
             action, payload = consumed
+            # Double-confirm for isolate / lockdown when not dry_run
+            if (
+                action in ("lockdown", "kirk_isolate")
+                and not self.dry_run
+                and not payload.get("_confirmed")
+                and data.startswith("ask|") is False
+            ):
+                pass  # handled via ask| path already
             result = self._run_action(action, payload)
+            if self.audit is not None:
+                try:
+                    self.audit.record(
+                        action,
+                        dry_run=self.dry_run,
+                        ok="fail" not in result.lower() and "error" not in result.lower(),
+                        detail=result[:300],
+                        payload=payload,
+                        host_id=self.host_id,
+                    )
+                except Exception:
+                    pass
             self.client.answer_callback(cq_id, "ok")
             self.client.send_message(self.prefix(result), chat_id=chat_id)
             if action == "kill" and "skip" not in result.lower() and "refusing" not in result.lower():
@@ -901,22 +945,52 @@ class TelegramBot:
             pid = int(payload.get("pid") or 0)
             expect = payload.get("expect_comm")
             return kill_pid(pid, dry_run=self.dry_run, expect_comm=expect)
-        if action in ("ignore_proc", "baseline_proc", "anomaly_proc"):
+        if action in ("ignore_proc", "baseline_proc", "anomaly_proc", "widen_proc"):
             if self.feedback is None:
                 return "feedback store not configured"
+            if action == "widen_proc":
+                kind = str(payload.get("kind") or "baseline")
+                if kind not in ("ignore", "baseline", "anomaly"):
+                    kind = "baseline"
+                created = self.feedback.add_from_alert(
+                    kind,  # type: ignore[arg-type]
+                    comm=str(payload.get("comm") or "") or None,
+                    path=str(payload.get("path") or "") or None,
+                    name=str(payload.get("name") or "") or None,
+                    rule_id=str(payload.get("rule") or ""),
+                    note="widen",
+                    widen="both",
+                    source="tg-widen",
+                )
+                return f"widened {kind}: {[c.pattern for c in created]}"
             kind = {
                 "ignore_proc": "ignore",
                 "baseline_proc": "baseline",
                 "anomaly_proc": "anomaly",
             }[action]
-            entry = self.feedback.remember(
-                kind,  # type: ignore[arg-type]
-                comm=str(payload.get("comm") or "") or None,
-                path=str(payload.get("path") or "") or None,
-                name=str(payload.get("name") or "") or None,
-                rule_id=str(payload.get("rule") or ""),
-                note=kind,
-            )
+            widen = self.widen_rules
+            created = []
+            if hasattr(self.feedback, "add_from_alert"):
+                created = self.feedback.add_from_alert(
+                    kind,  # type: ignore[arg-type]
+                    comm=str(payload.get("comm") or "") or None,
+                    path=str(payload.get("path") or "") or None,
+                    name=str(payload.get("name") or "") or None,
+                    rule_id=str(payload.get("rule") or ""),
+                    note=kind,
+                    widen=widen,
+                    source="tg",
+                )
+                entry = created[0] if created else None
+            else:
+                entry = self.feedback.remember(
+                    kind,  # type: ignore[arg-type]
+                    comm=str(payload.get("comm") or "") or None,
+                    path=str(payload.get("path") or "") or None,
+                    name=str(payload.get("name") or "") or None,
+                    rule_id=str(payload.get("rule") or ""),
+                    note=kind,
+                )
             if entry is None:
                 return "no process identity to remember"
             extra = ""
@@ -927,7 +1001,7 @@ class TelegramBot:
                         window=self.last_host_window,
                         columns=self.last_host_columns,
                         score=self.last_host_score,
-                        process_key=entry.key,
+                        process_key=getattr(entry, "key", entry.pattern),
                         note=kind,
                     )
                     extra = (
@@ -936,7 +1010,12 @@ class TelegramBot:
                     )
                 except Exception as exc:
                     extra = f" learn_err={exc}"
-            return f"remembered {entry.kind}: {entry.key}{extra}"
+            rules_s = ",".join(f"{c.match}:{c.pattern}" for c in created) if created else entry.key
+            # optional IF refit (debounced)
+            if_extra = ""
+            if self.if_refit and kind in ("baseline", "anomaly") and self.model_dir:
+                if_extra = self._maybe_refit_if()
+            return f"rule {rules_s} ({kind}){extra}{if_extra}"
         if action == "kick_tty":
             from sysspectogram.session_watch import kick_tty
 
@@ -1320,11 +1399,71 @@ class TelegramBot:
 
     def _digest_text(self) -> str:
         items = sorted(self._digest_counts.items(), key=lambda x: -x[1])
+        lines = [f"alerts_today={self._alert_count_day}", f"response_mode={self.response_mode}"]
+        if self.kirk_status:
+            lines.append(
+                f"kirk_trust={self.kirk_status.get('trust')} "
+                f"isolated={self.kirk_status.get('isolated')}"
+            )
+        if self.learner is not None:
+            try:
+                lines.append(
+                    f"feedback_bias={self.learner.threshold_bias():+.3f} "
+                    f"counts={self.learner.counts()}"
+                )
+            except Exception:
+                pass
+        if self.feedback is not None and hasattr(self.feedback, "list_rules"):
+            try:
+                lines.append(f"process_labels={len(self.feedback.list_rules())}")
+            except Exception:
+                pass
+        if self.last_if_refit:
+            lines.append(
+                f"last_if_refit={self.last_if_refit.get('elapsed_sec')}s "
+                f"n={self.last_if_refit.get('n_normal')}"
+            )
         if not items:
-            return f"digest empty; alerts_today={self._alert_count_day}"
-        lines = [f"alerts_today={self._alert_count_day}"]
-        for rid, c in items[:15]:
-            lines.append(f"{rid}: {c}")
+            lines.append("digest empty")
+        else:
+            for rid, c in items[:15]:
+                lines.append(f"{rid}: {c}")
+        return "\n".join(lines)
+
+    def _maybe_refit_if(self) -> str:
+        if self._if_refit_lock or not self.model_dir or self.learner is None:
+            return ""
+        try:
+            counts = self.learner.counts()
+            n_b = int(counts.get("baseline") or 0)
+            n_a = int(counts.get("anomaly") or 0)
+            if n_b < 2 or n_a < 2 or (n_b + n_a) < 4:
+                return ""
+            self._if_refit_lock = True
+            from sysspectogram.feedback_iforest import refit_host_iforest
+
+            info = refit_host_iforest(
+                Path(self.model_dir),
+                Path(self.learner.root),
+            )
+            self.last_if_refit = info
+            return f" | IF refit ok ({info.get('elapsed_sec')}s, n={info.get('n_normal')}) CNN unchanged"
+        except Exception as exc:
+            return f" | IF refit skip: {exc}"
+        finally:
+            self._if_refit_lock = False
+
+    def _labels_text(self) -> str:
+        if self.feedback is None or not hasattr(self.feedback, "list_rules"):
+            return "no process label store"
+        rules = self.feedback.list_rules()
+        if not rules:
+            return "no process labels yet — use As normal / As anomaly"
+        lines = [f"labels={len(rules)}"]
+        for r in rules[:40]:
+            lines.append(f"{r.id[:8]} {r.label:8} {r.match:14} {r.pattern}")
+        if len(rules) > 40:
+            lines.append(f"… +{len(rules) - 40}")
         return "\n".join(lines)
 
     def _send_report(self, chat_id: str) -> None:

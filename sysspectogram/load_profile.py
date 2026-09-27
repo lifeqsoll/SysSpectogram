@@ -43,6 +43,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         },
         "flow": {
             "enabled": False,
+            "backend": "proc",
             "window_sec": 60,
             "syn_threshold": 120,
             "unique_port_threshold": 60,
@@ -91,6 +92,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         },
         "flow": {
             "enabled": True,
+            "backend": "netview",
             "window_sec": 30,
             "syn_threshold": 80,
             "unique_port_threshold": 40,

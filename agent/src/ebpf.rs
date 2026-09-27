@@ -14,7 +14,9 @@ mod imp {
     use aya::util::online_cpus;
     use aya::Ebpf;
     use bytes::BytesMut;
-    use sysspectogram_common::{ProbeEvent, KIND_EXECVE, KIND_KILL, KIND_MODULE, KIND_OPENAT};
+    use sysspectogram_common::{
+        ProbeEvent, KIND_EXECVE, KIND_KILL, KIND_MODULE, KIND_OPENAT, KIND_SETUID,
+    };
 
     use crate::types::AgentAlert;
 
@@ -134,6 +136,9 @@ mod imp {
                 "sys_enter_delete_module",
             ),
             ("sysspectogram_kill", "syscalls", "sys_enter_kill"),
+            ("sysspectogram_setuid", "syscalls", "sys_enter_setuid"),
+            ("sysspectogram_setreuid", "syscalls", "sys_enter_setreuid"),
+            ("sysspectogram_setresuid", "syscalls", "sys_enter_setresuid"),
         ] {
             let prog: &mut TracePoint = bpf
                 .program_mut(name)
@@ -141,10 +146,10 @@ mod imp {
                 .try_into()
                 .map_err(|e| format!("{e}"))?;
             prog.load().map_err(|e| format!("{name} load: {e}"))?;
-            // kill attach is best-effort (some kernels rename events)
+            // kill / setuid attach is best-effort (some kernels rename events)
             if let Err(e) = prog.attach(cat, event) {
-                if name.contains("kill") {
-                    eprintln!("[sysspectogram-agent] kill probe skip: {e}");
+                if name.contains("kill") || name.contains("setuid") || name.contains("setreuid") || name.contains("setresuid") {
+                    eprintln!("[sysspectogram-agent] {name} probe skip: {e}");
                 } else {
                     return Err(format!("{name} attach: {e}"));
                 }
@@ -235,6 +240,30 @@ mod imp {
     }
 
     fn event_to_alert(ev: &ProbeEvent, host: &str) -> Option<AgentAlert> {
+        if ev.kind == KIND_SETUID {
+            // Skip if caller already root (noise from daemons)
+            if ev.uid == 0 {
+                return None;
+            }
+            let label_end = ev.path[4..]
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(ev.path.len().saturating_sub(4));
+            let label = String::from_utf8_lossy(&ev.path[4..4 + label_end]).into_owned();
+            let mut a = AgentAlert::new(
+                "agent_ebpf_setuid_root",
+                "high",
+                format!(
+                    "setuid→0 via {} from uid={} pid={} (eBPF assist; ProcWatcher still authoritative)",
+                    if label.is_empty() { "setuid" } else { &label },
+                    ev.uid,
+                    ev.pid
+                ),
+                host,
+            );
+            a.pid = Some(ev.pid);
+            return Some(a);
+        }
         if ev.kind == KIND_KILL {
             let tpid = u32::from_ne_bytes(ev.path[0..4].try_into().ok()?);
             let sig = u32::from_ne_bytes(ev.path[4..8].try_into().ok()?);
@@ -269,7 +298,12 @@ mod imp {
             KIND_OPENAT if !path_interesting_openat(&path) => return None,
             KIND_EXECVE if !path_interesting_execve(&path) => return None,
             KIND_MODULE => {}
-            _ if ev.kind != KIND_OPENAT && ev.kind != KIND_EXECVE && ev.kind != KIND_MODULE => {
+            KIND_SETUID => {}
+            _ if ev.kind != KIND_OPENAT
+                && ev.kind != KIND_EXECVE
+                && ev.kind != KIND_MODULE
+                && ev.kind != KIND_SETUID =>
+            {
                 return None;
             }
             _ => {}
@@ -278,6 +312,7 @@ mod imp {
             KIND_EXECVE => ("agent_ebpf_execve", "medium", "execve"),
             KIND_OPENAT => ("agent_ebpf_openat", "medium", "openat"),
             KIND_MODULE => ("agent_kirk_module_load", "high", "module"),
+            KIND_SETUID => ("agent_ebpf_setuid_root", "high", "setuid"),
             _ => ("agent_ebpf", "low", "syscall"),
         };
         let mut a = AgentAlert::new(
