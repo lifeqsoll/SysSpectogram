@@ -19,7 +19,7 @@ ctrlc = "3"
 notify = "7"
 hmac = "0.12"
 sha2 = "0.10"
-aya = { version = "0.13", optional = true }
+aya = { version = "0.14", optional = true }
 libc = { version = "0.2", optional = true }
 bytes = { version = "1", optional = true }
 sysspectogram-common = { path = "common", features = ["user"], optional = true }
