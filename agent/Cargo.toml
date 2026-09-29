@@ -18,7 +18,7 @@ clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
 notify = "7"
 hmac = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
 aya = { version = "0.13", optional = true }
 libc = { version = "0.2", optional = true }
 bytes = { version = "1", optional = true }
