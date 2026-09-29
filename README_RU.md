@@ -10,18 +10,17 @@ Linux-утилита для **защиты VPS / хоста**: ML по «спе�
 
 **Документы:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.8](docs/RELEASE_v0.8.0.md) · [Симуляции](simulations/README_RU.md)
 
-### Что нового в v0.7
+### Что нового в v0.8
 
 | Часть | Статус |
 | --- | --- |
-| `sysspectogram configure` — Day-0 TUI + host probe | да — [CONFIGURE.md](docs/CONFIGURE.md) |
-| ProcessLabelRules (As normal / anomaly / + similar) | да — [FEEDBACK.md](docs/FEEDBACK.md) |
-| Role FP labels + `/digest` | да |
-| Flow netview (`ss`) | да |
-| Response audit + kirk badge в web | да |
-| IF-only refit на VPS (CNN не трогаем) | да |
-| eBPF setuid→0 | да (fallback ProcWatcher) |
-| Cold-install чеклист | да — [COLD_INSTALL.md](docs/COLD_INSTALL.md) |
+| Minisign + `artifacts.manifest.json` (SHA-256) | да — [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) |
+| Детерминированный SPDX 2.3 SBOM | да |
+| Opt-in `supply_chain.enforce` в guard / monitor / web / Telegram | да |
+| Безопасная загрузка `cnn.pt` (`weights_only=True`) | да |
+| AUR + Debian packaging | да — `packaging/` |
+| Проверка релиза без исполнения скачанного | да |
+| Всё из v0.7 (`configure`, ProcessLabelRules, flow netview, kirk, …) | да — без регрессии |
 
 ```bash
 source .venv/bin/activate
@@ -31,6 +30,8 @@ python -m sysspectogram configure
 # python -m sysspectogram configure --accept-recommended --role ssh
 
 cd agent && cargo build --release && cd ..
+python -m sysspectogram kirk trust
+python -m sysspectogram supply-chain verify artifacts/real_v3
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ```
 

@@ -8,18 +8,17 @@ Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms”
 
 **Related docs:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Role lab](docs/ROLE_LAB.md) · [Day-0](docs/DAY0_VPS.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.8](docs/RELEASE_v0.8.0.md) · [Simulations](simulations/README.md)
 
-### What's new in v0.7
+### What's new in v0.8
 
 | Piece | Status |
 | --- | --- |
-| `sysspectogram configure` Day-0 TUI + host probe | yes — [CONFIGURE.md](docs/CONFIGURE.md) |
-| ProcessLabelRules (As normal / anomaly / + similar) | yes — [FEEDBACK.md](docs/FEEDBACK.md) |
-| Role FP label seeds + richer `/digest` | yes |
-| Flow netview (`ss`) | yes |
-| Response audit JSONL + web kirk badge | yes |
-| Optional IF-only refit on VPS (CNN frozen) | yes |
-| eBPF setuid→0 assist | yes (ProcWatcher fallback) |
-| Cold-install checklist | yes — [COLD_INSTALL.md](docs/COLD_INSTALL.md) |
+| Minisign + `artifacts.manifest.json` (SHA-256) | yes — [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) |
+| Deterministic SPDX 2.3 SBOM | yes |
+| Opt-in `supply_chain.enforce` on guard / monitor / web / Telegram | yes |
+| Safe `cnn.pt` load (`weights_only=True`) | yes |
+| AUR + Debian packaging recipes | yes — `packaging/` |
+| Release verify helper (never executes downloads) | yes |
+| All v0.7 ops (`configure`, ProcessLabelRules, flow netview, kirk, …) | yes — carried forward |
 
 ```bash
 source .venv/bin/activate
@@ -30,6 +29,7 @@ python -m sysspectogram configure
 
 cd agent && cargo build --release && cd ..
 python -m sysspectogram kirk trust
+python -m sysspectogram supply-chain verify artifacts/real_v3
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ```
 
@@ -612,4 +612,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v0.8** ships signed artifact/model manifests, deterministic SPDX SBOM, CI dependency auditing, AUR/Debian packaging, safe checkpoint loading, and opt-in signed-model enforcement. See [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), and [docs/RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Next: conditional v1.0 VMI for self-hosted KVM.
+**v0.8** ships signed artifact/model manifests, deterministic SPDX SBOM, AUR/Debian packaging, safe checkpoint loading, and opt-in signed-model enforcement. See [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), and [docs/RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Next: conditional v1.0 VMI for self-hosted KVM.
