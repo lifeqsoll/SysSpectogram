@@ -1,6 +1,6 @@
-load_profile: full
+load_profile: lite
 runtime:
-  prefer: torch
+  prefer: notorch
 collector: {}
 window:
   size: 60
@@ -134,3 +134,8 @@ kirk:
 role: generic-linux
 model:
   path: artifacts
+supply_chain:
+  enforce: false
+  public_key: null
+  manifest_name: artifacts.manifest.json
+  signature_name: artifacts.manifest.json.minisig

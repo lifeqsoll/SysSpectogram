@@ -404,6 +404,7 @@ def run_guard(
             audit=audit,
             widen_rules=widen_rules,
             if_refit=if_refit_enabled,
+            supply_chain=config.get("supply_chain") or {},
         )
         if unlock_gate.enabled:
             try:
@@ -554,7 +555,11 @@ def run_guard(
                     return
                 return
         try:
-            infer = load_inferencer(artifacts_dir, runtime=runtime)
+            infer = load_inferencer(
+                artifacts_dir,
+                runtime=runtime,
+                supply_chain=config.get("supply_chain") or {},
+            )
         except Exception as exc:
             console.print(f"[yellow]host ML unavailable[/] {exc}")
             return
@@ -942,7 +947,8 @@ def run_guard(
 
         agent_feat = AgentFeatureWindow(window_sec=float(agent_cfg.get("score_window_sec", 120)))
         agent_scorer = AgentIsolationScorer(
-            _resolve(agent_cfg["iforest"]) if agent_cfg.get("iforest") else None
+            _resolve(agent_cfg["iforest"]) if agent_cfg.get("iforest") else None,
+            supply_chain=config.get("supply_chain") or {},
         )
         agent_score_threshold = float(agent_cfg.get("score_threshold", 0.65))
         last_agent_seen = {"ts": time.time()}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BufferedIOBase
 from pathlib import Path
 
 import joblib
@@ -31,7 +32,7 @@ class ForestDetector:
         joblib.dump(self.model, path)
 
     @classmethod
-    def load(cls, path: Path) -> "ForestDetector":
+    def load(cls, path: Path | BufferedIOBase) -> "ForestDetector":
         obj = cls()
         obj.model = joblib.load(path)
         return obj

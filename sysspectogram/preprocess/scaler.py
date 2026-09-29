@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BufferedIOBase
 from pathlib import Path
 
 import joblib
@@ -45,7 +46,7 @@ class WindowScaler:
         joblib.dump({"scaler": self.scaler, "n_features": self.n_features}, path)
 
     @classmethod
-    def load(cls, path: Path) -> "WindowScaler":
+    def load(cls, path: Path | BufferedIOBase) -> "WindowScaler":
         payload = joblib.load(path)
         obj = cls()
         obj.scaler = payload["scaler"]

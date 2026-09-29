@@ -3,8 +3,8 @@
 Single forward plan. Goal: credible, honest, installable Linux VPS / host defense —
 not a “rootkit killer” marketing claim.
 
-**Status:** **v0.7** shipping (configure + ProcessLabelRules + FP/flow/audit/eBPF setuid assist).  
-**Next:** v0.8 supply chain. **Ceiling:** optional VMI in v1.0 ([VMI.md](VMI.md)).
+**Status:** **v0.8** complete (supply-chain signatures, SBOM, packages, and model
+loading policy). **Ceiling:** optional VMI in v1.0 ([VMI.md](VMI.md)).
 
 ---
 
@@ -25,7 +25,7 @@ not a “rootkit killer” marketing claim.
 v0.5  shipped     Adopt + Kirk best-effort + trust probe
 v0.6  shipped     Auth, self-protect, agent root watch, Role Lab, feedback, CI
 v0.7  shipping    Configure TUI, ProcessLabelRules, FP digests, netview, audit, eBPF setuid
-v0.8  harden      Supply chain (minisign/cosign), SBOM, distro-ready packaging
+v0.8  shipped     Supply chain (minisign), SBOM, distro-ready packaging, model quarantine
 v1.0  ceiling     Optional VMI (self-host KVM only)
 v1.x  ecosystem   AUR/deb, Prometheus, community packs, EN/RU Day-0
 ```
@@ -71,14 +71,17 @@ Cloud VPS ceiling is often best-effort until VMI (host) in v1.0.
 
 ---
 
-## v0.8 — Make it *harder to subvert* (supply chain)
+## Shipped — v0.8 — Make it *harder to subvert* (supply chain)
 
 | Track | Work |
 | --- | --- |
-| A | minisign/cosign on release artifacts (beyond pack HMAC) |
-| B | SBOM + Dependabot; refuse unsigned weights on VPS by default |
-| C | Distro packaging sketch (AUR / deb) with CAP_BPF notes |
-| D | Prefer non-pickle model export docs; joblib quarantine |
+| A | minisign signatures on release binaries, wheels, SBOM, and profile packs; HMAC remains compatible |
+| B | Deterministic SPDX 2.3 SBOM, Dependabot, and opt-in refusal of unsigned model manifests |
+| C | Buildable AUR / Debian package recipes with hardened units and CAP_BPF notes |
+| D | Safe `weights_only` checkpoint loading, ONNX-first VPS docs, and joblib quarantine behind verification |
+
+Evidence and operator procedures: [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) and
+[RELEASE_v0.8.0.md](RELEASE_v0.8.0.md).
 
 ---
 

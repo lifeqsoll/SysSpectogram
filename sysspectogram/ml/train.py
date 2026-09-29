@@ -203,6 +203,9 @@ def train_models(
         if f.exists():
             lines.append(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {name}")
     (out_dir / "checksums.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    from sysspectogram.supply_chain import write_manifest
+
+    write_manifest(out_dir)
     print(json.dumps(metrics, indent=2))
     print(f"threshold={threshold:.4f}")
     return artifact_meta

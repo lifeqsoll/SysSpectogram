@@ -1,0 +1,28 @@
+[Unit]
+Description=SysSpectogram guard
+After=network.target sysspectogram-agent.service
+
+[Service]
+Type=simple
+User=sysspectogram
+Group=sysspectogram
+WorkingDirectory=/var/lib/sysspectogram
+EnvironmentFile=-/etc/sysspectogram/sysspectogram.env
+ExecStart=/usr/bin/python -m sysspectogram \
+  --config /etc/sysspectogram/config.yaml guard \
+  --model /var/lib/sysspectogram/artifacts --telegram
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/sysspectogram
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

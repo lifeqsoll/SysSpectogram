@@ -1,0 +1,24 @@
+[Unit]
+Description=SysSpectogram metrics monitor
+After=network.target
+
+[Service]
+Type=simple
+User=sysspectogram
+Group=sysspectogram
+WorkingDirectory=/var/lib/sysspectogram
+ExecStart=/usr/bin/python -m sysspectogram \
+  --config /etc/sysspectogram/config.yaml monitor \
+  --model /var/lib/sysspectogram/artifacts \
+  --jsonl-out /var/log/sysspectogram-monitor.jsonl
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/sysspectogram /var/log
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

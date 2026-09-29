@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -26,8 +27,13 @@ def run_monitor(
     max_cores: int = 16,
     socket_sample_every: int = 5,
     jsonl_out: Path | None = None,
+    supply_chain: dict[str, Any] | None = None,
 ) -> None:
-    infer = load_inferencer(artifacts_dir, runtime="onnx" if (artifacts_dir / "cnn.onnx").exists() else "torch_ml")
+    infer = load_inferencer(
+        artifacts_dir,
+        runtime="onnx" if (artifacts_dir / "cnn.onnx").exists() else "torch_ml",
+        supply_chain=supply_chain,
+    )
     columns = infer.columns
     if not columns:
         raise RuntimeError("artifacts meta.json has empty columns; retrain/rebuild dataset")

@@ -31,6 +31,7 @@ def pack_profile(
     out_tar: Path,
     agent_iforest: Path | None = None,
     description: str = "",
+    minisign_secret_key: Path | None = None,
 ) -> dict[str, Any]:
     """Create profile-*.tar.gz with host/ CNN+IF and optional agent IF."""
     host_artifacts = host_artifacts.resolve()
@@ -48,12 +49,19 @@ def pack_profile(
         root = Path(tmp) / name
         host_dst = root / "host"
         shutil.copytree(host_artifacts, host_dst)
+        from sysspectogram.supply_chain import write_manifest
+
+        write_manifest(host_dst)
         agent_rel = None
         if agent_iforest and agent_iforest.exists():
             agent_dst = root / "agent"
             agent_dst.mkdir(parents=True, exist_ok=True)
             dest = agent_dst / "agent_iforest.joblib"
             shutil.copy2(agent_iforest, dest)
+            if minisign_secret_key is not None:
+                from sysspectogram.supply_chain import sign_file
+
+                sign_file(dest, Path(minisign_secret_key))
             agent_rel = "agent/agent_iforest.joblib"
 
         manifest = {
@@ -97,6 +105,11 @@ def pack_profile(
         result["sig"] = str(sig)
     except Exception:
         pass
+    if minisign_secret_key is not None:
+        from sysspectogram.supply_chain import sign_file
+
+        sig = sign_file(out_tar, Path(minisign_secret_key))
+        result["minisig"] = str(sig)
     return result
 
 
@@ -108,6 +121,8 @@ def install_profile(
     insecure_no_verify: bool = False,
     require_sig: bool = False,
     pack_key: str | None = None,
+    public_key: str | Path | None = None,
+    require_minisign: bool = False,
 ) -> dict[str, Any]:
     tar_path = tar_path.resolve()
     if not tar_path.is_file():
@@ -125,6 +140,15 @@ def install_profile(
             raise ValueError("pack .sig present or require_sig but no SYSSPECTOGRAM_PACK_KEY / state/pack_signing.key")
         if not verify_file(tar_path, key):
             raise ValueError("pack signature verification failed")
+    minisig = Path(f"{tar_path}.minisig")
+    if require_minisign or public_key or minisig.exists():
+        if not minisig.exists():
+            raise ValueError(f"minisign signature required but missing: {minisig}")
+        if not public_key:
+            raise ValueError("minisign public key required for profile verification")
+        from sysspectogram.supply_chain import verify_file as verify_minisign_file
+
+        verify_minisign_file(tar_path, public_key, signature_path=minisig)
 
     dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -148,10 +172,24 @@ def install_profile(
     if manifest.get("schema") != SCHEMA:
         raise ValueError(f"unsupported schema: {manifest.get('schema')}")
     root = manifests[0].parent
+    agent_path = None
+    agent_rel = manifest.get("agent_iforest")
+    if agent_rel:
+        relative = Path(str(agent_rel))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"unsafe agent_iforest path in manifest: {agent_rel}")
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError(f"agent_iforest escapes profile root: {agent_rel}") from exc
+        if not candidate.is_file() or candidate.is_symlink():
+            raise ValueError(f"agent_iforest missing from profile: {agent_rel}")
+        agent_path = str(candidate)
     return {
         "root": str(root),
         "host": str(root / "host"),
-        "agent_iforest": str(root / manifest["agent_iforest"]) if manifest.get("agent_iforest") else None,
+        "agent_iforest": agent_path,
         "manifest": manifest,
         "sha256": digest,
     }

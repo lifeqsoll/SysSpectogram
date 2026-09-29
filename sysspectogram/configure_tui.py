@@ -193,6 +193,18 @@ def run_configure(
     )
 
     model = Prompt.ask("Model artifacts dir", default="artifacts/real_v3")
+    supply_base = _load_yaml(config_path).get("supply_chain") or {}
+    supply_enforce = Confirm.ask(
+        "Enforce signed model manifests? (requires a minisign public key)",
+        default=bool(supply_base.get("enforce", False)),
+    )
+    public_key = Prompt.ask(
+        "Minisign public key path (empty = keep existing)",
+        default=str(supply_base.get("public_key") or ""),
+    )
+    if supply_enforce and not public_key:
+        console.print("[yellow]No public key supplied; keeping supply_chain.enforce=false[/]")
+        supply_enforce = False
 
     console.print("Telegram (empty = keep existing .env):")
     token = Prompt.ask("TELEGRAM_BOT_TOKEN", default="", password=True)
@@ -221,6 +233,12 @@ def run_configure(
         },
         "telegram": {"require_console_unlock": True},
         "model": {"path": model},
+        "supply_chain": {
+            "enforce": supply_enforce,
+            "public_key": public_key or supply_base.get("public_key"),
+            "manifest_name": "artifacts.manifest.json",
+            "signature_name": "artifacts.manifest.json.minisig",
+        },
     }
     apply_overlay(config_path, overlay, role=role_in)
     env_updates = {"SYSSPECTOGRAM_ROLE": role_in}

@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
@@ -27,12 +30,47 @@ jobs:
           cp target/x86_64-unknown-linux-musl/release/sysspectogram-agent \
             ../sysspectogram-agent-x86_64-linux-musl
           sha256sum ../sysspectogram-agent-x86_64-linux-musl | tee ../sysspectogram-agent-x86_64-linux-musl.sha256
+      - name: build Python release assets and SBOM
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m pip install -e .
+          python3 -m build --outdir dist
+          python3 scripts/generate-sbom.py --out dist/sbom.spdx.json \
+            --file sysspectogram-agent-x86_64-linux-musl \
+            --file sysspectogram-agent-x86_64-linux-musl.sha256
+          sha256sum dist/* sysspectogram-agent-x86_64-linux-musl* \
+            | sort -k2 > dist/SHA256SUMS
+      - name: sign release assets with minisign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          test -n "$MINISIGN_SECRET_KEY"
+          test -n "$MINISIGN_PUBLIC_KEY"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_PUBLIC_KEY" > dist/SysSpectogram.minisign.pub
+          while IFS= read -r -d '' asset; do
+            minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$asset" \
+              -x "$asset.minisig" -W
+          done < <(find dist -maxdepth 1 -type f ! -name '*.minisig' ! -name '*.pub' -print0)
+          minisign -S -s "$RUNNER_TEMP/minisign.key" \
+            -m sysspectogram-agent-x86_64-linux-musl \
+            -x sysspectogram-agent-x86_64-linux-musl.minisig -W
+          minisign -S -s "$RUNNER_TEMP/minisign.key" \
+            -m sysspectogram-agent-x86_64-linux-musl.sha256 \
+            -x sysspectogram-agent-x86_64-linux-musl.sha256.minisig -W
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
             sysspectogram-agent-x86_64-linux-musl
             sysspectogram-agent-x86_64-linux-musl.sha256
+            sysspectogram-agent-x86_64-linux-musl.minisig
+            sysspectogram-agent-x86_64-linux-musl.sha256.minisig
+            dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -50,6 +88,25 @@ jobs:
           else
             echo "no packs in dist/ - build on builder PC via role-lab / pack-role.sh"
           fi
+      - name: sign profile packs when present
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          test -n "$MINISIGN_SECRET_KEY"
+          test -n "$MINISIGN_PUBLIC_KEY"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_PUBLIC_KEY" > dist/SysSpectogram.minisign.pub
+          for asset in dist/profile-*.tar.gz dist/profile-*.tar.gz.sha256 dist/SHA256SUMS; do
+            if [[ -f "$asset" ]]; then
+              minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$asset" \
+                -x "$asset.minisig" -W
+            fi
+          done
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -57,5 +114,7 @@ jobs:
             dist/profile-*.tar.gz
             dist/profile-*.tar.gz.sha256
             dist/SHA256SUMS
+            dist/*.minisig
+            dist/SysSpectogram.minisign.pub
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

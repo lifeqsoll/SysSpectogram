@@ -1,0 +1,19 @@
+post_install() {
+  getent group sysspectogram >/dev/null || groupadd --system sysspectogram
+  id sysspectogram >/dev/null 2>&1 || useradd --system --gid sysspectogram \
+    --home-dir /var/lib/sysspectogram --shell /usr/bin/nologin sysspectogram
+  install -d -o sysspectogram -g sysspectogram -m 0750 \
+    /var/lib/sysspectogram/{artifacts,state,reports}
+  if [[ ! -s /var/lib/sysspectogram/state/agent_hmac.secret ]]; then
+    /usr/bin/python -c 'import secrets; print(secrets.token_hex(32))' \
+      > /var/lib/sysspectogram/state/agent_hmac.secret
+  fi
+  chown root:sysspectogram /var/lib/sysspectogram/state/agent_hmac.secret
+  chmod 0640 /var/lib/sysspectogram/state/agent_hmac.secret
+  echo "SysSpectogram installed. Copy signed model artifacts to /var/lib/sysspectogram/artifacts."
+  echo "Enable userspace agent first; CAP_BPF is optional and requires a compatible kernel."
+}
+
+post_upgrade() {
+  post_install
+}

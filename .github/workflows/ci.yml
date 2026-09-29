@@ -17,8 +17,21 @@ jobs:
         run: |
           pip install -U pip
           pip install -e ".[dev,ml]" --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install pip-audit
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
       - run: pytest -q --ignore=tests/test_rolelab.py
       - run: pytest -q tests/test_rolelab.py
+      - name: supply-chain and package checks
+        run: |
+          python scripts/generate-sbom.py --out /tmp/sysspectogram.spdx.json
+          python -m sysspectogram supply-chain sbom --output /tmp/sysspectogram-cli.spdx.json
+          python -m py_compile scripts/generate-sbom.py
+          bash -n scripts/package-smoke.sh scripts/verify-release.sh
+          bash scripts/package-smoke.sh
+          python -m sysspectogram --version
+      - name: dependency audit
+        run: pip-audit --strict
 
   agent:
     runs-on: ubuntu-latest

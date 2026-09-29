@@ -58,6 +58,9 @@ def _update_checksums(model_dir: Path, names: list[str]) -> None:
             lines.append(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {name}")
     if lines:
         (model_dir / "checksums.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        from sysspectogram.supply_chain import write_manifest
+
+        write_manifest(model_dir)
 
 
 def refit_host_iforest(
@@ -66,6 +69,8 @@ def refit_host_iforest(
     *,
     max_rows: int = 400,
     bootstrap_path: Path | None = None,
+    supply_chain: dict[str, Any] | None = None,
+    minisign_secret_key: Path | None = None,
 ) -> dict[str, Any]:
     """Refit iforest.joblib from normal feedback windows (+ optional bootstrap).
 
@@ -76,6 +81,17 @@ def refit_host_iforest(
     t0 = time.time()
     model_dir = Path(model_dir)
     feedback_dir = Path(feedback_dir)
+    policy = dict(supply_chain or {})
+    enforce = bool(policy.get("enforce", False))
+    manifest_name = str(policy.get("manifest_name") or "artifacts.manifest.json")
+    signature_name = str(
+        policy.get("signature_name") or "artifacts.manifest.json.minisig"
+    )
+    signature_path = model_dir / signature_name
+    if enforce and minisign_secret_key is None:
+        raise RuntimeError(
+            "enforced model refit requires --minisign-secret-key to re-sign the manifest"
+        )
     iforest_path = model_dir / "iforest.joblib"
     if not iforest_path.exists():
         raise FileNotFoundError(f"missing {iforest_path}")
@@ -122,7 +138,6 @@ def refit_host_iforest(
     forest = ForestDetector(contamination=contamination, random_state=42)
     forest.fit(tab_n)
     forest.save(iforest_path)
-    _update_checksums(model_dir, ["cnn.pt", "cnn.onnx", "iforest.joblib", "scaler.joblib", "meta.json"])
 
     meta["iforest_refit"] = {
         "ts": time.time(),
@@ -132,6 +147,23 @@ def refit_host_iforest(
         "source": "feedback_iforest",
     }
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    _update_checksums(
+        model_dir,
+        ["cnn.pt", "cnn.onnx", "iforest.joblib", "scaler.joblib", "meta.json"],
+    )
+    from sysspectogram.supply_chain import sign_file, write_manifest
+
+    manifest_path = write_manifest(
+        model_dir,
+        manifest_name=manifest_name,
+        signature_name=signature_name,
+    )
+    resigned = False
+    if minisign_secret_key is not None:
+        sign_file(manifest_path, Path(minisign_secret_key), signature_path=signature_path)
+        resigned = True
+    elif signature_path.exists():
+        signature_path.unlink()
 
     return {
         "ok": True,
@@ -140,6 +172,8 @@ def refit_host_iforest(
         "n_anomaly_labeled": len(anomaly_w),
         "elapsed_sec": round(time.time() - t0, 3),
         "cnn": "unchanged",
+        "manifest": str(manifest_path),
+        "resigned": resigned,
     }
 
 

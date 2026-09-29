@@ -1,0 +1,51 @@
+pkgname=sysspectogram
+pkgver=0.8.0
+pkgrel=1
+install=sysspectogram.install
+pkgdesc='Linux hybrid ML host IDS, perimeter guard, and Rust integrity agent'
+arch=('x86_64')
+url='https://github.com/lifeqsoll/SysSpectogram'
+license=('MIT')
+depends=(
+  'python'
+  'python-numpy'
+  'python-pandas'
+  'python-psutil'
+  'python-scikit-learn'
+  'python-joblib'
+  'python-opencv'
+  'python-matplotlib'
+  'python-pyyaml'
+  'python-rich'
+  'python-dnspython'
+)
+makedepends=('cargo' 'python-build' 'python-installer' 'python-wheel')
+optdepends=(
+  'python-onnxruntime: CPU inference on VPS'
+  'minisign: verify signed releases and model manifests'
+)
+backup=('etc/sysspectogram/config.yaml')
+source=(
+  "$pkgname-$pkgver.tar.gz::https://github.com/lifeqsoll/SysSpectogram/archive/refs/tags/v$pkgver.tar.gz"
+)
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/SysSpectogram-$pkgver"
+  python -m build --wheel --no-isolation --outdir "$srcdir/wheels"
+  (cd agent && cargo build --release --locked --no-default-features)
+}
+
+package() {
+  cd "$srcdir/SysSpectogram-$pkgver"
+  python -m installer --destdir "$pkgdir" "$srcdir"/wheels/*.whl
+  install -Dm755 agent/target/release/sysspectogram-agent \
+    "$pkgdir/usr/bin/sysspectogram-agent"
+  install -Dm640 configs/default.yaml "$pkgdir/etc/sysspectogram/config.yaml"
+  install -Dm644 packaging/distro/sysspectogram-agent.service \
+    "$pkgdir/usr/lib/systemd/system/sysspectogram-agent.service"
+  install -Dm644 packaging/distro/sysspectogram-guard.service \
+    "$pkgdir/usr/lib/systemd/system/sysspectogram-guard.service"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 docs/SUPPLY_CHAIN.md "$pkgdir/usr/share/doc/$pkgname/SUPPLY_CHAIN.md"
+}

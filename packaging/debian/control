@@ -1,0 +1,15 @@
+Source: sysspectogram
+Section: admin
+Priority: optional
+Maintainer: Salfetka <salfetka@users.noreply.github.com>
+Build-Depends: debhelper (>= 13), dh-python, python3-all, python3-build, python3-installer, python3-wheel, cargo
+Standards-Version: 4.6.2
+Homepage: https://github.com/lifeqsoll/SysSpectogram
+
+Package: sysspectogram
+Architecture: any
+Depends: ${python3:Depends}, ${shlibs:Depends}, ${misc:Depends}, python3-numpy, python3-pandas, python3-psutil, python3-sklearn, python3-joblib, python3-opencv, python3-matplotlib, python3-yaml, python3-rich, python3-dnspython
+Suggests: python3-onnxruntime, minisign
+Description: Linux hybrid ML host IDS and integrity agent
+ SysSpectogram combines defensive host anomaly scoring, perimeter monitoring,
+ and a Rust process/integrity agent for Linux VPS and VDS systems.

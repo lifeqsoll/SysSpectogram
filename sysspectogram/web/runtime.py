@@ -55,6 +55,7 @@ def run_web_dashboard(
             infer = load_inferencer(
                 Path(artifacts_dir),
                 runtime="onnx" if (Path(artifacts_dir) / "cnn.onnx").exists() else "torch_ml",
+                supply_chain=config.get("supply_chain") or {},
             )
             threshold = infer.threshold
             columns = list(infer.columns)
