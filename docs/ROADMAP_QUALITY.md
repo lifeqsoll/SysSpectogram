@@ -76,7 +76,7 @@ Cloud VPS ceiling is often best-effort until VMI (host) in v1.0.
 | Track | Work |
 | --- | --- |
 | A | minisign signatures on release binaries, wheels, SBOM, and profile packs; HMAC remains compatible |
-| B | Deterministic SPDX 2.3 SBOM, dependency audit, and opt-in refusal of unsigned model manifests |
+| B | Deterministic SPDX 2.3 SBOM, CI dependency audit, and opt-in refusal of unsigned model manifests |
 | C | Buildable AUR / Debian package recipes with hardened units and CAP_BPF notes |
 | D | Safe `weights_only` checkpoint loading, ONNX-first VPS docs, and joblib quarantine behind verification |
 

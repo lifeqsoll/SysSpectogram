@@ -4,7 +4,7 @@
 
 Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
 
-**Область (v0.8):** защита Linux VPS — всё из v0.7 плюс подписанные manifest'ы артефактов/моделей, детерминированный SPDX SBOM, dependency audit, AUR/Debian-пакеты, безопасная загрузка checkpoint и opt-in enforcement цепочки поставки. Live **VMI** остаётся в **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Область (v0.8):** защита Linux VPS — всё из v0.7 плюс подписанные manifest'ы артефактов/моделей, детерминированный SPDX SBOM, AUR/Debian-пакеты, безопасная загрузка checkpoint и opt-in enforcement цепочки поставки. Live **VMI** остаётся в **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
@@ -607,4 +607,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-**v0.8:** подписи артефактов/моделей, SPDX SBOM, dependency audit, AUR/Debian packaging, safe checkpoint loading и opt-in проверка подписей на VPS. См. [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Дальше: условный VMI в v1.0 для собственного KVM.
+**v0.8:** подписи артефактов/моделей, SPDX SBOM, CI-аудит зависимостей, AUR/Debian packaging, safe checkpoint loading и opt-in проверка подписей на VPS. См. [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Дальше: условный VMI в v1.0 для собственного KVM.

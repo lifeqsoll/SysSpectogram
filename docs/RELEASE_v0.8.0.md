@@ -15,7 +15,7 @@ and a safe model-loading policy.
 - `cnn.pt` loading with `weights_only=True` only; no unsafe arbitrary-object
   fallback.
 - SPDX 2.3 SBOM generator for installed Python and Cargo dependencies.
-- dependency audit configuration for pip, Cargo, and GitHub Actions.
+- CI dependency vulnerability auditing.
 - Buildable AUR and Debian packaging recipes with hardened systemd units.
 - Release verification helper that never executes downloaded assets.
 

@@ -4,7 +4,7 @@
 
 Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
 
-**Scope (v0.8):** Linux VPS defense — all v0.7 operations plus signed artifact/model manifests, deterministic SPDX SBOM, dependency audit, AUR/Debian packages, safe checkpoint loading, and opt-in supply-chain enforcement. Live **VMI** remains deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Scope (v0.8):** Linux VPS defense — all v0.7 operations plus signed artifact/model manifests, deterministic SPDX SBOM, AUR/Debian packages, safe checkpoint loading, and opt-in supply-chain enforcement. Live **VMI** remains deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
 **Related docs:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Role lab](docs/ROLE_LAB.md) · [Day-0](docs/DAY0_VPS.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.8](docs/RELEASE_v0.8.0.md) · [Simulations](simulations/README.md)
 
@@ -612,4 +612,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v0.8** ships signed artifact/model manifests, deterministic SPDX SBOM, dependency audit, AUR/Debian packaging, safe checkpoint loading, and opt-in signed-model enforcement. See [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), and [docs/RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Next: conditional v1.0 VMI for self-hosted KVM.
+**v0.8** ships signed artifact/model manifests, deterministic SPDX SBOM, CI dependency auditing, AUR/Debian packaging, safe checkpoint loading, and opt-in signed-model enforcement. See [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), and [docs/RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Next: conditional v1.0 VMI for self-hosted KVM.
