@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import json
+import tarfile
 from pathlib import Path
 
 from sysspectogram.load_profile import apply_load_profile, PRESETS
@@ -44,10 +47,12 @@ def test_profile_pack_install_roundtrip(tmp_path: Path):
     )
     assert tar.exists()
     assert meta["sha256"]
+    assert meta["manifest"]["schema"] == "sysspectogram.profile.v1"
     dest = tmp_path / "installed"
     info = install_profile(tar, dest, expected_sha256=meta["sha256"])
     assert Path(info["host"]).is_dir()
     assert (Path(info["host"]) / "meta.json").exists()
+    assert (Path(info["host"]) / "artifacts.manifest.json").exists()
 
 
 def test_install_requires_sha256(tmp_path: Path):
@@ -61,3 +66,27 @@ def test_install_requires_sha256(tmp_path: Path):
         assert False, "expected ValueError"
     except ValueError as e:
         assert "sha256" in str(e).lower()
+
+
+def test_install_rejects_agent_iforest_escape(tmp_path: Path):
+    tar = tmp_path / "malicious.tar.gz"
+    manifest = {
+        "schema": "sysspectogram.profile.v1",
+        "name": "p",
+        "role": "ssh",
+        "host_dir": "host",
+        "agent_iforest": "../outside.joblib",
+    }
+    with tarfile.open(tar, "w:gz") as archive:
+        payload = json.dumps(manifest).encode()
+        info = tarfile.TarInfo("p/manifest.json")
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    import hashlib
+
+    digest = hashlib.sha256(tar.read_bytes()).hexdigest()
+    try:
+        install_profile(tar, tmp_path / "installed", expected_sha256=digest)
+        assert False, "expected unsafe agent path rejection"
+    except ValueError as error:
+        assert "unsafe agent_iforest" in str(error)

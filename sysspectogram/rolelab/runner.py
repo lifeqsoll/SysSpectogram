@@ -331,6 +331,7 @@ def train_role_pack(
     out_artifacts: Path,
     pack_out: Path | None = None,
     epochs: int = 12,
+    minisign_secret_key: Path | None = None,
 ) -> dict[str, Any]:
     """build-dataset, train, optional pack from a role-lab directory."""
     from sysspectogram.preprocess.dataset_builder import build_dataset
@@ -395,6 +396,7 @@ def train_role_pack(
             host_artifacts=out_artifacts,
             out_tar=Path(pack_out),
             description=f"Role-lab baseline for {role} (PC synthetic/hybrid).",
+            minisign_secret_key=minisign_secret_key,
         )
         result["pack"] = info
         try:

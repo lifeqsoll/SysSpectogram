@@ -87,10 +87,16 @@ Notable **v0.6** keys:
 | `kirk` | `auto_isolate` | `false` | CRITICAL kirk → nft `ss_kirk` (set `allow_ssh_cidrs`) |
 | `kirk` | `vmi` | `false` | Reserved; live VMI → **v1.0** ([VMI.md](VMI.md)) |
 | `ensemble` | `host_weight` / `agent_weight` | see yaml | Fuse host ML + agent IF → `risk` |
+| `supply_chain` | `enforce` | `false` | Verify manifest and minisign signature before model deserialization |
+| `supply_chain` | `public_key` | `null` | Minisign public key file or key string used when enforcement is enabled |
+| `supply_chain` | `manifest_name` | `artifacts.manifest.json` | Model manifest filename |
+| `supply_chain` | `signature_name` | `artifacts.manifest.json.minisig` | Minisign sidecar filename |
 
 ---
 
 ## Environment notes
 
+- v0.8: supply-chain enforcement is opt-in for compatibility. `configure` can
+  enable it only when a public key is supplied. See [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
 - v0.6: agent HMAC + PID allowlist + exe seal; root watch in Rust; Role Lab; feedback. VMI deferred to v1.0.
 - Changing `max_cores` or feature schema requires rebuilding the dataset and retraining; old artifacts will not match new column layouts.

@@ -61,7 +61,10 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
 
     data = apply_load_profile(data)
     # notorch: don't fuse host CNN weight unless user overrode
-    runtime = str(data.get("runtime") or "notorch").strip().lower()
+    runtime_raw = data.get("runtime")
+    if isinstance(runtime_raw, dict):
+        runtime_raw = runtime_raw.get("prefer")
+    runtime = str(runtime_raw or "notorch").strip().lower()
     data["runtime"] = runtime
     if runtime == "notorch":
         ens = data.setdefault("ensemble", {})
@@ -74,4 +77,12 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
             ens["agent_weight"] = 1.0
     if data.get("ensemble", {}).get("risk_threshold") is None:
         data.setdefault("ensemble", {})["risk_threshold"] = 0.7
+    supply = data.setdefault("supply_chain", {})
+    supply["enforce"] = bool(supply.get("enforce", False))
+    supply["manifest_name"] = str(
+        supply.get("manifest_name") or "artifacts.manifest.json"
+    )
+    supply["signature_name"] = str(
+        supply.get("signature_name") or "artifacts.manifest.json.minisig"
+    )
     return data

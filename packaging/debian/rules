@@ -1,0 +1,25 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE=1
+
+%:
+	dh $@ --with python3
+
+override_dh_auto_build:
+	python3 -m build --wheel --no-isolation --outdir debian/.dist
+	cd agent && cargo build --release --locked --no-default-features
+
+override_dh_auto_install:
+	python3 -m installer --destdir=debian/sysspectogram debian/.dist/*.whl
+	install -D -m 0755 agent/target/release/sysspectogram-agent \
+		debian/sysspectogram/usr/bin/sysspectogram-agent
+	install -D -m 0640 configs/default.yaml \
+		debian/sysspectogram/etc/sysspectogram/config.yaml
+	install -D -m 0644 packaging/distro/sysspectogram-agent.service \
+		debian/sysspectogram/lib/systemd/system/sysspectogram-agent.service
+	install -D -m 0644 packaging/distro/sysspectogram-guard.service \
+		debian/sysspectogram/lib/systemd/system/sysspectogram-guard.service
+	install -D -m 0644 LICENSE \
+		debian/sysspectogram/usr/share/doc/sysspectogram/copyright
+	install -D -m 0644 docs/SUPPLY_CHAIN.md \
+		debian/sysspectogram/usr/share/doc/sysspectogram/SUPPLY_CHAIN.md

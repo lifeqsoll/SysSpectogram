@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+if ! getent group sysspectogram >/dev/null; then
+    addgroup --system sysspectogram
+fi
+if ! id sysspectogram >/dev/null 2>&1; then
+    adduser --system --ingroup sysspectogram --home /var/lib/sysspectogram \
+        --shell /usr/sbin/nologin sysspectogram
+fi
+install -d -o sysspectogram -g sysspectogram -m 0750 \
+    /var/lib/sysspectogram/artifacts /var/lib/sysspectogram/state \
+    /var/lib/sysspectogram/reports
+if [ ! -s /var/lib/sysspectogram/state/agent_hmac.secret ]; then
+    python3 -c 'import secrets; print(secrets.token_hex(32))' \
+        > /var/lib/sysspectogram/state/agent_hmac.secret
+fi
+chown root:sysspectogram /var/lib/sysspectogram/state/agent_hmac.secret
+chmod 0640 /var/lib/sysspectogram/state/agent_hmac.secret
+
+#DEBHELPER#
+exit 0

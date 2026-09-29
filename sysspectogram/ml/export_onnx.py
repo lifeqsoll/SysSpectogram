@@ -28,10 +28,11 @@ def export_cnn_onnx(
 
     try:
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    except TypeError:
-        ckpt = torch.load(ckpt_path, map_location="cpu")
-    except Exception:
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    except TypeError as exc:
+        raise RuntimeError(
+            "installed PyTorch does not support safe weights_only loading; "
+            "upgrade PyTorch before exporting cnn.pt"
+        ) from exc
 
     if not isinstance(ckpt, dict) or "state_dict" not in ckpt:
         raise RuntimeError("cnn.pt missing state_dict")
@@ -73,6 +74,9 @@ def export_cnn_onnx(
             h = hashlib.sha256(f.read_bytes()).hexdigest()
             lines.append(f"{h}  {name}")
     (artifacts_dir / "checksums.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    from sysspectogram.supply_chain import write_manifest
+
+    write_manifest(artifacts_dir)
 
     return {
         "onnx": str(out_path.resolve()),

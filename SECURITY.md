@@ -4,7 +4,9 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.6.x | yes |
+| 0.8.x | yes |
+| 0.7.x | security fixes only |
+| 0.6.x | security fixes only |
 | 0.5.x | best-effort |
 | < 0.5 | best-effort |
 
@@ -25,7 +27,13 @@ Target response: triage within 72 hours.
   (`state/agent_hmac.secret` / `SYSSPECTOGRAM_AGENT_HMAC`).
 - Binary exe seal rejects swapped agent processes.
 - Telegram control plane requires console unlock code.
-- Profile packs: verify sha256 / HMAC `.sig`; prefer packs you built.
+- Profile packs: verify SHA-256 and minisign in production; HMAC `.sig` remains
+  compatible for local packs.
+- Model manifests can be enforced before any Torch/joblib/ONNX deserialization;
+  `cnn.pt` uses `weights_only=True` only. See [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).
+- Distro guard and monitor units run as the dedicated `sysspectogram` account;
+  the packaged agent defaults to userspace and does not receive eBPF
+  capabilities unless an operator installs a reviewed drop-in.
 
 ## What we will not ship
 

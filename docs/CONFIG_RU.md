@@ -121,9 +121,23 @@ CLI `--window` / `--stride` у `build-dataset` перекрывают эти з�
 
 `root_watch.enabled` (Python) — только если агент выключен. Сессии SSH: `sessions.*` ([SESSIONS.md](SESSIONS.md)).
 
+## `supply_chain` (v0.8)
+
+| Ключ | Смысл |
+| --- | --- |
+| `enforce` | `false` для совместимости; при `true` manifest и minisign должны пройти проверку до загрузки модели |
+| `public_key` | Путь к публичному minisign-ключу |
+| `manifest_name` | Имя manifest, по умолчанию `artifacts.manifest.json` |
+| `signature_name` | Имя подписи, по умолчанию `artifacts.manifest.json.minisig` |
+
+Подробная процедура: [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md). `configure` не
+включает enforcement без public key. `--insecure` для profile pull/install —
+только явный аварийный escape hatch.
+
 ---
 
 ## Замечания
 
+- v0.8: подписи артефактов, SPDX SBOM, AUR/Debian packaging и safe checkpoint loading.
 - v0.6: HMAC + PID allowlist, root watch в Rust, Role Lab, feedback. VMI → v1.0.  
 - Смена `max_cores` или схемы признаков требует нового датасета и переобучения.

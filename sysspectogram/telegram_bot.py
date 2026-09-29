@@ -133,6 +133,7 @@ class TelegramBot:
         audit: Any | None = None,
         widen_rules: str | bool | None = "comm_prefix",
         if_refit: bool = False,
+        supply_chain: dict[str, Any] | None = None,
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -161,6 +162,7 @@ class TelegramBot:
         self.audit = audit
         self.widen_rules = widen_rules
         self.if_refit = bool(if_refit)
+        self.supply_chain = dict(supply_chain or {})
         self.last_host_window = None
         self.last_host_columns: list[str] | None = None
         self.last_host_score: float | None = None
@@ -1262,6 +1264,7 @@ class TelegramBot:
                 infer = load_inferencer(
                     Path(self.model_dir),
                     runtime="onnx" if (Path(self.model_dir) / "cnn.onnx").exists() else "torch_ml",
+                    supply_chain=self.supply_chain,
                 )
                 columns = infer.columns
                 buf: deque = deque(maxlen=infer.window_size)

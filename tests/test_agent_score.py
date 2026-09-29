@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from sysspectogram.agent_score import (
     FEATURE_NAMES,
@@ -37,3 +38,10 @@ def test_train_agent_iforest(tmp_path):
     assert scorer.model is not None
     score = scorer.score(np.zeros(len(FEATURE_NAMES)))
     assert 0.0 <= score <= 1.0
+
+
+def test_enforced_agent_iforest_requires_signature(tmp_path):
+    model = tmp_path / "agent_iforest.joblib"
+    model.write_bytes(b"untrusted")
+    with pytest.raises(RuntimeError, match="signature"):
+        AgentIsolationScorer(model, supply_chain={"enforce": True})

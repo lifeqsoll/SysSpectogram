@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 import numpy as np
 
@@ -35,6 +35,7 @@ def load_inferencer(
     *,
     runtime: str = "torch_ml",
     device: str | None = None,
+    supply_chain: Mapping[str, Any] | None = None,
 ) -> _InferBackend:
     """Pick backend: notorch raises; onnx prefers cnn.onnx; torch_ml uses cnn.pt."""
     artifacts_dir = Path(artifacts_dir)
@@ -45,14 +46,37 @@ def load_inferencer(
     if runtime == "onnx" or (runtime != "torch_ml" and onnx_path.exists()):
         from sysspectogram.ml.infer_onnx import OnnxEnsembleInferencer
 
-        return OnnxEnsembleInferencer(artifacts_dir)
-    return EnsembleInferencer(artifacts_dir, device=device)
+        return OnnxEnsembleInferencer(artifacts_dir, supply_chain=supply_chain)
+    return EnsembleInferencer(artifacts_dir, device=device, supply_chain=supply_chain)
 
 
 class EnsembleInferencer:
     """Torch CNN + IsolationForest (requires torch / pip install -e '.[ml]')."""
 
-    def __init__(self, artifacts_dir: Path, device: str | None = None) -> None:
+    def __init__(
+        self,
+        artifacts_dir: Path,
+        device: str | None = None,
+        *,
+        supply_chain: Mapping[str, Any] | None = None,
+    ) -> None:
+        from sysspectogram.supply_chain import open_verified_artifact, verify_artifacts
+
+        policy = dict(supply_chain or {})
+        self._supply_enforced = bool(policy.get("enforce", False))
+        self._supply_manifest_name = str(
+            policy.get("manifest_name") or "artifacts.manifest.json"
+        )
+        self._supply_signature_name = str(
+            policy.get("signature_name") or "artifacts.manifest.json.minisig"
+        )
+        verify_artifacts(
+            artifacts_dir,
+            enforce=self._supply_enforced,
+            public_key=policy.get("public_key"),
+            manifest_name=self._supply_manifest_name,
+            signature_name=self._supply_signature_name,
+        )
         try:
             import torch
         except ImportError as exc:
@@ -75,19 +99,29 @@ class EnsembleInferencer:
         self._torch = torch
 
         try:
-            ckpt = torch.load(
-                self.artifacts_dir / "cnn.pt",
-                map_location=self.device,
-                weights_only=True,
-            )
-        except TypeError:
-            ckpt = torch.load(self.artifacts_dir / "cnn.pt", map_location=self.device)
-        except Exception:
-            ckpt = torch.load(
-                self.artifacts_dir / "cnn.pt",
-                map_location=self.device,
-                weights_only=False,
-            )
+            if self._supply_enforced:
+                with open_verified_artifact(
+                    self.artifacts_dir,
+                    "cnn.pt",
+                    manifest_name=self._supply_manifest_name,
+                    signature_name=self._supply_signature_name,
+                ) as checkpoint:
+                    ckpt = torch.load(
+                        checkpoint,
+                        map_location=self.device,
+                        weights_only=True,
+                    )
+            else:
+                ckpt = torch.load(
+                    self.artifacts_dir / "cnn.pt",
+                    map_location=self.device,
+                    weights_only=True,
+                )
+        except TypeError as exc:
+            raise RuntimeError(
+                "installed PyTorch does not support safe weights_only loading; "
+                "upgrade PyTorch before loading cnn.pt"
+            ) from exc
         if isinstance(ckpt, dict) and "state_dict" in ckpt:
             height, width = ckpt["height"], ckpt["width"]
             state = ckpt["state_dict"]
@@ -102,8 +136,24 @@ class EnsembleInferencer:
         if checksum_path.exists():
             self._verify_checksums(checksum_path)
 
-        self.forest = ForestDetector.load(self.artifacts_dir / "iforest.joblib")
-        self.scaler = WindowScaler.load(self.artifacts_dir / "scaler.joblib")
+        if self._supply_enforced:
+            with open_verified_artifact(
+                self.artifacts_dir,
+                "iforest.joblib",
+                manifest_name=self._supply_manifest_name,
+                signature_name=self._supply_signature_name,
+            ) as forest_file:
+                self.forest = ForestDetector.load(forest_file)
+            with open_verified_artifact(
+                self.artifacts_dir,
+                "scaler.joblib",
+                manifest_name=self._supply_manifest_name,
+                signature_name=self._supply_signature_name,
+            ) as scaler_file:
+                self.scaler = WindowScaler.load(scaler_file)
+        else:
+            self.forest = ForestDetector.load(self.artifacts_dir / "iforest.joblib")
+            self.scaler = WindowScaler.load(self.artifacts_dir / "scaler.joblib")
 
     def _verify_checksums(self, path: Path) -> None:
         import hashlib

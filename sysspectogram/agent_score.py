@@ -7,7 +7,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -93,10 +93,26 @@ def _path_counts_toward_score(path: str) -> bool:
 class AgentIsolationScorer:
     """Optional IF model; without artifacts uses a simple heuristic score in [0,1]."""
 
-    def __init__(self, model_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        model_path: Path | None = None,
+        *,
+        supply_chain: Mapping[str, Any] | None = None,
+    ) -> None:
         self.model = None
         self.meta: dict[str, Any] = {}
         if model_path and model_path.exists():
+            policy = dict(supply_chain or {})
+            signature_path = Path(f"{model_path}.minisig")
+            if bool(policy.get("enforce", False)) or signature_path.exists():
+                from sysspectogram.supply_chain import verify_file
+
+                public_key = policy.get("public_key")
+                if not public_key:
+                    raise RuntimeError(
+                        "public key required for enforced agent IF signature verification"
+                    )
+                verify_file(model_path, public_key, signature_path=signature_path)
             try:
                 import joblib
 

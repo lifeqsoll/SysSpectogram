@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from rich.console import Console
@@ -17,8 +18,13 @@ def run_analyze(
     artifacts_dir: Path,
     out_path: Path | None = None,
     stride: int = 5,
+    supply_chain: dict[str, Any] | None = None,
 ) -> dict:
-    infer = load_inferencer(artifacts_dir, runtime="onnx" if (artifacts_dir / "cnn.onnx").exists() else "torch_ml")
+    infer = load_inferencer(
+        artifacts_dir,
+        runtime="onnx" if (artifacts_dir / "cnn.onnx").exists() else "torch_ml",
+        supply_chain=supply_chain,
+    )
     df = pd.read_csv(csv_path).fillna(0.0)
     columns = infer.columns or [c for c in df.columns if c != "timestamp"]
     for c in columns:

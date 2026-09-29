@@ -1,0 +1,21 @@
+[Unit]
+Description=SysSpectogram integrity agent
+Documentation=https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/AGENT_PROTECT.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sysspectogram-agent --mode userspace --phoenix \
+  --socket /run/sysspectogram/agent.sock \
+  --pidfile /run/sysspectogram/agent.pid \
+  --hmac-secret /var/lib/sysspectogram/state/agent_hmac.secret \
+  --host-id %H
+RuntimeDirectory=sysspectogram
+StateDirectory=sysspectogram
+Restart=always
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

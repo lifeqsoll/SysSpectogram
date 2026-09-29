@@ -112,6 +112,7 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
         max_cores=int(c.get("max_cores", 16)),
         socket_sample_every=int(c.get("socket_sample_every", 5)),
         jsonl_out=Path(args.jsonl_out) if args.jsonl_out else None,
+        supply_chain=cfg.get("supply_chain") or {},
     )
     return 0
 
@@ -126,6 +127,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         artifacts_dir=Path(args.model),
         out_path=Path(args.out) if args.out else None,
         stride=stride,
+        supply_chain=cfg.get("supply_chain") or {},
     )
     return 0
 
@@ -306,6 +308,9 @@ def _cmd_profiles(args: argparse.Namespace) -> int:
             out_tar=_resolve(args.out),
             agent_iforest=_resolve(args.agent_if) if args.agent_if else None,
             description=args.description or "",
+            minisign_secret_key=(
+                _resolve(args.minisign_secret_key) if args.minisign_secret_key else None
+            ),
         )
         console.print(f"[green]packed[/] {meta['path']} sha256={meta['sha256'][:16]}…")
         return 0
@@ -325,6 +330,8 @@ def _cmd_profiles(args: argparse.Namespace) -> int:
             _resolve(args.dest),
             expected_sha256=args.sha256,
             insecure_no_verify=bool(args.insecure),
+            public_key=_resolve(args.public_key) if args.public_key else None,
+            require_minisign=bool(args.require_signature),
         )
         console.print(f"[green]installed[/] host={info['host']}")
         if info.get("agent_iforest"):
@@ -355,6 +362,10 @@ def _cmd_feedback(args: argparse.Namespace) -> int:
         info = refit_host_iforest(
             _resolve(args.model),
             _resolve(args.feedback_dir),
+            supply_chain=(load_config(args.config).get("supply_chain") or {}),
+            minisign_secret_key=(
+                _resolve(args.minisign_secret_key) if args.minisign_secret_key else None
+            ),
         )
         console.print(f"[green]IF refit[/] {info}")
         return 0
@@ -483,6 +494,74 @@ def _cmd_kirk(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_supply_chain(args: argparse.Namespace) -> int:
+    from sysspectogram.supply_chain import (
+        sign_file,
+        verify_artifacts,
+        verify_file,
+        write_manifest,
+    )
+
+    if args.supply_action == "manifest":
+        path = write_manifest(
+            _resolve(args.root),
+            output=_resolve(args.output) if args.output else None,
+        )
+        console.print(f"[green]manifest[/] {path}")
+        return 0
+    if args.supply_action == "sign":
+        path = sign_file(
+            _resolve(args.file),
+            _resolve(args.secret_key),
+            signature_path=_resolve(args.signature) if args.signature else None,
+        )
+        console.print(f"[green]signed[/] {path}")
+        return 0
+    if args.supply_action == "sbom":
+        from sysspectogram.sbom import write_sbom
+
+        root = _resolve(args.root)
+        output = _resolve(args.output)
+        files = [root / relative for relative in args.file]
+        write_sbom(root, output, include_files=files)
+        console.print(f"[green]sbom[/] {output}")
+        return 0
+    if args.supply_action == "verify":
+        root = _resolve(args.root)
+        if args.file:
+            if not args.public_key:
+                raise ValueError("--public-key is required with --file")
+            verify_file(
+                _resolve(args.file),
+                _resolve(args.public_key),
+                signature_path=_resolve(args.signature) if args.signature else None,
+            )
+            result = {
+                "file_verified": True,
+                "signed": True,
+                "enforced": bool(args.enforce),
+            }
+            manifest = root / "artifacts.manifest.json"
+            if manifest.exists():
+                result.update(
+                    verify_artifacts(
+                        root,
+                        enforce=bool(args.enforce),
+                        public_key=_resolve(args.public_key),
+                    )
+                )
+        else:
+            result = verify_artifacts(
+                root,
+                enforce=bool(args.enforce),
+                public_key=_resolve(args.public_key) if args.public_key else None,
+            )
+        console.print(f"[green]verified[/] {result}")
+        return 0
+    console.print("unknown supply-chain action")
+    return 1
+
+
 def _cmd_role_lab(args: argparse.Namespace) -> int:
     from sysspectogram.rolelab import list_roles, run_role_collect, train_role_pack
 
@@ -513,6 +592,9 @@ def _cmd_role_lab(args: argparse.Namespace) -> int:
             out_artifacts=_resolve(args.out),
             pack_out=_resolve(args.pack) if args.pack else None,
             epochs=int(args.epochs),
+            minisign_secret_key=(
+                _resolve(args.minisign_secret_key) if args.minisign_secret_key else None
+            ),
         )
         console.print(f"[green]trained[/] {info}")
         return 0
@@ -619,6 +701,30 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--no-ct", action="store_true")
     rc.set_defaults(func=_cmd_recon)
 
+    sc = sub.add_parser("supply-chain", help="manifest and minisign artifact trust")
+    sc_sub = sc.add_subparsers(dest="supply_action", required=True)
+    sc_manifest = sc_sub.add_parser("manifest", help="write a deterministic artifact manifest")
+    sc_manifest.add_argument("root")
+    sc_manifest.add_argument("--output", default=None)
+    sc_manifest.set_defaults(func=_cmd_supply_chain)
+    sc_sign = sc_sub.add_parser("sign", help="sign a file with minisign")
+    sc_sign.add_argument("file")
+    sc_sign.add_argument("--secret-key", required=True)
+    sc_sign.add_argument("--signature", default=None)
+    sc_sign.set_defaults(func=_cmd_supply_chain)
+    sc_sbom = sc_sub.add_parser("sbom", help="write a deterministic SPDX 2.3 SBOM")
+    sc_sbom.add_argument("--root", default=".")
+    sc_sbom.add_argument("--output", required=True)
+    sc_sbom.add_argument("--file", action="append", default=[])
+    sc_sbom.set_defaults(func=_cmd_supply_chain)
+    sc_verify = sc_sub.add_parser("verify", help="verify a manifest and optional file signature")
+    sc_verify.add_argument("root")
+    sc_verify.add_argument("--public-key", default=None)
+    sc_verify.add_argument("--file", default=None)
+    sc_verify.add_argument("--signature", default=None)
+    sc_verify.add_argument("--enforce", action="store_true")
+    sc_verify.set_defaults(func=_cmd_supply_chain)
+
     g = sub.add_parser("guard", help="perimeter + host ML + telegram control plane")
     g.add_argument("--model", default=None, help="artifacts directory (optional)")
     g.add_argument("--telegram", action="store_true")
@@ -645,6 +751,11 @@ def build_parser() -> argparse.ArgumentParser:
     pr_pack.add_argument("--out", required=True, help="output .tar.gz path")
     pr_pack.add_argument("--agent-if", default=None, help="optional agent_iforest.joblib")
     pr_pack.add_argument("--description", default="")
+    pr_pack.add_argument(
+        "--minisign-secret-key",
+        default=None,
+        help="optional minisign secret key; writes <pack>.minisig",
+    )
     pr_pack.set_defaults(func=_cmd_profiles)
     pr_pull = pr_sub.add_parser("pull", help="download pack URL")
     pr_pull.add_argument("--url", required=True)
@@ -657,6 +768,12 @@ def build_parser() -> argparse.ArgumentParser:
     pr_inst.add_argument("--dest", required=True)
     pr_inst.add_argument("--sha256", default=None)
     pr_inst.add_argument("--insecure", action="store_true", help="allow install without sha256")
+    pr_inst.add_argument("--public-key", default=None, help="minisign public key file/value")
+    pr_inst.add_argument(
+        "--require-signature",
+        action="store_true",
+        help="require <pack>.minisig and verify it before extraction",
+    )
     pr_inst.set_defaults(func=_cmd_profiles)
     pr_ft = pr_sub.add_parser("finetune-help", help="print local fine-tune recipe")
     pr_ft.add_argument("--host", default="artifacts/profiles/local/host")
@@ -745,6 +862,11 @@ def build_parser() -> argparse.ArgumentParser:
     rl_tr.add_argument("--out", required=True, help="artifacts output dir")
     rl_tr.add_argument("--pack", default=None, help="optional profile-*.tar.gz path")
     rl_tr.add_argument("--epochs", type=int, default=12)
+    rl_tr.add_argument(
+        "--minisign-secret-key",
+        default=None,
+        help="sign the optional agent IF and profile pack",
+    )
     rl_tr.set_defaults(func=_cmd_role_lab)
 
     fb = sub.add_parser("feedback", help="operator feedback samples / retrain on builder PC")
@@ -763,6 +885,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fb_if.add_argument("--feedback-dir", default="artifacts/feedback")
     fb_if.add_argument("--model", required=True, help="artifacts dir with iforest.joblib")
+    fb_if.add_argument(
+        "--minisign-secret-key",
+        default=None,
+        help="required to re-sign an enforced model after refit",
+    )
     fb_if.set_defaults(func=_cmd_feedback)
 
     w = sub.add_parser("web", help="live local / Telegram Mini App dashboard")

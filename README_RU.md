@@ -4,11 +4,11 @@
 
 Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
 
-**Область (v0.7):** защита Linux VPS — **configure** (Day-0 в терминале), **ProcessLabelRules** (As normal/anomaly), опциональный IF refit, flow netview, audit, eBPF setuid, notorch/ONNX, Rust-агент, Kirk. Live **VMI** → **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Область (v0.8):** защита Linux VPS — всё из v0.7 плюс подписанные manifest'ы артефактов/моделей, детерминированный SPDX SBOM, dependency audit, AUR/Debian-пакеты, безопасная загрузка checkpoint и opt-in enforcement цепочки поставки. Live **VMI** остаётся в **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
-**Документы:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.7](docs/RELEASE_v0.7.0.md) · [Симуляции](simulations/README_RU.md)
+**Документы:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.8](docs/RELEASE_v0.8.0.md) · [Симуляции](simulations/README_RU.md)
 
 ### Что нового в v0.7
 
@@ -607,4 +607,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-**v0.7:** `configure` Day-0, ProcessLabelRules, netview, audit, IF refit, eBPF setuid. См. [CONFIGURE.md](docs/CONFIGURE.md), [FEEDBACK.md](docs/FEEDBACK.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.7.0.md](docs/RELEASE_v0.7.0.md). Дальше: v0.8 supply chain.
+**v0.8:** подписи артефактов/моделей, SPDX SBOM, dependency audit, AUR/Debian packaging, safe checkpoint loading и opt-in проверка подписей на VPS. См. [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Дальше: условный VMI в v1.0 для собственного KVM.
