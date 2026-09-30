@@ -26,9 +26,23 @@ existing checksum file. It excludes only the manifest and its signature.
 Keep the secret key off the VPS and out of Git:
 
 ```bash
-minisign -G -p sysspectogram.minisign.pub -s sysspectogram.minisign.key
+# CI-friendly: empty password (still keep the file mode 600 / in GitHub Secrets)
+minisign -G -W -p sysspectogram.minisign.pub -s sysspectogram.minisign.key
 chmod 600 sysspectogram.minisign.key
 ```
+
+For GitHub Actions `release-assets`:
+
+```bash
+# put the exact key file into the repo secret (preserves newlines)
+gh secret set MINISIGN_SECRET_KEY < sysspectogram.minisign.key
+# public key as a repository variable (Settings → Variables), or:
+gh variable set MINISIGN_PUBLIC_KEY < sysspectogram.minisign.pub
+```
+
+If the secret key is password-protected, also set `MINISIGN_PASSWORD` as a
+repository secret. Encrypted keys with a wrong/missing password fail CI with
+`Wrong password for that key`.
 
 Sign a manifest:
 

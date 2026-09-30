@@ -25,7 +25,8 @@ v0.5  shipped     Adopt + Kirk best-effort + trust probe
 v0.6  shipped     Auth, self-protect, agent root watch, Role Lab, feedback, CI
 v0.7  shipping    Configure TUI, ProcessLabelRules, FP digests, netview, audit, eBPF setuid
 v0.8  shipped     Supply chain (minisign), SBOM, distro-ready packaging, model quarantine
-v0.9  shipping    Safe artifacts, remote sinks, FIM, hybrid watchdog, Day-0/eval/threat, docs UX
+v0.9  shipped     Safe artifacts, remote sinks, FIM, hybrid watchdog, Day-0/eval/threat, docs UX
+v0.9.x patch      Release-assets signing reliability, AUR/deb polish, alert fanout coverage
 v1.0  ceiling     Optional VMI (self-host KVM only)
 v1.x  ecosystem   AUR/deb, Prometheus, community packs, EN/RU Day-0
 ```

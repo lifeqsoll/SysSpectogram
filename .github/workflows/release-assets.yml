@@ -44,27 +44,44 @@ jobs:
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq minisign
-          test -n "$MINISIGN_SECRET_KEY"
-          test -n "$MINISIGN_PUBLIC_KEY"
-          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
-          chmod 600 "$RUNNER_TEMP/minisign.key"
+          test -n "${MINISIGN_SECRET_KEY:-}"
+          test -n "${MINISIGN_PUBLIC_KEY:-}"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          raw = os.environ["MINISIGN_SECRET_KEY"].replace("\r\n", "\n").strip("\n") + "\n"
+          if "\\n" in raw and raw.count("\n") < 2:
+              raw = raw.replace("\\n", "\n")
+          path = Path(os.environ["RUNNER_TEMP"]) / "minisign.key"
+          path.write_text(raw)
+          path.chmod(0o600)
+          first = path.read_text().splitlines()[0]
+          if "secret key" not in first.lower() and not first.startswith("RWR"):
+              raise SystemExit(f"MINISIGN_SECRET_KEY looks malformed (first line: {first[:60]!r})")
+          print(f"secret key lines={len(path.read_text().splitlines())}")
+          PY
           printf '%s\n' "$MINISIGN_PUBLIC_KEY" > dist/SysSpectogram.minisign.pub
+          sign_one() {
+            # passworded keys need MINISIGN_PASSWORD; empty-password keys get a blank line
+            printf '%s\n' "${MINISIGN_PASSWORD-}" | minisign -S \
+              -s "$RUNNER_TEMP/minisign.key" -m "$1" -x "$2"
+          }
           while IFS= read -r -d '' asset; do
-            minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$asset" \
-              -x "$asset.minisig" -W
+            sign_one "$asset" "$asset.minisig"
           done < <(find dist -maxdepth 1 -type f ! -name '*.minisig' ! -name '*.pub' -print0)
-          minisign -S -s "$RUNNER_TEMP/minisign.key" \
-            -m sysspectogram-agent-x86_64-linux-musl \
-            -x sysspectogram-agent-x86_64-linux-musl.minisig -W
-          minisign -S -s "$RUNNER_TEMP/minisign.key" \
-            -m sysspectogram-agent-x86_64-linux-musl.sha256 \
-            -x sysspectogram-agent-x86_64-linux-musl.sha256.minisig -W
+          sign_one sysspectogram-agent-x86_64-linux-musl \
+            sysspectogram-agent-x86_64-linux-musl.minisig
+          sign_one sysspectogram-agent-x86_64-linux-musl.sha256 \
+            sysspectogram-agent-x86_64-linux-musl.sha256.minisig
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          fail_on_unmatched_files: false
           files: |
             sysspectogram-agent-x86_64-linux-musl
             sysspectogram-agent-x86_64-linux-musl.sha256
@@ -83,6 +100,7 @@ jobs:
           python-version: "3.12"
       - name: upload local dist packs if present
         run: |
+          mkdir -p dist
           if ls dist/profile-*.tar.gz 1>/dev/null 2>&1; then
             sha256sum dist/profile-*.tar.gz | tee dist/SHA256SUMS
           else
@@ -93,23 +111,41 @@ jobs:
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob
+          packs=(dist/profile-*.tar.gz)
+          if (( ${#packs[@]} == 0 )); then
+            echo "no profile packs to sign — skip"
+            exit 0
+          fi
           sudo apt-get update -qq
           sudo apt-get install -y -qq minisign
-          test -n "$MINISIGN_SECRET_KEY"
-          test -n "$MINISIGN_PUBLIC_KEY"
-          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
-          chmod 600 "$RUNNER_TEMP/minisign.key"
+          test -n "${MINISIGN_SECRET_KEY:-}"
+          test -n "${MINISIGN_PUBLIC_KEY:-}"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          raw = os.environ["MINISIGN_SECRET_KEY"].replace("\r\n", "\n").strip("\n") + "\n"
+          if "\\n" in raw and raw.count("\n") < 2:
+              raw = raw.replace("\\n", "\n")
+          path = Path(os.environ["RUNNER_TEMP"]) / "minisign.key"
+          path.write_text(raw)
+          path.chmod(0o600)
+          PY
           printf '%s\n' "$MINISIGN_PUBLIC_KEY" > dist/SysSpectogram.minisign.pub
           for asset in dist/profile-*.tar.gz dist/profile-*.tar.gz.sha256 dist/SHA256SUMS; do
             if [[ -f "$asset" ]]; then
-              minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$asset" \
-                -x "$asset.minisig" -W
+              printf '%s\n' "${MINISIGN_PASSWORD-}" | minisign -S \
+                -s "$RUNNER_TEMP/minisign.key" -m "$asset" -x "$asset.minisig"
             fi
           done
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          fail_on_unmatched_files: false
           files: |
             dist/profile-*.tar.gz
             dist/profile-*.tar.gz.sha256
