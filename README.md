@@ -4,21 +4,61 @@
 
 Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
 
-**Scope (v0.8):** Linux VPS defense — all v0.7 operations plus signed artifact/model manifests, deterministic SPDX SBOM, AUR/Debian packages, safe checkpoint loading, and opt-in supply-chain enforcement. Live **VMI** remains deferred to **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Scope (v0.9):** v0.8 supply-chain plus pickle-free model artifacts, remote alert sinks, default FIM baselines, hybrid watchdog (Phoenix + optional DKMS), and clearer Day-0 docs. Live **VMI** remains **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
-**Related docs:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Recipes](docs/RECIPES.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Role lab](docs/ROLE_LAB.md) · [Day-0](docs/DAY0_VPS.md) · [VMI](docs/VMI.md) · [Profiles](docs/PROFILES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.8](docs/RELEASE_v0.8.0.md) · [Simulations](simulations/README.md)
+### Docs (by topic)
 
-### What's new in v0.8
+**Deploy & configure:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Day-0](docs/DAY0_VPS.md) · [Golden path](docs/GOLDEN_PATH.md) · [Profiles](docs/PROFILES.md)
+
+**Defense components:** [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [VMI](docs/VMI.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Supply chain story](docs/SUPPLY_CHAIN_STORY.md)
+
+**Control surfaces:** [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md)
+
+**Data / ML ops:** [Recipes](docs/RECIPES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Role lab](docs/ROLE_LAB.md) · [Simulations](simulations/README.md)
+
+**Roadmap & releases:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+
+### What's new in v0.9
+
+| Piece | Status |
+| --- | --- |
+| Pickle-free `scaler.json` + `iforest.ssf.npz` (joblib runtime removed) | yes |
+| Alert fan-out: file / syslog / HTTPS | yes |
+| FIM baseline on disk; enabled on `lite` profile | yes |
+| Hybrid watchdog: Phoenix harden + optional DKMS `sysspectogram_wd` | yes (kmod opt-in) |
+| Narrow `kirk.auto_isolate_host_risk` (default off) | yes |
+| Grouped README docs + ONNX VPS path + agent operator notes | yes |
+
+### Limitations (honest)
+
+Same-host root can still stop services and wipe local logs. Remote alert sinks and signed manifests reduce silence/subversion; they do **not** make the tool unkillable. Optional kernel helper is off by default and often unavailable on locked-down cloud kernels. See [SECURITY.md](SECURITY.md).
+
+### VPS inference path (ONNX, no Torch)
+
+```bash
+# On a builder (with Torch):
+python -m sysspectogram train --dataset dataset/out --out artifacts/live
+python -m sysspectogram export-onnx --model artifacts/live
+# optional: migrate legacy joblib → safe formats
+python -m sysspectogram artifacts migrate --model artifacts/live
+
+# On the VPS: prefer ONNX runtime (or notorch without CNN)
+# configs/default.yaml → runtime.prefer: onnx
+# or: export SYSSPECTOGRAM_RUNTIME=onnx
+python -m sysspectogram guard --model artifacts/live --telegram --dry-run
+```
+
+`cnn.onnx` is the recommended VPS CNN artifact; `cnn.pt` is for builder / `runtime: torch_ml`. Details: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md), [CONFIG.md](docs/CONFIG.md).
+
+### What's new in v0.8 (carried)
 
 | Piece | Status |
 | --- | --- |
 | Minisign + `artifacts.manifest.json` (SHA-256) | yes — [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) |
 | Deterministic SPDX 2.3 SBOM | yes |
-| Opt-in `supply_chain.enforce` on guard / monitor / web / Telegram | yes |
+| Opt-in `supply_chain.enforce` | yes |
 | Safe `cnn.pt` load (`weights_only=True`) | yes |
 | AUR + Debian packaging recipes | yes — `packaging/` |
-| Release verify helper (never executes downloads) | yes |
-| All v0.7 ops (`configure`, ProcessLabelRules, flow netview, kirk, …) | yes — carried forward |
 
 ```bash
 source .venv/bin/activate
@@ -156,7 +196,7 @@ The CNN does not watch raw processes. It watches **how the whole host looks over
 
 - **CNN:** small ConvNet on a single-channel 60×N heatmap tensor
 - **Isolation Forest:** tabular stats over the same window (mean/std/max/p95 per feature)
-- Artifacts live in one directory (`cnn.pt`, `iforest.joblib`, `scaler.joblib`, `meta.json`)
+- Artifacts live in one directory (`cnn.onnx` or `cnn.pt`, `iforest.ssf.npz`, `scaler.json`, `meta.json`)
 
 ### Labels for training data
 
@@ -350,7 +390,7 @@ python -m sysspectogram build-dataset \
 | `--stride` | no | config `window.stride` (5) | Step between window starts |
 | `--png` | no | off | Also write PNG previews of windows |
 
-Writes `dataset/meta.json` and `dataset/scaler.joblib`.
+Writes `dataset/meta.json` and `dataset/scaler.json`.
 
 ---
 
@@ -538,11 +578,12 @@ Alerts send a **dual heatmap** (metrics + top-PID CPU% over time) plus pattern l
 | `data/*.csv` | Raw metric time series |
 | `dataset/train/{normal,anomaly}/*.npy` | Scaled windows |
 | `dataset/val/...` | Validation windows |
-| `dataset/scaler.joblib` | Fitted scaler |
+| `dataset/scaler.json` | Fitted scaler (pickle-free) |
 | `dataset/meta.json` | Columns, window, counts |
-| `artifacts/cnn.pt` | CNN weights + shape metadata |
-| `artifacts/iforest.joblib` | Isolation Forest |
-| `artifacts/scaler.joblib` | Copy of scaler for inference |
+| `artifacts/cnn.pt` | CNN weights + shape metadata (builder / torch_ml) |
+| `artifacts/cnn.onnx` | Recommended VPS CNN |
+| `artifacts/iforest.ssf.npz` | Isolation Forest (safe) |
+| `artifacts/scaler.json` | Copy of scaler for inference |
 | `artifacts/meta.json` | Threshold, fusion weights, metrics, columns |
 | `reports/*.json` | Analyze / audit reports |
 | `reports/*.jsonl` | Streaming alerts from `monitor` |
@@ -612,4 +653,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v0.8** ships signed artifact/model manifests, deterministic SPDX SBOM, AUR/Debian packaging, safe checkpoint loading, and opt-in signed-model enforcement. See [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), and [docs/RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Next: conditional v1.0 VMI for self-hosted KVM.
+**v0.9** adds pickle-free model artifacts, remote alert sinks, default FIM baselines, hybrid watchdog, and clearer docs. See [docs/RELEASE_v0.9.0.md](docs/RELEASE_v0.9.0.md), [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), and [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Next: conditional v1.0 VMI for self-hosted KVM.

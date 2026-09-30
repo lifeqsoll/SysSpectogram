@@ -48,7 +48,7 @@ def test_refit_host_iforest(tmp_path: Path):
     model.mkdir()
     # bootstrap forest
     x = np.random.randn(20, 32).astype(np.float32)
-    ForestDetector(contamination=0.1).fit(x).save(model / "iforest.joblib")
+    ForestDetector(contamination=0.1).fit(x).save(model / "iforest.ssf.npz")
     (model / "meta.json").write_text('{"iforest_contamination": 0.05}\n', encoding="utf-8")
 
     fb = tmp_path / "feedback"
@@ -61,4 +61,4 @@ def test_refit_host_iforest(tmp_path: Path):
     info = refit_host_iforest(model, fb)
     assert info["ok"] is True
     assert info["cnn"] == "unchanged"
-    assert (model / "iforest.joblib").exists()
+    assert (model / "iforest.ssf.npz").exists()

@@ -8,7 +8,8 @@ We do **not** claim unkillable under a hostile kernel.
 | Layer | Behavior |
 | --- | --- |
 | systemd | `Restart=always`, SIGTERM stop -> CLEAN_SHUTDOWN |
-| Phoenix | `--phoenix` spawns `--role watchdog` twin that respawns agent on unexpected death |
+| Phoenix | `--phoenix` spawns `--role watchdog` twin that respawns agent on unexpected death; writes `state/watchdog_last_respawn.txt` |
+| Kernel helper | Optional DKMS `sysspectogram_wd` PID registry (`watchdog.kernel_protect`, default off) — [kmod README](../packaging/kmod/sysspectogram_wd/README.md) |
 | Install check | Warn if binary world-writable / not under `/usr/local/sbin` |
 | CLEAN_SHUTDOWN | SIGTERM emits signed `agent_kirk_clean_shutdown`; guard suppresses Dead-man |
 | SIGKILL / crash | No clean marker -> watchdog respawn + guard `agent_kirk_agent_down` |

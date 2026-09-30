@@ -9,10 +9,8 @@ from typing import Any, Mapping
 import numpy as np
 
 from sysspectogram.ml.ensemble import fuse_scores
-from sysspectogram.ml.forest import ForestDetector
 from sysspectogram.ml.infer import Prediction
 from sysspectogram.preprocess.heatmap import tabular_features, window_to_tensor
-from sysspectogram.preprocess.scaler import WindowScaler
 
 
 class OnnxEnsembleInferencer:
@@ -73,24 +71,22 @@ class OnnxEnsembleInferencer:
             onnx_source, providers=["CPUExecutionProvider"]
         )
         self._input_name = self.session.get_inputs()[0].name
-        if self._supply_enforced:
-            with open_verified_artifact(
-                self.artifacts_dir,
-                "iforest.joblib",
-                manifest_name=self._supply_manifest_name,
-                signature_name=self._supply_signature_name,
-            ) as forest_file:
-                self.forest = ForestDetector.load(forest_file)
-            with open_verified_artifact(
-                self.artifacts_dir,
-                "scaler.joblib",
-                manifest_name=self._supply_manifest_name,
-                signature_name=self._supply_signature_name,
-            ) as scaler_file:
-                self.scaler = WindowScaler.load(scaler_file)
-        else:
-            self.forest = ForestDetector.load(self.artifacts_dir / "iforest.joblib")
-            self.scaler = WindowScaler.load(self.artifacts_dir / "scaler.joblib")
+        from sysspectogram.safe_artifacts import load_forest_for_artifacts, load_scaler_for_artifacts
+
+        self.forest = load_forest_for_artifacts(
+            self.artifacts_dir,
+            enforce=self._supply_enforced,
+            open_verified=open_verified_artifact if self._supply_enforced else None,
+            manifest_name=self._supply_manifest_name,
+            signature_name=self._supply_signature_name,
+        )
+        self.scaler = load_scaler_for_artifacts(
+            self.artifacts_dir,
+            enforce=self._supply_enforced,
+            open_verified=open_verified_artifact if self._supply_enforced else None,
+            manifest_name=self._supply_manifest_name,
+            signature_name=self._supply_signature_name,
+        )
 
     def predict_window(self, window: np.ndarray) -> Prediction:
         scaled = self.scaler.transform(window)

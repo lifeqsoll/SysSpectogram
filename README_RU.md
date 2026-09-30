@@ -4,23 +4,60 @@
 
 Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
 
-**Область (v0.8):** защита Linux VPS — всё из v0.7 плюс подписанные manifest'ы артефактов/моделей, детерминированный SPDX SBOM, AUR/Debian-пакеты, безопасная загрузка checkpoint и opt-in enforcement цепочки поставки. Live **VMI** остаётся в **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Область (v0.9):** всё из v0.8 плюс безопасные артефакты моделей без pickle, удалённые sinks алертов, FIM baseline по умолчанию, hybrid watchdog (Phoenix + optional DKMS). Live **VMI** — **v1.0** ([docs/VMI.md](docs/VMI.md)).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
-**Документы:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Конфиг](docs/CONFIG_RU.md) · [Рецепты](docs/RECIPES_RU.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Day-0](docs/DAY0_VPS.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.8](docs/RELEASE_v0.8.0.md) · [Симуляции](simulations/README_RU.md)
+### Документы (по темам)
 
-### Что нового в v0.8
+**Развёртывание:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md) · [Day-0](docs/DAY0_VPS.md) · [Golden path](docs/GOLDEN_PATH.md) · [Profiles](docs/PROFILES.md)
+
+**Защита:** [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [VMI](docs/VMI.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Supply chain story](docs/SUPPLY_CHAIN_STORY.md)
+
+**Управление:** [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md)
+
+**Данные / ML:** [Рецепты](docs/RECIPES_RU.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Role lab](docs/ROLE_LAB.md) · [Симуляции](simulations/README_RU.md)
+
+**Roadmap:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+
+### Что нового в v0.9
 
 | Часть | Статус |
 | --- | --- |
-| Minisign + `artifacts.manifest.json` (SHA-256) | да — [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) |
-| Детерминированный SPDX 2.3 SBOM | да |
-| Opt-in `supply_chain.enforce` в guard / monitor / web / Telegram | да |
-| Безопасная загрузка `cnn.pt` (`weights_only=True`) | да |
+| `scaler.json` + `iforest.ssf.npz` без pickle (joblib только с env) | да |
+| Alert fan-out: file / syslog / HTTPS | да |
+| FIM baseline на диск; включён в профиле `lite` | да |
+| Hybrid watchdog: Phoenix + optional DKMS | да (kmod opt-in) |
+| Узкий `kirk.auto_isolate_host_risk` (выкл по умолчанию) | да |
+| Сгруппированные доки + ONNX-путь на VPS | да |
+
+### Ограничения (честно)
+
+Root на том же хосте может остановить сервис и стереть локальные логи. Удалённые sinks и подписи уменьшают «тишину», но не делают утилиту неуязвимой. См. [SECURITY.md](SECURITY.md).
+
+### Инференс на VPS (ONNX, без Torch)
+
+```bash
+# На builder:
+python -m sysspectogram train --dataset dataset/out --out artifacts/live
+python -m sysspectogram export-onnx --model artifacts/live
+python -m sysspectogram artifacts migrate --model artifacts/live
+
+# На VPS: runtime.prefer: onnx  (или SYSSPECTOGRAM_RUNTIME=onnx)
+python -m sysspectogram guard --model artifacts/live --telegram --dry-run
+```
+
+Подробнее: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
+
+### Что нового в v0.8 (перенесено)
+
+| Часть | Статус |
+| --- | --- |
+| Minisign + `artifacts.manifest.json` | да — [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) |
+| SPDX SBOM | да |
+| Opt-in `supply_chain.enforce` | да |
+| Safe `cnn.pt` (`weights_only=True`) | да |
 | AUR + Debian packaging | да — `packaging/` |
-| Проверка релиза без исполнения скачанного | да |
-| Всё из v0.7 (`configure`, ProcessLabelRules, flow netview, kirk, …) | да — без регрессии |
 
 ```bash
 source .venv/bin/activate
@@ -155,7 +192,7 @@ CNN не смотрит сырые процессы. Она смотрит, **к
 
 - **CNN** — маленькая сеть по одноканальному тензору 60×N
 - **Isolation Forest** — статистики по тому же окну (mean/std/max/p95)
-- Артефакты в одной папке: `cnn.pt`, `iforest.joblib`, `scaler.joblib`, `meta.json`
+- Артефакты в одной папке: `cnn.onnx` или `cnn.pt`, `iforest.ssf.npz`, `scaler.json`, `meta.json`
 
 ### Разметка
 
@@ -358,7 +395,7 @@ python -m sysspectogram build-dataset \
 | `--stride` | нет | `window.stride` (5) | Шаг между окнами |
 | `--png` | нет | выкл. | Inferno heatmap PNG рядом с каждым `.npy` (превью; train по тензорам) |
 
-Создаёт `meta.json` и `scaler.joblib` в корне датасета.
+Создаёт `meta.json` и `scaler.json` в корне датасета.
 
 ---
 
@@ -539,7 +576,7 @@ python -m sysspectogram audit report --out reports/audit.json
 | --- | --- |
 | `data/*.csv` | Временной ряд метрик |
 | `dataset/train|val/.../*.npy` | Окна |
-| `dataset/scaler.joblib` | Скейлер |
+| `dataset/scaler.json` | Скейлер |
 | `dataset/meta.json` | Колонки, окно, counts |
 | `artifacts/*` | Модель, порог, метрики |
 | `reports/*.json` | Отчёты analyze/audit |
@@ -608,4 +645,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-**v0.8:** подписи артефактов/моделей, SPDX SBOM, CI-аудит зависимостей, AUR/Debian packaging, safe checkpoint loading и opt-in проверка подписей на VPS. См. [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md), [RELEASE_v0.8.0.md](docs/RELEASE_v0.8.0.md). Дальше: условный VMI в v1.0 для собственного KVM.
+**v0.9:** безопасные артефакты без pickle, remote alert sinks, FIM baseline, hybrid watchdog и перегруппированные доки. См. [RELEASE_v0.9.0.md](docs/RELEASE_v0.9.0.md), [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Дальше: условный VMI в v1.0.

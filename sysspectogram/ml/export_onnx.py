@@ -68,7 +68,16 @@ def export_cnn_onnx(
     import hashlib
 
     lines = []
-    for name in ("cnn.pt", "cnn.onnx", "iforest.joblib", "scaler.joblib", "meta.json"):
+    for name in (
+        "cnn.pt",
+        "cnn.onnx",
+        "iforest.ssf.npz",
+        "iforest.ssf.meta.json",
+        "iforest.joblib",
+        "scaler.json",
+        "scaler.joblib",
+        "meta.json",
+    ):
         f = artifacts_dir / name
         if f.exists():
             h = hashlib.sha256(f.read_bytes()).hexdigest()

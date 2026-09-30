@@ -72,7 +72,7 @@ def refit_host_iforest(
     supply_chain: dict[str, Any] | None = None,
     minisign_secret_key: Path | None = None,
 ) -> dict[str, Any]:
-    """Refit iforest.joblib from normal feedback windows (+ optional bootstrap).
+    """Refit iforest.ssf.npz from normal feedback windows (+ optional bootstrap).
 
     CNN / ONNX artifacts are left untouched.
     """
@@ -92,9 +92,10 @@ def refit_host_iforest(
         raise RuntimeError(
             "enforced model refit requires --minisign-secret-key to re-sign the manifest"
         )
-    iforest_path = model_dir / "iforest.joblib"
-    if not iforest_path.exists():
-        raise FileNotFoundError(f"missing {iforest_path}")
+    iforest_path = model_dir / "iforest.ssf.npz"
+    legacy = model_dir / "iforest.joblib"
+    if not iforest_path.exists() and not legacy.exists():
+        raise FileNotFoundError(f"missing iforest artifact under {model_dir}")
 
     normal_w, anomaly_w = _load_feedback_windows(feedback_dir)
     if len(normal_w) < 2:
@@ -149,7 +150,16 @@ def refit_host_iforest(
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     _update_checksums(
         model_dir,
-        ["cnn.pt", "cnn.onnx", "iforest.joblib", "scaler.joblib", "meta.json"],
+        [
+            "cnn.pt",
+            "cnn.onnx",
+            "iforest.ssf.npz",
+            "iforest.ssf.meta.json",
+            "iforest.joblib",
+            "scaler.json",
+            "scaler.joblib",
+            "meta.json",
+        ],
     )
     from sysspectogram.supply_chain import sign_file, write_manifest
 
@@ -178,19 +188,27 @@ def refit_host_iforest(
 
 
 class IForestHotReload:
-    """Watch iforest.joblib mtime and reload ForestDetector in place."""
+    """Watch iforest artifact mtime and reload ForestDetector in place."""
 
     def __init__(self, model_dir: Path) -> None:
+        from sysspectogram.safe_artifacts import resolve_iforest_path
+
         self.model_dir = Path(model_dir)
-        self.path = self.model_dir / "iforest.joblib"
+        try:
+            self.path = resolve_iforest_path(self.model_dir)
+        except FileNotFoundError:
+            self.path = self.model_dir / "iforest.ssf.npz"
         self._mtime: float = 0.0
         self.forest = None
         self._load()
 
     def _load(self) -> bool:
         from sysspectogram.ml.forest import ForestDetector
+        from sysspectogram.safe_artifacts import resolve_iforest_path
 
-        if not self.path.exists():
+        try:
+            self.path = resolve_iforest_path(self.model_dir)
+        except FileNotFoundError:
             return False
         try:
             mtime = self.path.stat().st_mtime
@@ -201,7 +219,11 @@ class IForestHotReload:
             return False
 
     def maybe_reload(self) -> bool:
-        if not self.path.exists():
+        from sysspectogram.safe_artifacts import resolve_iforest_path
+
+        try:
+            self.path = resolve_iforest_path(self.model_dir)
+        except FileNotFoundError:
             return False
         try:
             mtime = self.path.stat().st_mtime

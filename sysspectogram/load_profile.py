@@ -35,7 +35,17 @@ PRESETS: dict[str, dict[str, Any]] = {
             "max_alerts_per_min": 10,
             "poll_ms": 1000,
             "mode": "userspace",
-            "fim": {"enabled": False, "interval_sec": 120, "paths": []},
+            "fim": {
+                "enabled": True,
+                "interval_sec": 300,
+                "paths": [
+                    "/usr/bin/sshd",
+                    "/usr/sbin/sshd",
+                    "/etc/passwd",
+                    "/etc/shadow",
+                    "/etc/sudoers",
+                ],
+            },
         },
         "ensemble": {
             "host_weight": 0.7,

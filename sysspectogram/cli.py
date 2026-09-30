@@ -425,6 +425,17 @@ def _cmd_artifacts(args: argparse.Namespace) -> int:
         )
         console.print(f"[green]pushed[/] → {info['ssh']}:{info['remote']}")
         return 0
+    if args.artifacts_action == "migrate":
+        from sysspectogram.safe_artifacts import migrate_artifacts_dir
+        from sysspectogram.supply_chain import write_manifest
+
+        model = _resolve(args.model)
+        done = migrate_artifacts_dir(
+            model, delete_legacy=bool(getattr(args, "delete_legacy", False))
+        )
+        write_manifest(model)
+        console.print(f"[green]migrated[/] {model}: {done}")
+        return 0
     console.print("unknown artifacts action")
     return 1
 
@@ -804,6 +815,14 @@ def build_parser() -> argparse.ArgumentParser:
     app.add_argument("--remote", required=True, help="e.g. /opt/sysspectogram/artifacts/live")
     app.add_argument("--restart-systemd", default=None)
     app.set_defaults(func=_cmd_artifacts)
+    apm = ap_sub.add_parser("migrate", help="convert legacy joblib scaler/iforest → json/ssf")
+    apm.add_argument("--model", required=True, help="artifacts directory")
+    apm.add_argument(
+        "--delete-legacy",
+        action="store_true",
+        help="remove .joblib files after successful migrate",
+    )
+    apm.set_defaults(func=_cmd_artifacts)
 
     st = sub.add_parser("setup", help="interactive .env / Telegram setup (legacy)")
     st.add_argument("--prefix", default=".", help="install prefix (default: repo root)")

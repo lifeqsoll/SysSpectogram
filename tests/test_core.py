@@ -24,7 +24,7 @@ def test_scaler_roundtrip(tmp_path):
     assert out.shape == (60, 5)
     assert out.min() >= -1e-5
     assert out.max() <= 1.0 + 1e-5
-    path = tmp_path / "scaler.joblib"
+    path = tmp_path / "scaler.json"
     scaler.save(path)
     loaded = WindowScaler.load(path)
     assert np.allclose(loaded.transform(windows[0]), out, atol=1e-5)

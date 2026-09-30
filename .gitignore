@@ -58,3 +58,13 @@ tools/bin/
 
 # --- Rust agent ---
 agent/target/
+
+# --- Optional out-of-tree kmod build debris ---
+packaging/kmod/**/*.ko
+packaging/kmod/**/*.o
+packaging/kmod/**/*.mod
+packaging/kmod/**/*.mod.c
+packaging/kmod/**/Module.symvers
+packaging/kmod/**/modules.order
+packaging/kmod/**/.*.cmd
+packaging/kmod/**/.tmp_versions/

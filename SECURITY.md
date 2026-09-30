@@ -4,7 +4,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.8.x | yes |
+| 0.9.x | yes |
+| 0.8.x | security fixes |
 | 0.7.x | security fixes only |
 | 0.6.x | security fixes only |
 | 0.5.x | best-effort |
@@ -29,11 +30,27 @@ Target response: triage within 72 hours.
 - Telegram control plane requires console unlock code.
 - Profile packs: verify SHA-256 and minisign in production; HMAC `.sig` remains
   compatible for local packs.
-- Model manifests can be enforced before any Torch/joblib/ONNX deserialization;
-  `cnn.pt` uses `weights_only=True` only. See [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).
+- Model manifests can be enforced before any Torch/ONNX/safe-artifact deserialization;
+  `cnn.pt` uses `weights_only=True` only. Legacy joblib requires
+  `SYSSPECTOGRAM_ALLOW_JOBLIB=1` and is refused under enforce. See
+  [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) and [RELEASE_v0.9.0.md](docs/RELEASE_v0.9.0.md).
+- Alert sinks can mirror events off-box (`alerts.sinks`); local jsonl alone is not
+  forensic storage.
+- Hybrid watchdog: Phoenix userspace + optional DKMS module (default off).
+  See [AGENT_PROTECT.md](docs/AGENT_PROTECT.md) and
+  [packaging/kmod/sysspectogram_wd/README.md](packaging/kmod/sysspectogram_wd/README.md).
 - Distro guard and monitor units run as the dedicated `sysspectogram` account;
   the packaged agent defaults to userspace and does not receive eBPF
   capabilities unless an operator installs a reviewed drop-in.
+
+## Same-host ceiling
+
+If an attacker already has root on the monitored VPS, they can stop systemd
+units and delete local files. SysSpectogram aims to make that **noisy** (remote
+sinks, Dead-man, phoenix respawn) — not impossible. Do not market it as
+unkillable EDR.
+
+Threat model: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## What we will not ship
 

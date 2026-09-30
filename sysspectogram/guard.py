@@ -154,9 +154,14 @@ def run_guard(
     kirk_cfg = dict(config.get("kirk") or {})
     kirk_enabled = bool(kirk_cfg.get("enabled", False))
     kirk_auto_isolate = bool(kirk_cfg.get("auto_isolate", False))
+    kirk_auto_isolate_host_risk = bool(kirk_cfg.get("auto_isolate_host_risk", False))
+    kirk_host_risk_threshold = float(kirk_cfg.get("host_risk_threshold", 0.99))
     kirk_allow_cidrs = list(kirk_cfg.get("allow_ssh_cidrs") or [])
     kirk_isolate_ttl = float(kirk_cfg.get("isolate_ttl_sec", 3600))
     kirk_status: dict = {"trust": "best-effort", "report": None, "isolated": False}
+    from sysspectogram.alerts import AlertFanout
+
+    alert_fanout = AlertFanout.from_config(config)
     if kirk_enabled:
         trust_mode = str(kirk_cfg.get("trust") or "auto").strip().lower()
         allowed_labels = {"best-effort", "measured", "auto"}
@@ -765,6 +770,49 @@ def run_guard(
                         "top_features": feats,
                     },
                 )
+            alert_fanout.emit(
+                {
+                    "type": "host_anomaly",
+                    "host_id": host_id,
+                    "score": pred.score,
+                    "threshold": pred.threshold,
+                    "pattern": pattern,
+                    "top_processes": tops,
+                    "top_features": feats,
+                }
+            )
+            if (
+                kirk_enabled
+                and kirk_auto_isolate
+                and kirk_auto_isolate_host_risk
+                and not kirk_status.get("isolated")
+                and float(pred.score) >= kirk_host_risk_threshold
+            ):
+                if not kirk_allow_cidrs:
+                    console.print(
+                        "[red]kirk host-risk isolate skipped[/] - set kirk.allow_ssh_cidrs first"
+                    )
+                else:
+                    try:
+                        msg_iso = nft.kirk_isolate(
+                            allow_cidrs=kirk_allow_cidrs,
+                            ttl_sec=kirk_isolate_ttl,
+                            dry_run=dry_run_actions,
+                        )
+                        if "refused" not in msg_iso and "failed" not in msg_iso:
+                            kirk_status["isolated"] = not dry_run_actions
+                            console.print(f"[red]kirk isolate (host risk)[/] {msg_iso}")
+                            alert_fanout.emit(
+                                {
+                                    "type": "kirk_auto_isolate",
+                                    "reason": "host_risk",
+                                    "score": pred.score,
+                                    "threshold": kirk_host_risk_threshold,
+                                    "message": msg_iso,
+                                }
+                            )
+                    except Exception as exc:
+                        console.print(f"[yellow]kirk host-risk isolate failed[/] {exc}")
             if bot is not None:
                 proc_mat, proc_labels = proc_track.matrix(top_k=8)
                 png = render_alert_panel(
@@ -1267,6 +1315,17 @@ def run_guard(
                     last_alert_sent = time.time()
                     msg = f"agent heartbeat missing ({silence:.0f}s) - agent_kirk_agent_down"
                     console.print(f"[red]{msg}[/]")
+                    try:
+                        alert_fanout.emit(
+                            {
+                                "type": "agent_kirk_agent_down",
+                                "host_id": host_id,
+                                "silence_sec": silence,
+                                "message": msg,
+                            }
+                        )
+                    except Exception:
+                        pass
                     bot = bot_holder["bot"]
                     if bot is not None:
                         try:
@@ -1366,6 +1425,16 @@ def run_guard(
                 if bool(fim_cfg.get("enabled")):
                     cmd.append("--fim")
                     cmd.extend(["--fim-interval-sec", str(int(fim_cfg.get("interval_sec", 60)))])
+                    cmd.extend(
+                        [
+                            "--fim-baseline",
+                            str(
+                                _resolve(
+                                    fim_cfg.get("baseline_path", "state/fim-baseline.json")
+                                )
+                            ),
+                        ]
+                    )
                 jpath = agent_cfg.get("jsonl")
                 if jpath:
                     cmd.extend(["--jsonl", str(_resolve(jpath))])
@@ -1379,6 +1448,9 @@ def run_guard(
                     )
                 else:
                     cmd.append("--no-root-watch")
+                wd_cfg = dict(config.get("watchdog") or {})
+                if bool(wd_cfg.get("phoenix", True)):
+                    cmd.append("--phoenix")
                 try:
                     agent_log = _resolve("state/agent.stderr.log")
                     agent_log.parent.mkdir(parents=True, exist_ok=True)
@@ -1408,6 +1480,23 @@ def run_guard(
                         console.print(
                             f"[green]agent auto_start[/] pid={agent_proc.pid} log={agent_log}"
                         )
+                        if bool(wd_cfg.get("kernel_protect", False)):
+                            try:
+                                from sysspectogram.watchdog_kmod import (
+                                    kernel_module_present,
+                                    register_pid,
+                                )
+
+                                if kernel_module_present():
+                                    register_pid(int(agent_proc.pid))
+                                    console.print("[cyan]watchdog[/] kernel_protect PID registered")
+                                else:
+                                    console.print(
+                                        "[yellow]watchdog[/] kernel_protect enabled but "
+                                        "sysspectogram_wd sysfs missing — continuing userspace-only"
+                                    )
+                            except Exception as exc:
+                                console.print(f"[yellow]watchdog kernel_protect[/] {exc}")
                         try:
                             from sysspectogram.trusted_pids import collect_trusted_pids
 

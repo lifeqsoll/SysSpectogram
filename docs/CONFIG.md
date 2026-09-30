@@ -85,7 +85,12 @@ Notable **v0.6** keys:
 | `sessions` | `enabled` | `true` | Unexpected SSH → Kick / Ban |
 | `kirk` | `trust` | `auto` | Probe IMA+SB/TPM → `best-effort` \| `measured` |
 | `kirk` | `auto_isolate` | `false` | CRITICAL kirk → nft `ss_kirk` (set `allow_ssh_cidrs`) |
+| `kirk` | `auto_isolate_host_risk` | `false` | Also isolate when host ML score ≥ threshold |
+| `kirk` | `host_risk_threshold` | `0.99` | Host-risk isolate threshold |
 | `kirk` | `vmi` | `false` | Reserved; live VMI → **v1.0** ([VMI.md](VMI.md)) |
+| `alerts` | `sinks` | file jsonl | Fan-out `file` / `syslog` / `https` |
+| `watchdog` | `phoenix` / `kernel_protect` | `true` / `false` | Twin + optional DKMS PID registry |
+| `agent.fim` | `enabled` / `baseline_path` | profile | FIM poll + persisted baseline |
 | `ensemble` | `host_weight` / `agent_weight` | see yaml | Fuse host ML + agent IF → `risk` |
 | `supply_chain` | `enforce` | `false` | Verify manifest and minisign signature before model deserialization |
 | `supply_chain` | `public_key` | `null` | Minisign public key file or key string used when enforcement is enabled |

@@ -14,10 +14,46 @@ Optional **eBPF** mode: `execve` / `openat` / module via clang BPF + Aya. See [E
 | New processes | new PID ≈ exec + optional eBPF `execve` |
 | Kernel modules | `/proc/modules` delta + optional eBPF module probes |
 | Unexpected root | same `/proc` walk → `agent_unexpected_root` ([ROOT_WATCH.md](ROOT_WATCH.md)) |
-| FIM | optional sha256 (`--fim`, `full` load profile) |
+| FIM | sha256 poll (`--fim`); baseline at `state/fim-baseline.json` (default on `lite`) |
 | Auth | HMAC + PEERCRED + PID allowlist + exe seal ([AGENT_PROTECT.md](AGENT_PROTECT.md)) |
 
 **Not** a full rootkit killer. Userspace `/proc` can still be lied to by advanced LKM; eBPF helps but is not a silver bullet.
+
+## Operator quickstart
+
+How the agent talks to Python `guard`:
+
+```mermaid
+flowchart LR
+  Agent[sysspectogram-agent] -->|"Unix socket JSON"| Guard[guard]
+  Guard --> TG[Telegram / web]
+  Guard --> Sinks[alert sinks]
+```
+
+Typical paths:
+
+1. **Preferred:** `guard` with `agent.auto_start: true` (spawns agent + optional `--phoenix`).
+2. **systemd:** [packaging/distro/sysspectogram-agent.service](../packaging/sysspectogram-agent.service).
+3. **Standalone:**
+
+```bash
+sudo install -m 0755 -o root -g root \
+  agent/target/release/sysspectogram-agent /usr/local/sbin/sysspectogram-agent
+sudo /usr/local/sbin/sysspectogram-agent \
+  --mode userspace \
+  --phoenix \
+  --fim \
+  --fim-baseline state/fim-baseline.json \
+  --socket /run/sysspectogram/agent.sock \
+  --hmac-secret /var/lib/sysspectogram/state/agent_hmac.secret \
+  --pidfile /run/sysspectogram/agent.pid
+```
+
+Key flags (see `--help` for full list): `--mode`, `--phoenix`, `--fim`, `--fim-baseline`, `--socket`, `--hmac-secret`, `--pidfile`, `--jsonl`.
+
+**Privileges:** eBPF attach usually needs root (or carefully reviewed caps). Userspace mode needs less. Install the binary root-owned under `/usr/local/sbin` — [AGENT_PROTECT.md](AGENT_PROTECT.md).
+
+Optional kernel PID registry: [packaging/kmod/sysspectogram_wd/README.md](../packaging/kmod/sysspectogram_wd/README.md) (`watchdog.kernel_protect`, default off).
 
 ## eBPF
 

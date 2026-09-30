@@ -14,6 +14,7 @@ RuntimeDirectory=sysspectogram
 StateDirectory=sysspectogram
 Restart=always
 RestartSec=2
+WatchdogSec=120
 UMask=0077
 NoNewPrivileges=true
 

@@ -18,7 +18,7 @@ python -m sysspectogram supply-chain verify artifacts/real_v3
 ```
 
 The manifest covers regular files below the model directory, including
-`cnn.onnx`, `cnn.pt`, `iforest.joblib`, `scaler.joblib`, `meta.json`, and the
+`cnn.onnx`, `cnn.pt`, `iforest.ssf.npz`, `scaler.json`, `meta.json`, and the
 existing checksum file. It excludes only the manifest and its signature.
 
 ## Create a minisign key
@@ -72,12 +72,13 @@ hatch. Do not use it for production models.
 - Prefer `cnn.onnx` on a VPS: it avoids installing PyTorch.
 - `cnn.pt` is loaded only with PyTorch `weights_only=True`; v0.8 no longer
   falls back to unsafe arbitrary-object deserialization.
-- `iforest.joblib` and `scaler.joblib` are legacy pickle-compatible artifacts.
-  They are quarantined behind the manifest/signature boundary when enforcement
-  is enabled. Treat unsigned joblib files as untrusted and generate/export
-  models on a builder machine.
+- v0.9 defaults: `scaler.json` and `iforest.ssf.npz` (+ `iforest.ssf.meta.json`).
+- Legacy `.joblib` is **not** loaded at runtime. Migrate once:
+  `python -m sysspectogram artifacts migrate --model DIR --delete-legacy`.
+- `open_verified_artifact()` re-checks the digest of the open file against the
+  manifest before deserialization when enforcement is enabled.
 - The optional agent IF (`agent.iforest`) is also verified with its adjacent
-  `.minisig` before `joblib.load` when enforcement is enabled.
+  `.minisig` before load when enforcement is enabled.
 
 An IF refit changes the manifest. Under enforcement, pass the signing key so
 the operation remains trusted:

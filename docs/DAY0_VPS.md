@@ -1,6 +1,6 @@
-# Day-0 - first VPS install (v0.6+)
+# Day-0 — first VPS install
 
-Goal: useful defense on a **1 vCPU / 1GB** box in under 30 minutes, **without PyTorch**.
+Goal: useful observe-mode defense on a small Linux VPS in about **15 minutes**, without PyTorch.
 
 ## 1. Install
 
@@ -8,46 +8,62 @@ Goal: useful defense on a **1 vCPU / 1GB** box in under 30 minutes, **without Py
 git clone https://github.com/lifeqsoll/SysSpectogram.git
 cd SysSpectogram
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"          # add .[onnx] if you have cnn.onnx
+pip install -e ".[onnx]"    # or .[dev] for tests/tools
 ```
 
-## 2. Config
+## 2. Configure (canonical)
 
 ```bash
-python -m sysspectogram setup    # Telegram .env
-# configs/default.yaml: runtime: notorch, response.mode: observe
-# agent.root_watch: true (unexpected root via Rust agent)
+python -m sysspectogram configure --accept-recommended --role ssh
+# interactive instead:
+# python -m sysspectogram configure --role ssh
 ```
 
-## 3. Run (observe)
+This writes `configs/default.yaml` defaults: `runtime` without Torch when possible, `response.mode: observe`, FIM on for lite, Telegram prompts if desired.
+
+## 3. Model (optional on day-0)
+
+- **No model yet:** run perimeter + agent (`notorch`).
+- **Have ONNX pack:** put under `artifacts/live`, set `runtime.prefer: onnx`, verify:
 
 ```bash
-python -m sysspectogram kirk trust
-python -m sysspectogram guard --telegram --dry-run
-# console shows unlock code; TG /unlock NNNNNN
+python -m sysspectogram supply-chain verify artifacts/live
+python -m sysspectogram guard --model artifacts/live --telegram --dry-run
 ```
 
-## 4. Agent (recommended)
+Builder → VPS flow: [TRAIN_BRIDGE.md](TRAIN_BRIDGE.md), [SUPPLY_CHAIN_STORY.md](SUPPLY_CHAIN_STORY.md).
+
+## 4. Agent
 
 ```bash
 cd agent && cargo build --release && cd ..
 sudo install -m 0755 -o root -g root \
   agent/target/release/sysspectogram-agent /usr/local/sbin/sysspectogram-agent
-# auto_start from guard, or systemd — see AGENT_PROTECT.md
-sudo -E /usr/local/sbin/sysspectogram-agent --mode ebpf --phoenix \
-  --socket "$XDG_RUNTIME_DIR/sysspectogram-agent.sock" \
-  --hmac-secret state/agent_hmac.secret
 ```
 
-HMAC secret is created by guard under `state/agent_hmac.secret`. Share the same path with the agent.
+Prefer `agent.auto_start` from guard (phoenix on by default). Manual systemd: [AGENT_PROTECT.md](AGENT_PROTECT.md).
 
-## 5. Harden when ready
+## 5. Run observe
 
-- Set `response.mode: shield` and `kirk.allow_ssh_cidrs: ["YOUR.IP/32"]`
-- Keep `kirk.auto_isolate: false` until you understand alerts
-- Pull a profile pack or train with `role-lab` on a PC ([ROLE_LAB.md](ROLE_LAB.md))
-- Use TG feedback buttons to tune FP ([FEEDBACK.md](FEEDBACK.md))
+```bash
+python -m sysspectogram kirk trust
+python -m sysspectogram guard --telegram --dry-run
+# console prints unlock code → Telegram /unlock NNNNNN
+```
 
-## Docs
+## Checklist
 
-[KIRK.md](KIRK.md) | [AGENT_PROTECT.md](AGENT_PROTECT.md) | [ROOT_WATCH.md](ROOT_WATCH.md) | [TRAIN_BRIDGE.md](TRAIN_BRIDGE.md) | [OSINT.md](OSINT.md) | [ROADMAP_QUALITY.md](ROADMAP_QUALITY.md)
+- [ ] `/labels` shows seeded role rules
+- [ ] FIM enabled (`agent.fim.enabled`)
+- [ ] Alerts writing (`alerts.sinks` file path)
+- [ ] `kirk.auto_isolate` still **false** until CIDRs set
+- [ ] Unlock works; SOAR stays locked until `/unlock`
+
+## Harden later
+
+- `response.mode: shield` + `kirk.allow_ssh_cidrs: ["YOUR.IP/32"]`
+- Remote sink (HTTPS/syslog) — [CONFIG.md](CONFIG.md)
+- `supply_chain.enforce: true` after public key installed
+- Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
+
+Cold / air-gapped notes: [COLD_INSTALL.md](COLD_INSTALL.md).

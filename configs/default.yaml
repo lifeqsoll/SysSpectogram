@@ -116,6 +116,10 @@ agent:
   root_watch: true
   root_learn_sec: 300
   mode: ebpf
+  fim:
+    enabled: true
+    interval_sec: 300
+    baseline_path: state/fim-baseline.json
 feedback:
   if_refit: false
   widen_rules: comm_prefix
@@ -125,12 +129,23 @@ kirk:
   trust: auto
   require_tpm: false
   auto_isolate: false
+  auto_isolate_host_risk: false
+  host_risk_threshold: 0.99
   isolate_ttl_sec: 3600
   allow_ssh_cidrs: []
   ima_watch: true
   ima_state_path: state/ima_offset.txt
   baseline_path: state/kirk-baseline.json
   vmi: false
+watchdog:
+  phoenix: true
+  kernel_protect: false
+alerts:
+  strict_secrets: true
+  allow_private_sinks: false
+  sinks:
+  - type: file
+    path: reports/alerts.jsonl
 role: generic-linux
 model:
   path: artifacts

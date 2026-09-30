@@ -75,6 +75,10 @@ struct Args {
     #[arg(long, default_value_t = 60)]
     fim_interval_sec: u64,
 
+    /// Persist FIM known-good digests here (JSON + .sha256 seal).
+    #[arg(long, default_value = "state/fim-baseline.json")]
+    fim_baseline: PathBuf,
+
     #[arg(long)]
     host_id: Option<String>,
 
@@ -123,8 +127,8 @@ struct Args {
     #[arg(long)]
     respawn_exe: Option<PathBuf>,
 
-    /// Watchdog: args for respawn (repeatable).
-    #[arg(long)]
+    /// Watchdog: args for respawn (repeatable). Values may start with `-`.
+    #[arg(long, allow_hyphen_values = true)]
     respawn_arg: Vec<String>,
 
     /// Shared HMAC secret file (same as guard state/agent_hmac.secret).
@@ -359,6 +363,7 @@ fn main() {
             FimWatcher::default_critical_paths(),
             args.fim_interval_sec,
             host.clone(),
+            Some(args.fim_baseline.clone()),
         ))
     } else {
         None

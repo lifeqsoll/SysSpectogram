@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from sysspectogram.safe_artifacts import load_ssf_scorer, save_ssf
 
 FEATURE_NAMES = (
     "open_sensitive",
@@ -63,7 +64,6 @@ class AgentFeatureWindow:
                 counts["ebpf_openat"] += 1
             if risky:
                 counts["risky_comm"] += 1
-            # Only count sensitive-looking paths toward unique_paths (avoid AppImage flood → score=1)
             if path and _path_counts_toward_score(path):
                 paths.add(path)
         counts["unique_paths"] = float(len(paths))
@@ -90,6 +90,21 @@ def _path_counts_toward_score(path: str) -> bool:
     return any(m in p for m in markers)
 
 
+def _agent_ssf_paths(model_path: Path) -> tuple[Path, Path]:
+    path = Path(model_path)
+    if path.name.endswith(".ssf.npz"):
+        stem = path.name[: -len(".ssf.npz")]
+        return path, path.with_name(stem + ".ssf.meta.json")
+    if path.suffix == ".joblib":
+        ssf = path.with_name(path.stem + ".ssf.npz")
+        return ssf, path.with_name(path.stem + ".ssf.meta.json")
+    ssf = path if path.suffix == ".npz" else path.with_suffix(".ssf.npz")
+    if not str(ssf).endswith(".ssf.npz"):
+        ssf = path.with_name(path.name + ".ssf.npz")
+    stem = ssf.name[: -len(".ssf.npz")]
+    return ssf, ssf.with_name(stem + ".ssf.meta.json")
+
+
 class AgentIsolationScorer:
     """Optional IF model; without artifacts uses a simple heuristic score in [0,1]."""
 
@@ -101,35 +116,50 @@ class AgentIsolationScorer:
     ) -> None:
         self.model = None
         self.meta: dict[str, Any] = {}
-        if model_path and model_path.exists():
-            policy = dict(supply_chain or {})
-            signature_path = Path(f"{model_path}.minisig")
-            if bool(policy.get("enforce", False)) or signature_path.exists():
-                from sysspectogram.supply_chain import verify_file
+        if not model_path:
+            return
+        path = Path(model_path)
+        ssf, meta_path = _agent_ssf_paths(path)
+        # Prefer safe SSF next to legacy joblib name
+        load_path = ssf if ssf.is_file() else path
+        if load_path.suffix == ".joblib" or str(load_path).endswith(".joblib"):
+            raise RuntimeError(
+                f"legacy agent IF joblib refused ({load_path}); re-train with "
+                "train-agent-if (writes .ssf.npz) or migrate"
+            )
+        if not load_path.is_file():
+            return
+        policy = dict(supply_chain or {})
+        enforce = bool(policy.get("enforce", False))
+        signature_path = Path(f"{load_path}.minisig")
+        verified = False
+        if enforce or signature_path.exists():
+            from sysspectogram.supply_chain import verify_file
 
-                public_key = policy.get("public_key")
-                if not public_key:
-                    raise RuntimeError(
-                        "public key required for enforced agent IF signature verification"
-                    )
-                verify_file(model_path, public_key, signature_path=signature_path)
-            try:
-                import joblib
-
-                blob = joblib.load(model_path)
-                self.model = blob.get("model")
-                self.meta = blob.get("meta") or {}
-            except Exception:
-                self.model = None
+            public_key = policy.get("public_key")
+            if not public_key:
+                raise RuntimeError(
+                    "public key required for enforced agent IF signature verification"
+                )
+            verify_file(load_path, public_key, signature_path=signature_path)
+            if meta_path.is_file():
+                meta_sig = Path(f"{meta_path}.minisig")
+                verify_file(meta_path, public_key, signature_path=meta_sig)
+            verified = True
+        try:
+            self.model = load_ssf_scorer(load_path, meta_path if meta_path.is_file() else None)
+            if meta_path.is_file():
+                self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            # Under enforce / after signature check, do not silently fall back to heuristic.
+            if enforce or verified:
+                raise
+            self.model = None
 
     def score(self, vec: np.ndarray) -> float:
         if self.model is not None:
-            # sklearn IF: decision_function higher = more normal; invert to anomaly [0,1]
             raw = float(-self.model.decision_function(vec.reshape(1, -1))[0])
-            # squash
             return float(1.0 / (1.0 + np.exp(-raw)))
-        # heuristic: weight high-signal dims; ignore raw ebpf flood alone
-        # order matches FEATURE_NAMES
         weights = np.array(
             [2.0, 1.0, 2.0, 2.0, 3.0, 1.5, 0.5, 0.15, 0.25], dtype=np.float64
         )
@@ -149,7 +179,6 @@ def train_agent_iforest(
 ) -> dict[str, Any]:
     """Fit IsolationForest on sliding windows extracted from agent JSONL (mostly normal)."""
     from sklearn.ensemble import IsolationForest
-    import joblib
 
     windows: list[np.ndarray] = []
     for path in jsonl_paths:
@@ -171,7 +200,6 @@ def train_agent_iforest(
             buf.push(rid, risky_comm=bool(extras.get("risky_comm")), path=obj.get("path"))
             windows.append(buf.vector().copy())
     if len(windows) < 10:
-        # synthesize mild normal noise so trainers don't fail on empty lab
         rng = np.random.default_rng(42)
         windows = [rng.poisson(0.3, size=len(FEATURE_NAMES)).astype(np.float64) for _ in range(64)]
 
@@ -182,12 +210,23 @@ def train_agent_iforest(
         random_state=42,
     )
     model.fit(x)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    meta = {
-        "features": list(FEATURE_NAMES),
-        "window_sec": window_sec,
-        "n_samples": int(x.shape[0]),
-        "contamination": contamination,
-    }
-    joblib.dump({"model": model, "meta": meta}, out_path)
+    out_path = Path(out_path)
+    if out_path.suffix == ".joblib":
+        out_path = out_path.with_name(out_path.stem + ".ssf.npz")
+    if not str(out_path).endswith(".ssf.npz"):
+        out_path = out_path.with_suffix(".ssf.npz")
+    ssf, meta_path = _agent_ssf_paths(out_path)
+    save_ssf(model, ssf, meta_path)
+    # enrich meta with agent feature names
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta.update(
+        {
+            "features": list(FEATURE_NAMES),
+            "window_sec": window_sec,
+            "n_samples": int(x.shape[0]),
+            "contamination": contamination,
+            "kind": "agent_iforest",
+        }
+    )
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return meta

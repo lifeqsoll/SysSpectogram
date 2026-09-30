@@ -96,6 +96,17 @@ pub fn run_watchdog_loop(
                 continue;
             }
             eprintln!("[sysspectogram-watch] peer dead — respawning agent");
+            // Loud marker for operators / log shippers (guard Dead-man also fires).
+            let _ = fs::write(
+                "state/watchdog_last_respawn.txt",
+                format!(
+                    "ts_unix={}\nreason=unexpected_peer_death\n",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                ),
+            );
             last_respawn = Instant::now();
             match Command::new(respawn_exe)
                 .args(respawn_args)

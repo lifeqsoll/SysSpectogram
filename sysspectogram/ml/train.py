@@ -173,11 +173,18 @@ def train_models(
         },
         out_dir / "cnn.pt",
     )
-    forest.save(out_dir / "iforest.joblib")
+    forest.save(out_dir / "iforest.ssf.npz")
 
-    scaler_src = dataset_dir / "scaler.joblib"
+    scaler_src = dataset_dir / "scaler.json"
+    if not scaler_src.exists():
+        scaler_src = dataset_dir / "scaler.joblib"
     if scaler_src.exists():
-        WindowScaler.load(scaler_src).save(out_dir / "scaler.joblib")
+        # migrate path may still be joblib from older datasets
+        import os
+
+        if scaler_src.suffix == ".joblib":
+            os.environ.setdefault("SYSSPECTOGRAM_ALLOW_JOBLIB", "1")
+        WindowScaler.load(scaler_src).save(out_dir / "scaler.json")
 
     artifact_meta = {
         "columns": meta.get("columns", []),
@@ -196,7 +203,13 @@ def train_models(
     (out_dir / "meta.json").write_text(json.dumps(artifact_meta, indent=2), encoding="utf-8")
     import hashlib
 
-    names = ["cnn.pt", "iforest.joblib", "scaler.joblib", "meta.json"]
+    names = [
+        "cnn.pt",
+        "iforest.ssf.npz",
+        "iforest.ssf.meta.json",
+        "scaler.json",
+        "meta.json",
+    ]
     lines = []
     for name in names:
         f = out_dir / name

@@ -175,7 +175,7 @@ def build_dataset(
             save_png(dest / f"{name}.png", scaled)
         counts[split][label] += 1
 
-    scaler_path = out_dir / "scaler.joblib"
+    scaler_path = out_dir / "scaler.json"
     scaler.save(scaler_path)
     meta = {
         "columns": columns,

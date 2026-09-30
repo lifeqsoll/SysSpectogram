@@ -49,7 +49,7 @@ def retrain_from_feedback(
 
     _dump("normal", scaled_n)
     _dump("anomaly", scaled_a)
-    scaler.save(ds / "scaler.joblib")
+    scaler.save(ds / "scaler.json")
     meta = {
         "window_size": int(scaled_n[0].shape[0]),
         "n_features": int(scaled_n[0].shape[1]),

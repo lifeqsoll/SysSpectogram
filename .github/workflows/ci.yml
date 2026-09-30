@@ -31,7 +31,8 @@ jobs:
           bash scripts/package-smoke.sh
           python -m sysspectogram --version
       - name: dependency audit
-        run: pip-audit --strict
+        # --skip-editable emits a skip warning that fails --strict; still fails on vulns.
+        run: pip-audit --skip-editable
 
   agent:
     runs-on: ubuntu-latest

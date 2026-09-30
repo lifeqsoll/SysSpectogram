@@ -3,8 +3,7 @@
 Single forward plan. Goal: credible, honest, installable Linux VPS / host defense —
 not a “rootkit killer” marketing claim.
 
-**Status:** **v0.8** complete (supply-chain signatures, SBOM, packages, and model
-loading policy). **Ceiling:** optional VMI in v1.0 ([VMI.md](VMI.md)).
+**Status:** **v0.9** hardening + docs UX. **Ceiling:** optional VMI in v1.0 ([VMI.md](VMI.md)).
 
 ---
 
@@ -26,6 +25,7 @@ v0.5  shipped     Adopt + Kirk best-effort + trust probe
 v0.6  shipped     Auth, self-protect, agent root watch, Role Lab, feedback, CI
 v0.7  shipping    Configure TUI, ProcessLabelRules, FP digests, netview, audit, eBPF setuid
 v0.8  shipped     Supply chain (minisign), SBOM, distro-ready packaging, model quarantine
+v0.9  shipping    Safe artifacts, remote sinks, FIM, hybrid watchdog, Day-0/eval/threat, docs UX
 v1.0  ceiling     Optional VMI (self-host KVM only)
 v1.x  ecosystem   AUR/deb, Prometheus, community packs, EN/RU Day-0
 ```
@@ -68,6 +68,24 @@ Docs: [CONFIGURE.md](CONFIGURE.md) · [FEEDBACK.md](FEEDBACK.md) · [COLD_INSTAL
 Many Arch/cloud hosts: Secure Boot off, no `CONFIG_IMA`, TPM alone ≠ measured boot.
 **Measured** = readable IMA **and** (SB on or TPM). Correct label, not a bug.
 Cloud VPS ceiling is often best-effort until VMI (host) in v1.0.
+
+---
+
+---
+
+## Shipped — v0.9 — Hardening + docs UX
+
+| Track | Work |
+| --- | --- |
+| A | Pickle-free scaler/IF; runtime joblib purge; `artifacts migrate` |
+| B | AlertFanout file/syslog/https + SSRF / `strict_secrets` |
+| C | FIM baseline persist (serde); lite default on |
+| D | Honest Limitations + threat model |
+| E | `kirk.auto_isolate_host_risk` (default off) |
+| F | Phoenix + optional DKMS `sysspectogram_wd` |
+| G | Day-0, golden path, offline eval, supply-chain story, docs UX |
+
+Evidence: [RELEASE_v0.9.0.md](RELEASE_v0.9.0.md).
 
 ---
 
