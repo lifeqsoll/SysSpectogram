@@ -3,7 +3,7 @@
 Single forward plan. Goal: credible, honest, installable Linux VPS / host defense —
 not a “rootkit killer” marketing claim.
 
-**Status:** **v0.9** hardening + docs UX. **Ceiling:** optional VMI in v1.0 ([VMI.md](VMI.md)).
+**Status:** **v1.0** — Control Center, incident engine, event-level scoring, read-only VMI cross-view ([RELEASE_v1.0.0.md](RELEASE_v1.0.0.md)). Earlier: [RELEASE_v0.9.0.md](RELEASE_v0.9.0.md).
 
 ---
 
@@ -27,7 +27,7 @@ v0.7  shipping    Configure TUI, ProcessLabelRules, FP digests, netview, audit, 
 v0.8  shipped     Supply chain (minisign), SBOM, distro-ready packaging, model quarantine
 v0.9  shipped     Safe artifacts, remote sinks, FIM, hybrid watchdog, Day-0/eval/threat, docs UX
 v0.9.x patch      Release-assets signing reliability, AUR/deb polish, alert fanout coverage
-v1.0  ceiling     Optional VMI (self-host KVM only)
+v1.0  shipped     Control Center, incidents, read-only VMI cross-view (self-host KVM only)
 v1.x  ecosystem   AUR/deb, Prometheus, community packs, EN/RU Day-0
 ```
 
@@ -68,7 +68,7 @@ Docs: [CONFIGURE.md](CONFIGURE.md) · [FEEDBACK.md](FEEDBACK.md) · [COLD_INSTAL
 
 Many Arch/cloud hosts: Secure Boot off, no `CONFIG_IMA`, TPM alone ≠ measured boot.
 **Measured** = readable IMA **and** (SB on or TPM). Correct label, not a bug.
-Cloud VPS ceiling is often best-effort until VMI (host) in v1.0.
+Cloud VPS coverage stays best-effort: VMI needs a hypervisor you control.
 
 ---
 
@@ -104,9 +104,15 @@ Evidence and operator procedures: [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) and
 
 ---
 
-## v1.0 — Optional ceiling (VMI)
+## v1.0 — Shipped
 
-See [VMI.md](VMI.md). Skip if no HV users.
+- Control Center (Tauri 2) with dashboards, live values, incidents, scenarios, settings and lab runs.
+- Privileged helper with polkit and a signed-bundle install path.
+- Incident engine with ATT&CK mapping and HTML/Markdown reports.
+- Event-level features and an opt-in event spectrogram model.
+- Read-only VMI cross-view for self-hosted KVM. See [VMI.md](VMI.md).
+
+Not in v1.0: network download of releases on first launch, guest memory scanning, remote control.
 
 ---
 

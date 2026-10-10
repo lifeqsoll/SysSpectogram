@@ -1,0 +1,13 @@
+schema: scenario.v1
+id: dedicated-large
+title: {en: Large dedicated server, ru: Крупный выделенный сервер}
+description:
+  en: Bare-metal machine with many cores and several workloads. eBPF gives the most visibility. Needs root for probes. Auto-ban stays off.
+  ru: Физический сервер с большим числом ядер и несколькими нагрузками. eBPF даёт максимум видимости. Для проб нужен root. Автоблокировка выключена.
+overrides:
+  agent.enabled: true
+  agent.mode: ebpf
+  ensemble.risk_threshold: 0.7
+  monitor.interval_sec: 5
+  timeseries.enabled: true
+  response.mode: observe

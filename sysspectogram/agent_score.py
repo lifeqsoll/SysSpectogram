@@ -33,8 +33,15 @@ class AgentFeatureWindow:
     window_sec: float = 120.0
     _events: deque[tuple[float, str, bool, str]] = field(default_factory=deque)
 
-    def push(self, rule_id: str, *, risky_comm: bool = False, path: str | None = None) -> None:
-        now = time.time()
+    def push(
+        self,
+        rule_id: str,
+        *,
+        risky_comm: bool = False,
+        path: str | None = None,
+        ts: float | None = None,
+    ) -> None:
+        now = time.time() if ts is None else float(ts)
         self._events.append((now, rule_id, risky_comm, path or ""))
         self._trim(now)
 
@@ -42,8 +49,8 @@ class AgentFeatureWindow:
         while self._events and now - self._events[0][0] > self.window_sec:
             self._events.popleft()
 
-    def vector(self) -> np.ndarray:
-        now = time.time()
+    def vector(self, now: float | None = None) -> np.ndarray:
+        now = time.time() if now is None else float(now)
         self._trim(now)
         counts = {k: 0.0 for k in FEATURE_NAMES}
         paths: set[str] = set()
@@ -70,6 +77,84 @@ class AgentFeatureWindow:
         return np.array([counts[k] for k in FEATURE_NAMES], dtype=np.float64)
 
 
+MATRIX_CHANNELS: tuple[str, ...] = (
+    "open_sensitive",
+    "path_watch",
+    "exec",
+    "connect",
+    "module",
+    "ebpf_openat",
+    "kirk",
+    "root",
+    "fim",
+    "other",
+)
+MATRIX_CHANNEL_CAP = 20.0  # per-second cap per channel (limits event poisoning, ADR 0002)
+
+
+def channel_for(rule_id: str) -> str:
+    rid = (rule_id or "").strip().lower()
+    if rid in ("agent_open_sensitive",):
+        return "open_sensitive"
+    if rid in ("agent_path_watch",):
+        return "path_watch"
+    if rid in ("agent_exec_burst", "agent_ebpf_execve"):
+        return "exec"
+    if rid in ("agent_connect_burst",):
+        return "connect"
+    if rid in ("agent_module_load", "agent_kirk_module_load", "agent_kirk_module_delete"):
+        return "module"
+    if rid in ("agent_ebpf_openat",):
+        return "ebpf_openat"
+    if rid.startswith("agent_kirk_"):
+        return "kirk"
+    if rid == "agent_unexpected_root":
+        return "root"
+    if rid.startswith("agent_fim_"):
+        return "fim"
+    return "other"
+
+
+class AgentEventMatrix:
+    """Per-second event buckets: rows = seconds (oldest first), columns = channels.
+
+    Used as the input of the event-based features (Phase 1a) and, later, as the
+    spectrogram-like tensor for the event CNN (Phase 1b).
+    """
+
+    def __init__(self, window_sec: int = 60, channels: tuple[str, ...] = MATRIX_CHANNELS) -> None:
+        self.window_sec = int(window_sec)
+        self.channels = channels
+        self._index = {c: i for i, c in enumerate(channels)}
+        self._events: deque[tuple[float, int]] = deque()
+
+    def push(self, rule_id: str, *, ts: float | None = None) -> None:
+        now = time.time() if ts is None else float(ts)
+        ch = self._index.get(channel_for(rule_id), self._index["other"])
+        self._events.append((now, ch))
+        self._trim(now)
+
+    def _trim(self, now: float) -> None:
+        while self._events and now - self._events[0][0] >= self.window_sec:
+            self._events.popleft()
+
+    def matrix(self, now: float | None = None) -> np.ndarray:
+        """Shape (window_sec, K). Bucket 0 is the oldest second in the window."""
+        now = time.time() if now is None else float(now)
+        self._trim(now)
+        out = np.zeros((self.window_sec, len(self.channels)), dtype=np.float64)
+        for ts, ch in self._events:
+            age = int(now - ts)
+            if 0 <= age < self.window_sec:
+                out[self.window_sec - 1 - age, ch] += 1.0
+        return np.minimum(out, MATRIX_CHANNEL_CAP)
+
+    def features(self, now: float | None = None) -> np.ndarray:
+        """Length 2K: mean then max per channel over the window."""
+        m = self.matrix(now)
+        return np.concatenate([m.mean(axis=0), m.max(axis=0)])
+
+
 def _path_counts_toward_score(path: str) -> bool:
     p = path.lower()
     if not p or p.startswith("/proc/") or p.startswith("/sys/"):
@@ -88,6 +173,13 @@ def _path_counts_toward_score(path: str) -> bool:
         "/var/tmp/",
     )
     return any(m in p for m in markers)
+
+
+def _event_epoch(value: Any) -> float | None:
+    """Epoch seconds from float/int or ISO-8601 (guard fan-out writes ISO strings)."""
+    from sysspectogram.incident.normalize import to_epoch
+
+    return to_epoch(value)
 
 
 def _agent_ssf_paths(model_path: Path) -> tuple[Path, Path]:
@@ -176,13 +268,39 @@ def train_agent_iforest(
     *,
     window_sec: float = 120.0,
     contamination: float = 0.05,
+    feature_mode: str = "legacy",
 ) -> dict[str, Any]:
-    """Fit IsolationForest on sliding windows extracted from agent JSONL (mostly normal)."""
+    """Fit IsolationForest on sliding windows extracted from agent JSONL (mostly normal).
+
+    feature_mode:
+      legacy  - 9 rule counters (AgentFeatureWindow), default, unchanged artifacts.
+      matrix  - 2K features from AgentEventMatrix (mean and max per channel), Phase 1a.
+    """
     from sklearn.ensemble import IsolationForest
 
+    if feature_mode not in ("legacy", "matrix"):
+        raise ValueError(f"unknown feature_mode {feature_mode!r}")
     windows: list[np.ndarray] = []
     for path in jsonl_paths:
         if not path.exists():
+            continue
+        if feature_mode == "matrix":
+            mat = AgentEventMatrix(window_sec=int(window_sec))
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("kind") == "metrics":
+                    continue
+                ts = _event_epoch(obj.get("ts"))
+                if ts is None:
+                    continue
+                mat.push(str(obj.get("rule_id") or ""), ts=ts)
+                windows.append(mat.features(now=ts).copy())
             continue
         buf = AgentFeatureWindow(window_sec=window_sec)
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -197,11 +315,20 @@ def train_agent_iforest(
                 continue
             rid = str(obj.get("rule_id") or "")
             extras = obj.get("extras") or {}
-            buf.push(rid, risky_comm=bool(extras.get("risky_comm")), path=obj.get("path"))
-            windows.append(buf.vector().copy())
+            ts = _event_epoch(obj.get("ts"))
+            if ts is None:
+                continue
+            buf.push(
+                rid,
+                risky_comm=bool(extras.get("risky_comm")),
+                path=obj.get("path"),
+                ts=ts,
+            )
+            windows.append(buf.vector(now=ts).copy())
+    n_features = len(FEATURE_NAMES) if feature_mode == "legacy" else 2 * len(MATRIX_CHANNELS)
     if len(windows) < 10:
         rng = np.random.default_rng(42)
-        windows = [rng.poisson(0.3, size=len(FEATURE_NAMES)).astype(np.float64) for _ in range(64)]
+        windows = [rng.poisson(0.3, size=n_features).astype(np.float64) for _ in range(64)]
 
     x = np.vstack(windows)
     model = IsolationForest(
@@ -221,7 +348,10 @@ def train_agent_iforest(
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta.update(
         {
-            "features": list(FEATURE_NAMES),
+            "features": list(FEATURE_NAMES)
+            if feature_mode == "legacy"
+            else [f"{agg}_{c}" for agg in ("mean", "max") for c in MATRIX_CHANNELS],
+            "feature_mode": feature_mode,
             "window_sec": window_sec,
             "n_samples": int(x.shape[0]),
             "contamination": contamination,

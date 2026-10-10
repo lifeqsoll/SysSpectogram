@@ -13,7 +13,6 @@ pub const PREFERRED_BIN: &str = "/usr/local/sbin/sysspectogram-agent";
 
 #[derive(Debug, Clone)]
 pub struct InstallCheck {
-    pub path: PathBuf,
     pub ok: bool,
     pub warnings: Vec<String>,
 }
@@ -22,7 +21,6 @@ pub struct InstallCheck {
 pub fn check_install(exe: &Path) -> InstallCheck {
     let mut warnings = Vec::new();
     let mut ok = true;
-    let path = exe.to_path_buf();
     match fs::metadata(exe) {
         Ok(meta) => {
             let mode = meta.mode() & 0o777;
@@ -48,7 +46,7 @@ pub fn check_install(exe: &Path) -> InstallCheck {
             warnings.push(format!("cannot stat exe: {e}"));
         }
     }
-    InstallCheck { path, ok, warnings }
+    InstallCheck { ok, warnings }
 }
 
 pub fn resolve_exe() -> PathBuf {

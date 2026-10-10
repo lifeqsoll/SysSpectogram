@@ -15,6 +15,7 @@ from sysspectogram.perimeter.rules import Alert
 from sysspectogram.perimeter.watcher import PerimeterWatcher
 from sysspectogram.response.actions import NftBackend, kill_pid, read_proc_comm
 from sysspectogram.response.tokens import TokenStore
+from sysspectogram.alert_text import describe, is_unattributed
 from sysspectogram.console_unlock import ConsoleUnlock
 
 
@@ -417,7 +418,7 @@ class TelegramBot:
         )
         self.client.send_message(text, reply_markup=self.alert_keyboard(alert))
 
-    def send_agent_alert(self, alert) -> None:
+    def send_agent_alert(self, alert, png: bytes | None = None) -> None:
         if not self.client.configured:
             return
         self._alert_count_day += 1
@@ -430,10 +431,19 @@ class TelegramBot:
         comm = getattr(alert, "comm", None)
         path = getattr(alert, "path", None)
         live_comm = read_proc_comm(int(pid)) if pid and int(pid) > 1 else None
+        info = describe(str(rid), str(msg))
+        sev_tag = {
+            "critical": "КРИТИЧНО",
+            "high": "ВАЖНО",
+            "medium": "ВНИМАНИЕ",
+            "low": "ИНФО",
+        }.get(str(sev), str(sev).upper())
         lines = [
-            self.prefix(f"AGENT [{sev}] {rid}"),
-            str(msg),
+            self.prefix(f"{sev_tag}: {info.title}"),
+            f"Что произошло: {info.what}",
         ]
+        if msg and str(msg) != info.what:
+            lines.append(f"Детали: {msg}")
         meta = []
         if comm:
             meta.append(f"comm={comm}")
@@ -446,9 +456,13 @@ class TelegramBot:
         if path:
             meta.append(f"path={path}")
         if meta:
-            lines.append(" | ".join(meta))
+            label = "Процесс" if (pid or comm) else "Объект"
+            lines.append(f"{label}: " + " | ".join(meta))
+        if pid is not None and is_unattributed(int(pid)):
+            lines.append("Процесс не определён: ядро не сопоставило событие с программой.")
+        lines.append(f"Что делать: {info.action}")
         if self.dry_run:
-            lines.append("(dry_run: Kill will not SIGKILL)")
+            lines.append("Режим: только наблюдение, ничего не завершается автоматически.")
         rows: list[list[dict]] = []
         use_comm = live_comm or (str(comm) if comm else None)
         if pid and int(pid) > 1 and live_comm is not None:
@@ -477,7 +491,11 @@ class TelegramBot:
                 "ignore", {"pid": int(pid) if pid else 0, "rule": rid}
             )
             rows.append([_btn("Ignore alert", f"do|{tign}")])
-        self.client.send_message("\n".join(lines), reply_markup=_markup(rows))
+        text = "\n".join(lines)
+        if png:
+            self.client.send_photo_bytes(png, caption=text[:900], reply_markup=_markup(rows))
+        else:
+            self.client.send_message(text, reply_markup=_markup(rows))
 
     def send_host_alert(
         self,
@@ -571,7 +589,7 @@ class TelegramBot:
         if cmd == "/unlock":
             if not args:
                 self.client.send_message(
-                    self.prefix("usage: /unlock <6-digit code from host console>"),
+                    self.prefix("usage: /unlock <6-digit code from the Control Center>"),
                     chat_id=chat_id,
                 )
                 return
@@ -587,14 +605,14 @@ class TelegramBot:
                 if nfail >= 8:
                     hint = "too many failed unlocks — wait / check console for a new code"
                 elif nfail >= 5:
-                    hint = "bad code — new code printed on host console"
+                    hint = "bad code — new code is shown in the Control Center"
                 self.client.send_message(self.prefix(hint), chat_id=chat_id)
             return
         if cmd == "/lock":
             if self.require_console_unlock:
                 code = self.lock_session()
                 self.client.send_message(
-                    self.prefix("control plane LOCKED. New code is on the host console."),
+                    self.prefix("control plane LOCKED. New code is shown in the Control Center."),
                     chat_id=chat_id,
                 )
                 # code only on console — reprint via attribute for guard logger
@@ -610,7 +628,7 @@ class TelegramBot:
         if not self.session_unlocked():
             self.client.send_message(
                 self.prefix(
-                    "control plane LOCKED. Read the 6-digit code on the host console, "
+                    "control plane LOCKED. Get the 6-digit code in the Control Center (Show code), "
                     "then send /unlock <code> from this chat."
                 ),
                 chat_id=chat_id,

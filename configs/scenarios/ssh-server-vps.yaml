@@ -1,0 +1,12 @@
+schema: scenario.v1
+id: ssh-server-vps
+title: {en: SSH server on a VPS, ru: SSH-сервер на VPS}
+description:
+  en: For a small VPS that exposes SSH. Keeps sessions and file integrity watching on, keeps response in observe mode.
+  ru: Для небольшого VPS с открытым SSH. Включает контроль сессий и целостности файлов, реагирование остаётся в режиме observe.
+overrides:
+  ensemble.risk_threshold: 0.7
+  agent.enabled: true
+  agent.mode: userspace
+  response.mode: observe
+  telegram.require_console_unlock: true

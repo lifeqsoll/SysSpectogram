@@ -42,7 +42,7 @@ use crate::watch::PathWatcher;
 #[derive(Parser, Debug)]
 #[command(name = "sysspectogram-agent", about = "SysSpectogram integrity + metrics sensor")]
 struct Args {
-    /// userspace = /proc+inotify (default). ebpf = Aya when toolchain ready (fallback today).
+    /// userspace = /proc+inotify (default). ebpf = Aya when clang, BTF and root are available; otherwise falls back to userspace.
     #[arg(long, default_value = "userspace")]
     mode: String,
 
@@ -63,6 +63,10 @@ struct Args {
 
     #[arg(long, default_value_t = 2000)]
     flush_ms: u64,
+
+    /// Emit a guest pid snapshot every N seconds for VMI cross-check. 0 = off (default).
+    #[arg(long, default_value_t = 0)]
+    pids_sec: u64,
 
     /// Emit CPU/mem/net samples for the live web / light bus (ms). 0 = off.
     #[arg(long, default_value_t = 1000)]
@@ -408,6 +412,7 @@ fn main() {
     let mut last_flush = Instant::now();
     let mut last_metrics = Instant::now();
     let mut last_guard_check = Instant::now();
+    let mut last_pids = Instant::now();
     let mut guard_alerted = false;
     let _ = metrics.sample();
 
@@ -519,6 +524,18 @@ fn main() {
                     eprintln!("[sysspectogram-agent] emit: {e}");
                 }
             }
+        }
+
+        if args.pids_sec > 0 && last_pids.elapsed() >= Duration::from_secs(args.pids_sec) {
+            match crate::metrics::list_pids() {
+                Ok(pids) => {
+                    if let Err(e) = emitter.emit_pids(&host, &pids) {
+                        eprintln!("[sysspectogram-agent] pids emit: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[sysspectogram-agent] pids: {e}"),
+            }
+            last_pids = Instant::now();
         }
 
         if let Some(every) = metrics_every {

@@ -167,6 +167,7 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
         burn_cpu,
         burn_gpu,
         flood_local_net,
+        pressure_gpu_memory,
         pressure_memory,
         thrash_disk,
     )
@@ -174,18 +175,24 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
     kind = args.kind
     duration = float(args.duration)
     console.print(f"simulate {kind} duration={duration}s")
-    if kind == "cpu":
-        burn_cpu(duration, workers=args.workers)
-    elif kind == "mem":
-        pressure_memory(duration, megabytes=args.mb)
-    elif kind == "disk":
-        thrash_disk(duration, block_mb=args.block_mb)
-    elif kind == "net":
-        flood_local_net(duration, connections_per_sec=args.rate)
-    elif kind == "gpu":
-        burn_gpu(duration, size=args.gpu_size)
-    else:
-        console.print(f"unknown kind {kind}")
+    try:
+        if kind == "cpu":
+            burn_cpu(duration, workers=args.workers)
+        elif kind == "mem":
+            pressure_memory(duration, megabytes=args.mb)
+        elif kind == "disk":
+            thrash_disk(duration, block_mb=args.block_mb)
+        elif kind == "net":
+            flood_local_net(duration, connections_per_sec=args.rate)
+        elif kind == "gpu":
+            burn_gpu(duration, size=args.gpu_size)
+        elif kind == "gpu-mem":
+            pressure_gpu_memory(duration, megabytes=args.gpu_mb)
+        else:
+            console.print(f"unknown kind {kind}")
+            return 2
+    except RuntimeError as e:
+        console.print(f"[red]simulate {kind} failed:[/] {e}")
         return 2
     return 0
 
@@ -461,6 +468,238 @@ def _cmd_configure(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_jsonl(path: Path) -> list[dict]:
+    import json
+
+    if not path.exists():
+        return []
+    out: list[dict] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+
+def _cmd_spectro(args: argparse.Namespace) -> int:
+    from sysspectogram.config import state_root
+    from sysspectogram.incident.store import find_incident
+    from sysspectogram.viz.snapshot import render_to_file
+
+    if (args.incident is None) == (args.at is None):
+        console.print("[red]spectro:[/] give exactly one of --incident or --at")
+        return 2
+    store_path = Path(args.store) if args.store else state_root() / "state" / "timeseries.sqlite"
+    if args.incident is not None:
+        inc = find_incident(_resolve(args.incidents), args.incident)
+        if inc is None:
+            console.print(f"[red]spectro:[/] incident {args.incident} not found")
+            return 2
+        t0 = float(inc["first_ts"]) - args.before
+        t1 = float(inc["last_ts"]) + args.after
+        title = f"incident {args.incident} · {inc.get('severity', '')}"
+        score = float(inc["risk_max"]) if inc.get("risk_max") is not None else None
+    else:
+        t0 = float(args.at) - args.before
+        t1 = float(args.at) + args.after
+        title = "event snapshot"
+        score = None
+    ok = render_to_file(store_path, t0, t1, _resolve(args.out), title=title, score=score)
+    if not ok:
+        console.print("[yellow]spectro:[/] no metrics stored for that time (timeseries empty?)")
+        return 1
+    console.print(f"spectro -> {_resolve(args.out)}")
+    return 0
+
+
+def _cmd_incidents(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.incident.correlator import DEFAULT_WINDOW_SEC, correlate
+    from sysspectogram.incident.report import render_html, render_markdown
+    from sysspectogram.incident.store import find_incident, upsert_incidents
+
+    store = _resolve(args.store)
+    action = args.incidents_action
+    if action == "list":
+        sources = args.source or [
+            "reports/alerts.jsonl",
+            "reports/agent.jsonl",
+            "reports/perimeter.jsonl",
+        ]
+        events: list[dict] = []
+        for src in sources:
+            events.extend(_load_jsonl(_resolve(src)))
+        window = float(args.window) if args.window is not None else DEFAULT_WINDOW_SEC
+        incidents = correlate(events, window_sec=window, min_events=max(1, args.min_events))
+        if not args.no_save and incidents:
+            upsert_incidents(store, incidents)
+        for inc in incidents:
+            console.print(
+                f"{inc['id']} {inc['severity']:<8} events={inc['event_count']:<4} "
+                f"host={inc['host_id'] or '-'} attack={','.join(inc['attack']) or '-'} "
+                f"| {inc['reason']}"
+            )
+        console.print(f"incidents={len(incidents)} sources={len(sources)} events={len(events)}")
+        return 0
+    if action == "show":
+        inc = find_incident(store, args.id)
+        if inc is None:
+            console.print(f"[red]incident not found[/] {args.id}")
+            return 1
+        print(json.dumps(inc, ensure_ascii=False))
+        return 0
+    if action == "report":
+        inc = find_incident(store, args.id)
+        if inc is None:
+            console.print(f"[red]incident not found[/] {args.id}")
+            return 1
+        if args.format == "md":
+            body = render_markdown(inc)
+            default_out = f"reports/incident-{inc['id']}.md"
+        else:
+            body = render_html(inc)
+            default_out = f"reports/incident-{inc['id']}.html"
+        out = _resolve(args.out or default_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(body, encoding="utf-8")
+        console.print(f"wrote {out}")
+        return 0
+    console.print(f"[red]unknown incidents action[/] {action}")
+    return 2
+
+
+def _cmd_lab(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from sysspectogram.lab_runs import get_run, list_runs, run_lab
+
+    if args.lab_action == "list":
+        rows = [
+            {
+                "id": r.id,
+                "title": r.title,
+                "description": r.description,
+                "expect_rule": r.expect_rule,
+                "duration_sec": r.duration_sec,
+                "lab_flag": r.lab_flag,
+                "tags": list(r.tags),
+            }
+            for r in list_runs()
+        ]
+        if args.json:
+            print(_json.dumps(rows))
+        else:
+            for r in rows:
+                console.print(f"{r['id']:<18} {r['title']['en']}  -> {r['expect_rule']}")
+        return 0
+    try:
+        get_run(args.id)
+    except KeyError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 2
+    return run_lab(args.id)
+
+
+def _cmd_scenario(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from sysspectogram.settings.scenarios import load_scenarios
+    from sysspectogram.settings.schema import explain_diff, load_schema
+    from sysspectogram.config import load_config as _load
+
+    scenarios = load_scenarios(ROOT / "configs" / "scenarios")
+    if args.scenario_action == "list":
+        rows = [{"id": s.id, "title": s.title, "description": s.description} for s in scenarios]
+        if args.json:
+            print(_json.dumps(rows))
+        else:
+            for s in rows:
+                console.print(f"{s['id']:<20} {s['title']['en']}")
+        return 0
+    match = [s for s in scenarios if s.id == args.id]
+    if not match:
+        console.print(f"[red]unknown scenario {args.id!r}[/]")
+        return 2
+    sc = match[0]
+    schema = load_schema(ROOT / "configs" / "schema.yaml")
+    current = _load(ROOT / "configs" / "default.yaml")
+    console.print(f"[bold]{sc.text('title', args.lang)}[/]")
+    console.print(sc.text("description", args.lang))
+    for d in explain_diff(schema, current, sc.overrides, args.lang):
+        restart = " (restart)" if d.restart else ""
+        console.print(f"- {d.key}: {d.old!r} -> {d.new!r}{restart}\n  {d.title}: {d.description}")
+    return 0
+
+
+def _cmd_settings(args: argparse.Namespace) -> int:
+    import json as _json
+
+    if args.settings_action == "export":
+        from sysspectogram.config import settings_overlay_path
+        from sysspectogram.settings.scenarios import load_scenarios
+        from sysspectogram.settings.schema import get_value, load_schema
+
+        schema = load_schema(ROOT / "configs" / "schema.yaml")
+        cfg = load_config(ROOT / "configs" / "default.yaml")
+        overlay = {}
+        ov_path = settings_overlay_path()
+        if ov_path.is_file():
+            try:
+                overlay = _json.loads(ov_path.read_text(encoding="utf-8"))
+            except ValueError:
+                overlay = {}
+        settings = []
+        for entry in schema.get("settings") or []:
+            row = dict(entry)
+            row["current"] = get_value(cfg, entry["key"])
+            settings.append(row)
+        scenarios = [
+            {"id": s.id, "title": s.title, "description": s.description, "overrides": s.overrides}
+            for s in load_scenarios(ROOT / "configs" / "scenarios")
+        ]
+        out = {
+            "schema": schema.get("schema"),
+            "groups": schema.get("groups") or {},
+            "settings": settings,
+            "scenarios": scenarios,
+            "overlay": overlay,
+            "overlay_path": str(ov_path),
+        }
+        print(_json.dumps(out, ensure_ascii=False))
+        return 0
+
+    import runpy
+
+    script = ROOT / "scripts" / "check_settings_i18n.py"
+    module = runpy.run_path(str(script), run_name="check_settings_i18n")
+    return int(module["main"]())
+
+
+def _cmd_timeseries(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from sysspectogram.timeseries.store import TimeseriesStore
+
+    from sysspectogram.config import state_root
+
+    path = Path(args.path) if args.path else state_root() / "state" / "timeseries.sqlite"
+    store = TimeseriesStore(path)
+    try:
+        points = store.query(args.metric, args.range_name)
+    finally:
+        store.close()
+    rows = [{"ts": p.ts, "avg": p.avg, "min": p.min, "max": p.max, "n": p.n} for p in points]
+    print(_json.dumps(rows))
+    return 0
+
+
 def _cmd_labels(args: argparse.Namespace) -> int:
     from sysspectogram.process_labels import ProcessLabelStore
     from sysspectogram.role_fp import list_seed_roles, seed_role_labels
@@ -688,13 +927,14 @@ def build_parser() -> argparse.ArgumentParser:
     au.set_defaults(func=_cmd_audit)
 
     s = sub.add_parser("simulate", help="generate local anomalous load")
-    s.add_argument("kind", choices=["cpu", "mem", "disk", "net", "gpu"])
+    s.add_argument("kind", choices=["cpu", "mem", "disk", "net", "gpu", "gpu-mem"])
     s.add_argument("--duration", type=float, default=60.0)
     s.add_argument("--workers", type=int, default=None)
     s.add_argument("--mb", type=int, default=512)
     s.add_argument("--block-mb", type=int, default=32)
     s.add_argument("--rate", type=int, default=80)
     s.add_argument("--gpu-size", type=int, default=2048)
+    s.add_argument("--gpu-mb", type=int, default=1024)
     s.set_defaults(func=_cmd_simulate)
 
     wp = sub.add_parser("watch-perimeter", help="perimeter / egress / DNS watcher")
@@ -760,7 +1000,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr_pack.add_argument("--role", required=True)
     pr_pack.add_argument("--host", required=True, help="host artifacts dir")
     pr_pack.add_argument("--out", required=True, help="output .tar.gz path")
-    pr_pack.add_argument("--agent-if", default=None, help="optional agent_iforest.joblib")
+    pr_pack.add_argument("--agent-if", default=None, help="optional agent_iforest.ssf.npz")
     pr_pack.add_argument("--description", default="")
     pr_pack.add_argument(
         "--minisign-secret-key",
@@ -855,6 +1095,75 @@ def build_parser() -> argparse.ArgumentParser:
     lb_del.add_argument("id")
     lb_del.add_argument("--store", default="state/process_labels.json")
     lb_del.set_defaults(func=_cmd_labels)
+
+    spec = sub.add_parser("spectro", help="render a metrics spectrogram for an incident or a time")
+    spec.add_argument("--incident", default=None, help="incident id from reports/incidents.jsonl")
+    spec.add_argument("--at", type=float, default=None, help="unix time of the event")
+    spec.add_argument("--before", type=float, default=120.0, help="seconds shown before the event")
+    spec.add_argument("--after", type=float, default=60.0, help="seconds shown after the event")
+    spec.add_argument("--store", default=None, help="timeseries sqlite (default: state root)")
+    spec.add_argument("--incidents", default="reports/incidents.jsonl")
+    spec.add_argument("--out", required=True, help="output PNG path")
+    spec.set_defaults(func=_cmd_spectro)
+
+    inc = sub.add_parser("incidents", help="correlate alerts into incidents (incident.v1)")
+    inc_sub = inc.add_subparsers(dest="incidents_action", required=True)
+    inc_list = inc_sub.add_parser("list", help="correlate alert files and list incidents")
+    inc_list.add_argument(
+        "--source",
+        action="append",
+        default=None,
+        help="alert JSONL to read (repeatable; default reports/alerts.jsonl, agent.jsonl, perimeter.jsonl)",
+    )
+    inc_list.add_argument("--window", type=float, default=None, help="grouping window in seconds (default 300)")
+    inc_list.add_argument("--min-events", type=int, default=1)
+    inc_list.add_argument("--store", default="reports/incidents.jsonl")
+    inc_list.add_argument("--no-save", action="store_true", help="do not write the store")
+    inc_list.set_defaults(func=_cmd_incidents)
+    inc_show = inc_sub.add_parser("show", help="print one incident as JSON")
+    inc_show.add_argument("id")
+    inc_show.add_argument("--store", default="reports/incidents.jsonl")
+    inc_show.set_defaults(func=_cmd_incidents)
+    inc_rep = inc_sub.add_parser("report", help="write HTML or Markdown report for one incident")
+    inc_rep.add_argument("id")
+    inc_rep.add_argument("--format", choices=["html", "md"], default="html")
+    inc_rep.add_argument("--out", default=None)
+    inc_rep.add_argument("--store", default="reports/incidents.jsonl")
+    inc_rep.set_defaults(func=_cmd_incidents)
+
+    lab = sub.add_parser("lab", help="localhost-only lab runs with an expected alert (Control Center)")
+    lab_sub = lab.add_subparsers(dest="lab_action", required=True)
+    lab_list = lab_sub.add_parser("list", help="list registered runs")
+    lab_list.add_argument("--json", action="store_true")
+    lab_list.set_defaults(func=_cmd_lab)
+    lab_run = lab_sub.add_parser("run", help="run one registered lab run")
+    lab_run.add_argument("id")
+    lab_run.set_defaults(func=_cmd_lab)
+
+    scn = sub.add_parser("scenario", help="protection scenario presets (configs/scenarios)")
+    scn_sub = scn.add_subparsers(dest="scenario_action", required=True)
+    scn_list = scn_sub.add_parser("list", help="list presets")
+    scn_list.add_argument("--json", action="store_true")
+    scn_list.set_defaults(func=_cmd_scenario)
+    scn_show = scn_sub.add_parser("show", help="show a preset with explanations")
+    scn_show.add_argument("id")
+    scn_show.add_argument("--lang", choices=["en", "ru"], default="en")
+    scn_show.set_defaults(func=_cmd_scenario)
+
+    stg = sub.add_parser("settings", help="settings schema checks")
+    stg_sub = stg.add_subparsers(dest="settings_action", required=True)
+    stg_check = stg_sub.add_parser("check", help="validate schema, i18n and defaults")
+    stg_check.set_defaults(func=_cmd_settings)
+    stg_export = stg_sub.add_parser("export", help="JSON: schema, current values, scenarios (for the UI)")
+    stg_export.set_defaults(func=_cmd_settings)
+
+    ts = sub.add_parser("timeseries", help="dashboard history store (SQLite rollups)")
+    ts_sub = ts.add_subparsers(dest="timeseries_action", required=True)
+    ts_q = ts_sub.add_parser("query", help="print points for a metric and range")
+    ts_q.add_argument("metric")
+    ts_q.add_argument("--range", dest="range_name", default="1h", choices=["1h", "6h", "12h", "24h", "7d", "30d"])
+    ts_q.add_argument("--path", default=None)
+    ts_q.set_defaults(func=_cmd_timeseries)
 
     kk = sub.add_parser("kirk", help="kernel integrity trust probe (IMA/SB/TPM)")
     kk_sub = kk.add_subparsers(dest="kirk_action", required=True)

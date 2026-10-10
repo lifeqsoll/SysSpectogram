@@ -11,10 +11,11 @@ train:
   lr: 0.001
   val_ratio: 0.2
   seed: 42
-  cnn_weight: 0.55
-  iforest_weight: 0.45
+  cnn_weight: 0.6
+  iforest_weight: 0.4
   recall_target: 0.85
-monitor: {}
+monitor:
+  interval_sec: 5
 ensemble:
   default_threshold: 0.5
   host_weight: 0.6
@@ -109,6 +110,9 @@ agent:
   jsonl: reports/agent.jsonl
   score_window_sec: 120
   score_threshold: 0.65
+  score_half_life_sec: 60   # agent score decays by half every N seconds (ADR 0001)
+  spectrogram: false        # experimental event CNN, default off (ADR 0002)
+  spectrogram_model: artifacts/agent
   iforest: null
   require_same_uid: true
   require_hmac: true
@@ -136,10 +140,21 @@ kirk:
   ima_watch: true
   ima_state_path: state/ima_offset.txt
   baseline_path: state/kirk-baseline.json
-  vmi: false
+  vmi: false            # read-only hypervisor cross-check, default off (ADR 0003)
+  vmi_backend: mock     # mock | libvmi
+  vmi_domain: null      # libvirt domain name when backend is libvmi
+  vmi_profile: null     # ISF profile; sidecar <profile>.meta.json holds kernel_release
+  vmi_trust: lab        # lab | out-of-band, set by deployment
+  vmi_confirm: 2        # consecutive passes before a hidden task is reported
+  vmi_interval_sec: 30
+  vmi_pids_sec: 5       # how often the agent sends its pid snapshot
 watchdog:
   phoenix: true
   kernel_protect: false
+timeseries:
+  enabled: true
+  # relative paths resolve under SYSSPECTOGRAM_HOME (or the source tree when unset)
+  path: state/timeseries.sqlite
 alerts:
   strict_secrets: true
   allow_private_sinks: false

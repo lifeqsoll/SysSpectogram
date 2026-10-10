@@ -120,7 +120,8 @@ def main() -> int:
     if infer is not None:
         cnn_s, if_s, fuse_s = [], [], []
         for w in val_w:
-            pred = infer.predict_window(w)
+            # windows are stored as (1, T, F); predict_window takes (T, F)
+            pred = infer.predict_window(w.reshape(w.shape[-2], w.shape[-1]))
             cnn_s.append(pred.cnn_prob)
             if_s.append(pred.iforest_score)
             fuse_s.append(pred.score)

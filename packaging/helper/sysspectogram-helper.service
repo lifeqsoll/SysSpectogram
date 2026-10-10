@@ -1,0 +1,22 @@
+[Unit]
+Description=SysSpectogram privileged helper (Control Center backend)
+Documentation=file:///usr/share/doc/sysspectogram/CONTROL_CENTER.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/sysspectogram/sysspectogram-helper
+RuntimeDirectory=sysspectogram
+RuntimeDirectoryMode=0750
+Environment=SYSSPECTOGRAM_HELPER_SOCKET=/run/sysspectogram/helper.sock
+# The helper must run as root for systemctl, polkit checks, /etc and /opt writes.
+NoNewPrivileges=no
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/etc/sysspectogram /opt/sysspectogram /usr/local/sbin /var/lib/sysspectogram /run/sysspectogram
+PrivateTmp=yes
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

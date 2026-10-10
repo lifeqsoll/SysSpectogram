@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import socket
 import threading
 import time
@@ -13,7 +14,7 @@ from sysspectogram.audit.processes import list_top_processes
 from sysspectogram.audit.report import append_jsonl
 from sysspectogram.collect.daemon import CollectDaemon
 from sysspectogram.collect.metrics import MetricsCollector
-from sysspectogram.config import ROOT
+from sysspectogram.config import ROOT, state_root
 from sysspectogram.explain.templates import explain_host_anomaly
 from sysspectogram.ml.calibration import CalibrationState, detect_drift, feature_attribution
 from sysspectogram.ml.infer import load_inferencer
@@ -24,6 +25,7 @@ from sysspectogram.preprocess.window import rows_to_matrix
 from sysspectogram.response.actions import NftBackend
 from sysspectogram.response.tokens import TokenStore
 from sysspectogram.telegram_bot import TelegramBot
+from sysspectogram.alert_text import is_unattributed
 from sysspectogram.console_unlock import ConsoleUnlock
 from sysspectogram.integrations.webhook import post_webhook
 from sysspectogram.agent_bridge import AgentSocketListener
@@ -73,6 +75,62 @@ def _resolve(path: str | Path) -> Path:
     return p if p.is_absolute() else (ROOT / p).resolve()
 
 
+def _write_private(path: Path, text: str) -> None:
+    """Write a secret readable by the owner only (0600)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text + "\n")
+
+
+def _drop_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _event_snapshot(ts: float | None, title: str, score: float | None = None) -> bytes | None:
+    """Metrics spectrogram for the 2 minutes before an event (None if no data)."""
+    if not ts:
+        return None
+    try:
+        from sysspectogram.config import state_root
+        from sysspectogram.timeseries.store import TimeseriesStore
+        from sysspectogram.viz.snapshot import render_window
+
+        store = TimeseriesStore(state_root() / "state" / "timeseries.sqlite")
+        try:
+            return render_window(store, float(ts) - 120.0, float(ts) + 60.0, title=title, score=score)
+        finally:
+            store.close()
+    except Exception:
+        return None
+
+
+def _clear_guard_pidfile(pid: int) -> None:
+    """Drop state/guard.pid on a clean stop, so the agent does not raise guard_down.
+
+    A crash leaves the pidfile behind on purpose: that is the case the agent must report.
+    """
+    gp = _resolve("state/guard.pid")
+    try:
+        if gp.read_text(encoding="utf-8").strip() == str(pid):
+            gp.unlink()
+    except OSError:
+        pass
+
+
+def _running_agent_pid(pidfile: Path) -> int | None:
+    """PID from the agent pidfile if that process is alive and really is the agent."""
+    try:
+        pid = int(pidfile.read_text(encoding="utf-8").strip())
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return None
+    return pid if "sysspectogram-agent" in cmdline else None
+
+
 def _heatmap_png_bytes(window: np.ndarray) -> bytes | None:
     """Legacy single-panel fallback (prefer render_alert_panel)."""
     try:
@@ -119,6 +177,9 @@ def run_guard(
     agent_weight = float(ens_cfg.get("agent_weight", 0.4))
     load_name = str(config.get("load_profile") or "lite")
     risk_state: dict[str, float] = {"agent": 0.0}
+    agent_half_life_sec = float(
+        (config.get("agent") or {}).get("score_half_life_sec", 60.0)
+    )
     console.print(f"[cyan]load_profile[/] {load_name} (lite=small VPS, full=large VDS)")
     import os
     webapp_url = (
@@ -198,11 +259,12 @@ def run_guard(
             kirk_status["trust"] = "best-effort"
             console.print(
                 f"[yellow]kirk[/] unknown trust={trust_mode!r} -> best-effort "
-                "(out-of-band / VMI deferred to v1.0)"
+                "(out-of-band needs a separate trust domain; see docs/VMI.md)"
             )
         if kirk_cfg.get("vmi"):
             console.print(
-                "[dim]kirk.vmi=true ignored until v1.0 - see docs/VMI.md[/]"
+                f"[cyan]kirk.vmi[/] on backend={kirk_cfg.get('vmi_backend', 'mock')} "
+                "read-only cross-check (docs/VMI.md)"
             )
 
     from sysspectogram.process_labels import ProcessLabelStore
@@ -364,10 +426,21 @@ def run_guard(
 
     bot = None
 
-    def _print_unlock(code: str) -> None:
+    unlock_file = _resolve("state/unlock.code")
+
+    def _print_unlock(code: str | None) -> None:
+        # The code never goes to the log or to Telegram: it is written 0600 to state/unlock.code,
+        # shown in the Control Center on request, and removed once the pairing succeeds.
+        if code is None:
+            _drop_file(unlock_file)
+            console.print("[green]telegram unlocked[/] - pairing code used and removed")
+            return
+        _write_private(unlock_file, code)
         console.print("")
-        console.print("[bold red]TELEGRAM UNLOCK CODE[/] (TG: /unlock CODE | Mini App also accepts it)")
-        console.print(f"[bold white on red]  {code}  [/]")
+        console.print(
+            "[bold red]TELEGRAM UNLOCK CODE[/] saved to state/unlock.code "
+            "(Control Center: Overview -> Show code)"
+        )
         console.print("[dim]Stolen bot token alone cannot control the host without this code.[/]")
         console.print("")
 
@@ -416,8 +489,8 @@ def run_guard(
                 client.send_message(
                     bot.prefix(
                         "control plane LOCKED after guard start.\n"
-                        "Look at the host console for a 6-digit code, then send:\n"
-                        "/unlock 123456"
+                        "Get the 6-digit code on the host (Control Center: Show code),\n"
+                        "then send it here as: /unlock <code>"
                     )
                 )
             except Exception:
@@ -507,6 +580,18 @@ def run_guard(
             except Exception:
                 pass
 
+    def _open_timeseries():
+        """Open the SQLite timeseries store (feeds the Control Center Live tab)."""
+        ts_cfg = config.get("timeseries") or {}
+        if not bool(ts_cfg.get("enabled", True)):
+            return None
+        from sysspectogram.timeseries.store import TimeseriesStore
+
+        ts_rel = Path(str(ts_cfg.get("path") or "state/timeseries.sqlite"))
+        ts_path = ts_rel if ts_rel.is_absolute() else state_root() / ts_rel
+        console.print(f"timeseries -> {ts_path}")
+        return TimeseriesStore(ts_path)
+
     def host_loop():
         web_on = enable_web or bool(web_cfg.get("enabled"))
         runtime = str(config.get("runtime") or "notorch").strip().lower()
@@ -530,6 +615,8 @@ def run_guard(
                 mon_cfg_local = config.get("monitor") or {}
                 interval_sec = float(mon_cfg_local.get("interval_sec", 5))
                 last_print = 0.0
+                # notorch: no host CNN, so host_risk mirrors the fused agent/perimeter risk
+                nt_store = _open_timeseries()
 
                 def on_metrics(row: dict) -> None:
                     nonlocal last_print
@@ -550,6 +637,24 @@ def run_guard(
                         pattern="live metrics",
                         load_profile=load_name,
                     )
+                    if nt_store is not None:
+                        nt_store.write_many(
+                            {
+                                "cpu_percent": row.get("cpu_percent"),
+                                "mem_percent": row.get("mem_percent"),
+                                "swap_percent": row.get("swap_percent"),
+                                "net_bytes_sent_per_s": row.get("net_bytes_sent_per_s"),
+                                "net_bytes_recv_per_s": row.get("net_bytes_recv_per_s"),
+                                "disk_read_bytes_per_s": row.get("disk_read_bytes_per_s"),
+                                "disk_write_bytes_per_s": row.get("disk_write_bytes_per_s"),
+                                "gpu_util_percent": row.get("gpu_util_percent"),
+                                "gpu_mem_percent": row.get("gpu_mem_percent"),
+                                "agent_score": ascore,
+                                "host_risk": ascore,
+                            }
+                        )
+                        nt_store.flush()
+                        nt_store.maybe_rollup()
                     if now - last_print >= interval_sec:
                         last_print = now
                         console.print(f"host ok risk={ascore:.3f} host=0.000 agent={ascore:.3f} (notorch)")
@@ -589,11 +694,27 @@ def run_guard(
         console.print(
             f"[bold]guard host-ml[/] window={infer.window_size} thr={infer.threshold:.3f}"
         )
+        ts_store = _open_timeseries()
+        ts_metrics = (
+            "cpu_percent",
+            "mem_percent",
+            "swap_percent",
+            "net_bytes_sent_per_s",
+            "net_bytes_recv_per_s",
+            "disk_read_bytes_per_s",
+            "disk_write_bytes_per_s",
+            "gpu_util_percent",
+            "gpu_mem_percent",
+        )
 
         def on_sample(row: dict) -> None:
             nonlocal last_alert, last_infer, last_drift_notify
             if stop.is_set():
                 raise KeyboardInterrupt
+            if ts_store is not None:
+                ts_store.write_many({m: row.get(m) for m in ts_metrics})
+                ts_store.flush()
+                ts_store.maybe_rollup()
             try:
                 proc_track.sample()
             except Exception:
@@ -641,19 +762,39 @@ def run_guard(
             if not pred.is_anomaly and len(recent_scores) >= 10:
                 calib.update(recent_scores[-10:])
                 calib.save(cal_path)
-            from sysspectogram.risk import fuse_host_agent
+            from sysspectogram.risk import decide_risk
 
-            ascore = risk_state.get("agent", 0.0)
-            risk = fuse_host_agent(
-                host_score, ascore, host_weight=host_weight, agent_weight=agent_weight
-            )
+            ascore = float(risk_state.get("agent", 0.0))
+            agent_ts = risk_state.get("agent_ts")
+            agent_age = (time.time() - float(agent_ts)) if agent_ts is not None else None
             risk_thr = ens_cfg.get("risk_threshold")
             if risk_thr is None:
                 risk_thr = pred.threshold
             else:
                 risk_thr = float(risk_thr)
             risk_thr = learner.apply_bias(float(risk_thr))
-            is_anom = bool(risk >= risk_thr) if agent_weight > 0 else (host_score >= risk_thr)
+            host_thr = learner.apply_bias(float(pred.threshold))
+            decision = decide_risk(
+                host_score,
+                ascore if agent_weight > 0 else None,
+                agent_age,
+                host_threshold=host_thr,
+                risk_threshold=risk_thr,
+                host_weight=host_weight,
+                agent_weight=agent_weight,
+                agent_half_life_sec=agent_half_life_sec,
+            )
+            risk = decision.risk
+            if ts_store is not None:
+                ts_store.write_many(
+                    {
+                        "host_score": host_score,
+                        "host_risk": risk,
+                        "agent_score": ascore,
+                        "threshold": risk_thr,
+                    }
+                )
+            is_anom = decision.is_anomaly
             status = "ANOMALY" if is_anom else "ok"
             console.print(
                 f"host {status} risk={risk:.3f} host={host_score:.3f} agent={ascore:.3f} "
@@ -991,13 +1132,36 @@ def run_guard(
     agent_proc = None
     agent_cfg = config.get("agent") or {}
     if agent_cfg.get("enabled"):
-        from sysspectogram.agent_score import AgentFeatureWindow, AgentIsolationScorer
+        from sysspectogram.agent_score import (
+            AgentEventMatrix,
+            AgentFeatureWindow,
+            AgentIsolationScorer,
+        )
 
         agent_feat = AgentFeatureWindow(window_sec=float(agent_cfg.get("score_window_sec", 120)))
         agent_scorer = AgentIsolationScorer(
             _resolve(agent_cfg["iforest"]) if agent_cfg.get("iforest") else None,
             supply_chain=config.get("supply_chain") or {},
         )
+        # Feature layout follows the loaded model (legacy 9 counters or event matrix 2K).
+        agent_feature_mode = (
+            str(agent_scorer.meta.get("feature_mode", "legacy")) if agent_scorer.model else "legacy"
+        )
+        agent_mat = AgentEventMatrix(window_sec=int(float(agent_cfg.get("score_window_sec", 120))))
+        # Phase 1b (experimental, default off): event spectrogram CNN, see ADR 0002.
+        spectro_scorer = None
+        spectro_mat = None
+        if agent_cfg.get("spectrogram"):
+            from sysspectogram.agent_spectro import WINDOW as SPECTRO_WINDOW
+            from sysspectogram.agent_spectro import AgentSpectroScorer
+
+            spectro_scorer = AgentSpectroScorer(
+                _resolve(agent_cfg.get("spectrogram_model") or "artifacts/agent")
+            )
+            spectro_mat = AgentEventMatrix(window_sec=SPECTRO_WINDOW)
+            if not spectro_scorer.ready:
+                console.print("[yellow]agent.spectrogram on but no agent_spectro model - off[/]")
+                spectro_scorer = None
         agent_score_threshold = float(agent_cfg.get("score_threshold", 0.65))
         last_agent_seen = {"ts": time.time()}
         agent_heartbeat_sec = float(agent_cfg.get("heartbeat_sec", 180))
@@ -1050,7 +1214,16 @@ def run_guard(
                 risky_comm=bool(extras.get("risky_comm")),
                 path=getattr(alert, "path", None),
             )
-            ascore = agent_scorer.score(agent_feat.vector())
+            agent_mat.push(str(alert.rule_id))
+            agent_vec = (
+                agent_mat.features() if agent_feature_mode == "matrix" else agent_feat.vector()
+            )
+            ascore = agent_scorer.score(agent_vec)
+            if spectro_scorer is not None and spectro_mat is not None:
+                spectro_mat.push(str(alert.rule_id))
+                spectro_score = spectro_scorer.score(spectro_mat.matrix())
+                extras["agent_spectro"] = round(spectro_score, 3)
+                ascore = max(ascore, spectro_score)
             ascore = feedback.adjust_score(
                 ascore,
                 comm=getattr(alert, "comm", None),
@@ -1065,6 +1238,7 @@ def run_guard(
                 risk_threshold=risk_thr,
             )
             risk_state["agent"] = float(ascore)
+            risk_state["agent_ts"] = time.time()
             extras["agent_score"] = round(ascore, 3)
             extras["kirk_trust"] = kirk_status.get("trust")
             alert.extras = extras
@@ -1224,7 +1398,18 @@ def run_guard(
                         )
                     else:
                         alert.message = body
-                        bot.send_agent_alert(alert)
+                        if str(alert.rule_id) == "agent_connect_burst" and is_unattributed(
+                            getattr(alert, "pid", 0)
+                        ):
+                            # Unattributed connection bursts are noise on Telegram; they stay in the app log.
+                            console.print("[dim]telegram: skipped unattributed connect burst (pid 0)[/]")
+                        else:
+                            bot.send_agent_alert(
+                                alert,
+                                png=_event_snapshot(
+                                    getattr(alert, "ts", None), f"{alert.rule_id} · {alert.severity}"
+                                ),
+                            )
                 except Exception:
                     pass
             webhook = siem_cfg.get("webhook_url")
@@ -1257,9 +1442,48 @@ def run_guard(
             except Exception:
                 pass
 
+        vmi_source = None
+        vmi_cv_state = None
+        vmi_state: dict[str, float] = {"last": 0.0}
+        vmi_interval = float(kirk_cfg.get("vmi_interval_sec", 30))
+        if kirk_cfg.get("vmi"):
+            from sysspectogram.vmi.crossview import CrossViewState
+            from sysspectogram.vmi.mock import MockGuestTaskSource
+
+            if str(kirk_cfg.get("vmi_backend", "mock")) == "libvmi":
+                from sysspectogram.vmi.libvmi import LibvmiTaskSource
+
+                vmi_source = LibvmiTaskSource(
+                    str(kirk_cfg.get("vmi_domain") or ""),
+                    profile=_resolve(str(kirk_cfg.get("vmi_profile") or "")),
+                    trust=str(kirk_cfg.get("vmi_trust", "lab")),
+                )
+            else:
+                vmi_source = MockGuestTaskSource()
+            vmi_cv_state = CrossViewState(confirm=int(kirk_cfg.get("vmi_confirm", 2)))
+
+        def on_agent_pids(pids: set[int]) -> None:
+            if vmi_source is None or vmi_cv_state is None:
+                return
+            now = time.time()
+            if now - vmi_state["last"] < vmi_interval:
+                return
+            vmi_state["last"] = now
+            from sysspectogram.vmi import crossview
+
+            try:
+                alerts = crossview.check(pids, vmi_source, vmi_cv_state, host_id)
+            except Exception as exc:  # fail-open: VMI problems must not stop the guard
+                console.print(f"[yellow]vmi check skipped[/] {exc}")
+                return
+            for a in alerts:
+                alert_fanout.emit(a)
+                console.print(f"[red]VMI[/] {a['message']} trust={vmi_source.trust}")
+
         agent_listener = AgentSocketListener(
             sock_path,
             on_alert=on_agent_alert,
+            on_pids=on_agent_pids if kirk_cfg.get("vmi") else None,
             on_metrics=on_agent_metrics if bool(agent_cfg.get("metrics", True)) else None,
             cooldown_sec=float(agent_cfg.get("cooldown_sec", 60)),
             max_alerts_per_min=int(agent_cfg.get("max_alerts_per_min", 20)),
@@ -1372,7 +1596,18 @@ def run_guard(
         if kirk_enabled and bool(kirk_cfg.get("ima_watch", True)):
             threads.append(threading.Thread(target=ima_watch_loop, name="ima-watch", daemon=True))
 
-        if agent_cfg.get("auto_start") and agent_listener is not None:
+        # Never start a second agent on the same socket/pidfile (duplicate events + watchdog churn).
+        running_agent = (
+            _running_agent_pid(_resolve(agent_cfg.get("pidfile") or "state/agent.pid"))
+            if agent_cfg.get("auto_start")
+            else None
+        )
+        if running_agent is not None:
+            console.print(
+                f"[yellow]agent auto_start[/] agent already running pid={running_agent}; "
+                "reusing it (not starting a second copy)"
+            )
+        if agent_cfg.get("auto_start") and agent_listener is not None and running_agent is None:
             import shutil
             import subprocess
 
@@ -1421,6 +1656,8 @@ def run_guard(
                     cmd.extend(["--metrics-ms", str(int(agent_cfg.get("metrics_ms", 1000)))])
                 else:
                     cmd.extend(["--metrics-ms", "0"])
+                if kirk_cfg.get("vmi"):
+                    cmd.extend(["--pids-sec", str(int(kirk_cfg.get("vmi_pids_sec", 5)))])
                 fim_cfg = agent_cfg.get("fim") or {}
                 if bool(fim_cfg.get("enabled")):
                     cmd.append("--fim")
@@ -1684,6 +1921,10 @@ def run_guard(
 
     for t in threads:
         t.start()
+    # SIGTERM (e.g. the Control Center stopping us) shuts down exactly like Ctrl-C.
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, signal.default_int_handler)
+    clean_stop = False
     try:
         t0 = time.monotonic()
         while True:
@@ -1692,8 +1933,10 @@ def run_guard(
             if all(not t.is_alive() for t in threads):
                 break
             time.sleep(0.5)
+        clean_stop = True
     except KeyboardInterrupt:
         console.print("stopping guard...")
+        clean_stop = True
     finally:
         stop.set()
         if httpd is not None:
@@ -1719,3 +1962,6 @@ def run_guard(
         for t in threads:
             t.join(timeout=3)
         watcher.persist()
+        if clean_stop:
+            _clear_guard_pidfile(os.getpid())
+            _drop_file(_resolve("state/unlock.code"))

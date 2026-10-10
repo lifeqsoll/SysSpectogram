@@ -56,7 +56,7 @@ python -m sysspectogram profiles pack \
   --name profile-generic-linux-v1 --role generic-linux \
   --host artifacts/real_v3 \
   --out dist/profile-generic-linux-v1.tar.gz \
-  --agent-if artifacts/agent_iforest.joblib
+  --agent-if artifacts/agent_iforest.ssf.npz
 # upload dist/*.tar.gz + *.sha256 to GitHub Release v0.4.0
 ```
 

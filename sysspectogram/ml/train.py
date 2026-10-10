@@ -39,8 +39,8 @@ def train_models(
     batch_size: int = 32,
     lr: float = 1e-3,
     seed: int = 42,
-    cnn_weight: float = 0.55,
-    iforest_weight: float = 0.45,
+    cnn_weight: float = 0.6,
+    iforest_weight: float = 0.4,
     recall_target: float = 0.85,
     device: str | None = None,
 ) -> dict:

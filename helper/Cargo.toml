@@ -1,0 +1,18 @@
+[package]
+name = "sysspectogram-helper"
+version = "1.0.0"
+edition = "2021"
+description = "Root-side gate for the SysSpectogram Control Center (allowlisted operations, polkit-checked)"
+license = "MIT"
+publish = false
+
+[dependencies]
+libc = "0.2"
+serde_json = "1"
+sha2 = "0.10"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

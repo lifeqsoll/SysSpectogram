@@ -1,0 +1,13 @@
+schema: scenario.v1
+id: lab-demo
+title: {en: Lab and demo, ru: Лаборатория и демо}
+description:
+  en: For a test machine. Enables the hypervisor cross-check with the mock backend and keeps the event spectrogram available for experiments. Do not use on production hosts.
+  ru: Для тестового стенда. Включает сверку с гипервизором на mock-бэкенде и оставляет спектрограмму событий для экспериментов. Не использовать на продуктивных хостах.
+overrides:
+  agent.enabled: true
+  agent.mode: userspace
+  kirk.vmi: true
+  kirk.vmi_backend: mock
+  kirk.vmi_trust: lab
+  response.mode: observe

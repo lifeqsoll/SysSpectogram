@@ -103,17 +103,24 @@ def flood_local_net(duration_sec: float, connections_per_sec: int = 80) -> None:
         t.join(timeout=2)
 
 
-def burn_gpu(duration_sec: float, size: int = 2048) -> None:
-    """Light GPU load via torch CUDA matmul. Soft-fail if no CUDA."""
+def _cuda_device():
+    """Return the CUDA device or raise. A silent skip would make the lab run look like a miss."""
     try:
         import torch
-    except ImportError:
-        print("torch not installed; GPU sim skipped")
-        return
+    except ImportError as e:
+        raise RuntimeError("torch is not installed in this Python; GPU sims need a CUDA build of torch") from e
     if not torch.cuda.is_available():
-        print("CUDA not available; GPU sim skipped")
-        return
-    device = torch.device("cuda")
+        raise RuntimeError(
+            "CUDA is not available to torch (the installed build is CPU-only); install a CUDA build of torch"
+        )
+    return torch.device("cuda")
+
+
+def burn_gpu(duration_sec: float, size: int = 2048) -> None:
+    """Light GPU compute load via torch CUDA matmul."""
+    import torch
+
+    device = _cuda_device()
     a = torch.randn(size, size, device=device)
     b = torch.randn(size, size, device=device)
     end = time.time() + duration_sec
@@ -121,3 +128,21 @@ def burn_gpu(duration_sec: float, size: int = 2048) -> None:
         c = a @ b
         a = c
         torch.cuda.synchronize()
+
+
+def pressure_gpu_memory(duration_sec: float, megabytes: int = 1024) -> None:
+    """Hold about `megabytes` of GPU memory for `duration_sec`, touching it so it stays resident."""
+    import torch
+
+    device = _cuda_device()
+    elements = max(1, megabytes * 1024 * 1024 // 4)  # float32
+    block = torch.empty(elements, dtype=torch.float32, device=device)
+    end = time.time() + duration_sec
+    try:
+        while time.time() < end:
+            block.add_(1.0)
+            torch.cuda.synchronize()
+            time.sleep(0.5)
+    finally:
+        del block
+        torch.cuda.empty_cache()

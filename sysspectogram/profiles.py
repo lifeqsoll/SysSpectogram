@@ -56,13 +56,13 @@ def pack_profile(
         if agent_iforest and agent_iforest.exists():
             agent_dst = root / "agent"
             agent_dst.mkdir(parents=True, exist_ok=True)
-            dest = agent_dst / "agent_iforest.joblib"
+            dest = agent_dst / "agent_iforest.ssf.npz"
             shutil.copy2(agent_iforest, dest)
             if minisign_secret_key is not None:
                 from sysspectogram.supply_chain import sign_file
 
                 sign_file(dest, Path(minisign_secret_key))
-            agent_rel = "agent/agent_iforest.joblib"
+            agent_rel = "agent/agent_iforest.ssf.npz"
 
         manifest = {
             "schema": SCHEMA,

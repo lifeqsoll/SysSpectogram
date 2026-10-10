@@ -148,3 +148,18 @@ fn net_rates(
     *prev = Some((rx_b, tx_b, rx_p, tx_p, now));
     Ok(out)
 }
+
+/// Process ids currently visible in /proc (guest view for the VMI cross-check).
+pub fn list_pids() -> io::Result<Vec<u32>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir("/proc")? {
+        let Ok(entry) = entry else { continue };
+        if let Some(name) = entry.file_name().to_str() {
+            if let Ok(pid) = name.parse::<u32>() {
+                out.push(pid);
+            }
+        }
+    }
+    out.sort_unstable();
+    Ok(out)
+}

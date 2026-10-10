@@ -4,7 +4,7 @@
 
 Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
 
-**Scope (v0.9):** v0.8 supply-chain plus pickle-free model artifacts, remote alert sinks, default FIM baselines, hybrid watchdog (Phoenix + optional DKMS), and clearer Day-0 docs. Live **VMI** remains **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Scope (v1.0):** Control Center desktop app (Tauri 2 + Svelte), a privileged helper with polkit, signed release bundles, an incident engine with ATT&CK mapping and HTML reports, event-level features with an opt-in event spectrogram model, dashboards from 1 h to 30 d, and a read-only VMI cross-view for self-hosted KVM ([docs/VMI.md](docs/VMI.md)).
 
 ### Docs (by topic)
 
@@ -16,7 +16,23 @@ Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms”
 
 **Data / ML ops:** [Recipes](docs/RECIPES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Role lab](docs/ROLE_LAB.md) · [Simulations](simulations/README.md)
 
-**Roadmap & releases:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+**Product & v1.0:** [Product description](docs/PRODUCT_v1.0.md) · [Control Center](docs/CONTROL_CENTER.md) · [ADRs](docs/adr/) · [Release v1.0](docs/RELEASE_v1.0.0.md)
+
+**Roadmap & releases:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v1.0](docs/RELEASE_v1.0.0.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+
+### What's new in v1.0
+
+| Piece | Status |
+| --- | --- |
+| Control Center: Overview, Live, Dashboards (1 h to 30 d), Incidents, Agent, Perimeter, Settings, Scenarios, Tests and Lab, Install and Updates, Logs, About | yes (`control-center/`) |
+| `sysspectogram-helper`: allowlisted root operations, polkit per action, peer credentials | yes (`helper/`) |
+| Signed bundle install (minisign + sha256, verified in root-owned staging) | yes; network download on first run is not yet implemented |
+| Incident engine: correlation, ATT&CK mapping, HTML and Markdown reports | yes |
+| Fusion gate: alert if host ≥ threshold OR fused risk ≥ threshold; agent score half-life | yes |
+| Event-level features (per-channel matrix) and event spectrogram CNN | yes, spectrogram model is opt-in (`agent.spectrogram`) |
+| Read-only VMI cross-view, mock backend; libvmi backend unverified on hardware | yes, off by default (`kirk.vmi`) |
+| Timeseries store with rollups for dashboards | yes |
+| Schema-driven settings (EN/RU), scenario presets, localhost lab runs | yes |
 
 ### What's new in v0.9
 
@@ -312,6 +328,48 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 ---
 
+## Control Center
+
+Desktop application for Linux with a sidebar: Overview, Live, Dashboards, Incidents, Agent, Perimeter, Settings, Scenarios, Tests and Lab, Install and Updates, Logs and Audit, About. English is the default; Russian is one click away. Icons are SVG; no emoji.
+
+```bash
+# development (needs Node 20+, Rust stable, Tauri 2 system libraries)
+cd control-center && npm install && npm run tauri dev
+
+# release build (AppImage, deb)
+cd control-center && npm run tauri build
+
+# privileged helper (root service; see docs/CONTROL_CENTER.md)
+cd helper && cargo build --release
+```
+
+### Build the Control Center from source
+
+Requirements: Node 20+, Rust stable, and the Tauri 2 Linux libraries (on Arch: `sudo pacman -S webkit2gtk-4.1 librsvg patchelf base-devel`; see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)).
+
+```bash
+git clone <repo-url> SysSpectogram && cd SysSpectogram/control-center
+npm install
+npm run tauri build
+```
+
+Outputs:
+
+- the binary: `control-center/src-tauri/target/release/sysspectogram-control-center`
+- packages: `control-center/src-tauri/target/release/bundle/appimage/*.AppImage` and `bundle/deb/*.deb`
+
+Run it:
+
+```bash
+./src-tauri/target/release/sysspectogram-control-center
+```
+
+The app icons are already in `control-center/src-tauri/icons/`. To replace them, put a square 1024×1024 PNG anywhere and run `npm run tauri icon path/to/icon.png`.
+
+The Control Center reads `$SYSSPECTOGRAM_HOME` (default `/var/lib/sysspectogram`) and runs the Python CLI from `$SYSSPECTOGRAM_PYTHON` (default `/opt/sysspectogram/venv/bin/python` if present, else `python3`). Without an installed guard, the pages are empty; that is expected for a first look.
+
+The UI never runs privileged commands itself. Settings changes, service control and bundle installs go through `sysspectogram-helper`, which checks each action with polkit. Dashboards read `state/timeseries.sqlite` read-only. Details: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
+
 ## CLI reference
 
 Global form:
@@ -533,6 +591,49 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run \
 | `--duration` | Optional finite run |
 | `--jsonl-out` | Alert stream |
 
+### `incidents`
+
+```bash
+python -m sysspectogram incidents list --window 300
+python -m sysspectogram incidents show <id>
+python -m sysspectogram incidents report <id> --format html --out reports/incident.html
+```
+
+Correlates `reports/alerts.jsonl`, `agent.jsonl` and `perimeter.jsonl` into `incident.v1` records in `reports/incidents.jsonl`.
+
+### `lab`
+
+```bash
+python -m sysspectogram lab list --json
+python -m sysspectogram lab run sim-cpu
+```
+
+Registered localhost-only lab runs. Each one states the alert it should produce, and the Control Center checks the reports for it. Runs that use intrusion scripts ask for consent first.
+
+### `scenario`
+
+```bash
+python -m sysspectogram scenario list
+python -m sysspectogram scenario show hardened-observe --lang en
+```
+
+Protection presets from `configs/scenarios/`. `show` prints each change with its explanation. Applying a preset is done in the Control Center.
+
+### `settings`
+
+```bash
+python -m sysspectogram settings export    # JSON for the UI: schema, values, scenarios
+python -m sysspectogram settings check     # CI: schema, i18n, defaults, scenarios
+```
+
+### `timeseries`
+
+```bash
+python -m sysspectogram timeseries query host_risk --range 6h
+```
+
+Points from `state/timeseries.sqlite`. Ranges: `1h`, `6h`, `12h`, `24h`, `7d`, `30d`.
+
 ### `lab-nmap`
 
 ```bash
@@ -653,4 +754,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v0.9** adds pickle-free model artifacts, remote alert sinks, default FIM baselines, hybrid watchdog, and clearer docs. See [docs/RELEASE_v0.9.0.md](docs/RELEASE_v0.9.0.md), [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), and [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Next: conditional v1.0 VMI for self-hosted KVM.
+**v1.0** ships the Control Center, the privileged helper, the incident engine, event-level scoring, dashboards and a read-only VMI cross-view. See [docs/RELEASE_v1.0.0.md](docs/RELEASE_v1.0.0.md), [docs/PRODUCT_v1.0.md](docs/PRODUCT_v1.0.md) and [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Known gaps are listed in the release notes.

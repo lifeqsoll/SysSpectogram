@@ -40,6 +40,18 @@ impl Emitter {
         self.emit_line(&serde_json::to_string(&alert).map_err(io::Error::other)?, true)
     }
 
+    /// Guest pid snapshot for the guard (VMI cross-check). Not logged to jsonl.
+    pub fn emit_pids(&self, host_id: &str, pids: &[u32]) -> io::Result<()> {
+        let payload = serde_json::json!({
+            "schema": "sysspectogram.pids.v1",
+            "kind": "pids",
+            "host_id": host_id,
+            "ts": crate::types::now_unix(),
+            "pids": pids,
+        });
+        self.emit_line(&payload.to_string(), false)
+    }
+
     pub fn emit_metrics(&self, sample: &MetricsSample) -> io::Result<()> {
         self.emit_line(
             &serde_json::to_string(sample).map_err(io::Error::other)?,

@@ -96,6 +96,7 @@ class AgentSocketListener:
         on_alert: Callable[[AgentAlert], None] | None = None,
         *,
         on_metrics: Callable[[MetricsSample], None] | None = None,
+        on_pids: Callable[[set[int]], None] | None = None,
         cooldown_sec: float = 60.0,
         require_same_uid: bool = True,
         max_alerts_per_min: int = 30,
@@ -106,6 +107,7 @@ class AgentSocketListener:
         self.path = Path(path)
         self.on_alert = on_alert
         self.on_metrics = on_metrics
+        self.on_pids = on_pids
         self.cooldown_sec = cooldown_sec
         self.require_same_uid = require_same_uid
         self.max_alerts_per_min = max_alerts_per_min
@@ -236,6 +238,25 @@ class AgentSocketListener:
                     if self.on_metrics:
                         try:
                             self.on_metrics(MetricsSample.from_dict(obj))
+                        except Exception:
+                            pass
+                    continue
+                if kind == "pids":
+                    # Guest process view for VMI cross-check (ADR 0003). Not an alert.
+                    if schema != "sysspectogram.pids.v1" or self.on_pids is None:
+                        continue
+                    raw = obj.get("pids")
+                    if isinstance(raw, list):
+                        pids = set()
+                        for x in raw:
+                            if isinstance(x, bool) or not isinstance(x, (int, float)):
+                                continue
+                            if isinstance(x, float) and not x.is_integer():
+                                continue
+                            if int(x) > 0:
+                                pids.add(int(x))
+                        try:
+                            self.on_pids(pids)
                         except Exception:
                             pass
                     continue

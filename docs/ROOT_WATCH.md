@@ -48,4 +48,4 @@ root_watch:
   allow_comms: []
 ```
 
-See [AGENT.md](AGENT.md), [AGENT_PROTECT.md](AGENT_PROTECT.md), design note under `docs/superpowers/specs/`.
+See [AGENT.md](AGENT.md), [AGENT_PROTECT.md](AGENT_PROTECT.md), design notes are kept by the maintainer and are not published.

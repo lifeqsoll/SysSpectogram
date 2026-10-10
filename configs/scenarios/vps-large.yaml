@@ -1,0 +1,13 @@
+schema: scenario.v1
+id: vps-large
+title: {en: Large VPS (8+ vCPU), ru: Крупный VPS (8+ vCPU)}
+description:
+  en: A bigger virtual server with many services. Userspace mode keeps the agent's overhead low. Sampling is tighter than on small VPS, so spikes show up in dashboards sooner.
+  ru: Крупный виртуальный сервер со многими сервисами. Режим userspace снижает накладные расходы агента. Сэмплирование чаще, чем на малом VPS, поэтому всплески быстрее видны на дашбордах.
+overrides:
+  agent.enabled: true
+  agent.mode: userspace
+  ensemble.risk_threshold: 0.7
+  monitor.interval_sec: 5
+  timeseries.enabled: true
+  response.mode: observe

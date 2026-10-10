@@ -1,0 +1,12 @@
+schema: scenario.v1
+id: nginx-web
+title: {en: Nginx web server, ru: Веб-сервер Nginx}
+description:
+  en: Nginx serving HTTP and HTTPS. Watches inbound scans and connection bursts. Auto-ban stays off. The agent runs in userspace mode, which needs no root.
+  ru: Nginx на HTTP и HTTPS. Следит за сканированием и всплесками соединений. Автоблокировка выключена. Агент в режиме userspace, root не нужен.
+overrides:
+  agent.enabled: true
+  agent.mode: userspace
+  ensemble.risk_threshold: 0.75
+  monitor.interval_sec: 10
+  response.mode: observe

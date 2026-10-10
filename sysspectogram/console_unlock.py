@@ -15,7 +15,7 @@ class ConsoleUnlock:
         *,
         enabled: bool = True,
         ttl_sec: float = 7200.0,
-        on_code: Callable[[str], None] | None = None,
+        on_code: Callable[[str | None], None] | None = None,
     ) -> None:
         self.enabled = enabled
         self.ttl_sec = float(ttl_sec)
@@ -32,12 +32,15 @@ class ConsoleUnlock:
         self._unlocked = False
         self._deadline = 0.0
         self._fails = []
+        self._notify(self._code)
+        return self._code
+
+    def _notify(self, code: str | None) -> None:
         if self.on_code:
             try:
-                self.on_code(self._code)
+                self.on_code(code)
             except Exception:
                 pass
-        return self._code
 
     @property
     def pending_code(self) -> str | None:
@@ -69,6 +72,7 @@ class ConsoleUnlock:
             self._deadline = time.time() + self.ttl_sec
             self._code = None
             self._fails = []
+            self._notify(None)  # code consumed: whoever shows it must drop it
             return True
         self._fails.append(now)
         if len(self._fails) >= 5:

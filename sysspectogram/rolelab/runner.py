@@ -375,8 +375,8 @@ def train_role_pack(
         epochs=epochs,
         batch_size=32,
         lr=0.001,
-        cnn_weight=0.55,
-        iforest_weight=0.45,
+        cnn_weight=0.6,
+        iforest_weight=0.4,
         recall_target=0.85,
         seed=42,
     )

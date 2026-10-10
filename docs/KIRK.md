@@ -8,7 +8,7 @@ Status: **in-guest** integrity signals for v0.5. Honest trust labels - not a sil
 | --- | --- |
 | `best-effort` | In-guest views (`/proc`, eBPF, cross-view). A sophisticated LKM can lie. |
 | `measured` | **IMA present** and (**Secure Boot on** or **TPM present**). Kernel/hardware hashes load path; TPM can record measurements. Still not remote attestation by itself. |
-| `out-of-band` | Host VMI - **deferred to v1.0** ([VMI.md](VMI.md)). |
+| `out-of-band` | Host VMI cross-view, only when the hypervisor is a separate trust domain ([VMI.md](VMI.md)). |
 
 Probe on guard start (`kirk.trust: auto`):
 
@@ -52,7 +52,7 @@ kirk:
   allow_ssh_cidrs: ["YOUR.IP/32"]
   isolate_ttl_sec: 3600
   ima_watch: true
-  vmi: false            # ignored until v1.0
+  vmi: false            # read-only hypervisor cross-view, see VMI.md
 ```
 
 Never auto-`rmmod`. Prefer isolate -> reboot to known-good.

@@ -8,7 +8,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "default.yaml"
+STATE_ENV = "SYSSPECTOGRAM_HOME"
 _DOTENV_LOADED = False
+
+
+def state_root() -> Path:
+    """Directory that holds runtime state (state/, reports/, artifacts/).
+
+    Defaults to the source tree. Set SYSSPECTOGRAM_HOME to the installed state
+    directory (/var/lib/sysspectogram). The Control Center reads the same variable,
+    so the guard and the dashboards always use the same timeseries file.
+    """
+    env = os.environ.get(STATE_ENV)
+    return Path(env) if env else ROOT
 
 
 def load_dotenv(path: Path | None = None) -> None:
@@ -35,6 +47,83 @@ def load_dotenv(path: Path | None = None) -> None:
     _DOTENV_LOADED = True
 
 
+SETTINGS_OVERLAY_ENV = "SYSSPECTOGRAM_SETTINGS_OVERLAY"
+DEFAULT_SETTINGS_OVERLAY = Path("/etc/sysspectogram/settings.json")
+_OVERLAY_TYPES = (bool, int, float, str)
+
+# Keys the overlay may set. Must match HELPER allowlist (helper/src/ops.rs SETTINGS_RULES)
+# and configs/schema.yaml. A test keeps the three in sync.
+OVERLAY_ALLOWED = frozenset(
+    {
+        "agent.enabled",
+        "agent.mode",
+        "agent.score_half_life_sec",
+        "agent.spectrogram",
+        "alerts.strict_secrets",
+        "ensemble.host_weight",
+        "ensemble.agent_weight",
+        "ensemble.risk_threshold",
+        "kirk.vmi",
+        "kirk.vmi_backend",
+        "kirk.vmi_trust",
+        "kirk.vmi_confirm",
+        "monitor.interval_sec",
+        "response.mode",
+        "telegram.require_console_unlock",
+        "timeseries.enabled",
+    }
+)
+
+
+def _overlay_trusted(path: Path) -> bool:
+    """Trust an overlay only if root owns it and group/other cannot write it."""
+    if os.name != "posix":
+        return False
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    return st.st_uid == 0 and not (st.st_mode & 0o022)
+
+
+def settings_overlay_path() -> Path:
+    raw = os.environ.get(SETTINGS_OVERLAY_ENV)
+    return Path(raw) if raw else DEFAULT_SETTINGS_OVERLAY
+
+
+def _apply_settings_overlay(data: dict[str, Any]) -> dict[str, Any]:
+    """Merge root-written overrides (written by sysspectogram-helper) on top of YAML.
+
+    The overlay is a JSON object of dotted keys to scalars. Only keys in OVERLAY_ALLOWED
+    are applied, and only from a root-owned file that others cannot write. Anything else
+    is ignored, so a bad overlay can never stop the guard from starting.
+    """
+    import json
+
+    path = settings_overlay_path()
+    try:
+        if not path.is_file() or not _overlay_trusted(path):
+            return data
+        overlay = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return data
+    if not isinstance(overlay, dict):
+        return data
+    for dotted, value in overlay.items():
+        if dotted not in OVERLAY_ALLOWED or not isinstance(value, _OVERLAY_TYPES):
+            continue
+        cur: dict[str, Any] = data
+        parts = dotted.split(".")
+        for part in parts[:-1]:
+            nxt = cur.get(part)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                cur[part] = nxt
+            cur = nxt
+        cur[parts[-1]] = value
+    return data
+
+
 def load_config(path: str | Path | None = None) -> dict[str, Any]:
     load_dotenv()
     cfg_path = Path(path) if path else DEFAULT_CONFIG
@@ -57,6 +146,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         data["load_profile"] = os.environ["SYSSPECTOGRAM_LOAD_PROFILE"]
     if os.environ.get("SYSSPECTOGRAM_RUNTIME"):
         data["runtime"] = os.environ["SYSSPECTOGRAM_RUNTIME"].strip().lower()
+    data = _apply_settings_overlay(data)
     from sysspectogram.load_profile import apply_load_profile
 
     data = apply_load_profile(data)

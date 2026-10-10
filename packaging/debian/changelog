@@ -1,3 +1,18 @@
+sysspectogram (1.0.0-1) unstable; urgency=medium
+
+  * Control Center (Tauri 2 + Svelte): dashboards 1h..30d, live values,
+    incidents with reports, scenarios, settings with diff and rollback,
+    localhost lab runs, bilingual EN/RU.
+  * sysspectogram-helper: root-side gate with polkit per action, signed
+    bundle install (minisign + sha256), settings overlay.
+  * Incident engine: alert correlation, ATT&CK mapping, HTML/Markdown reports.
+  * Fusion gating (host threshold OR fused risk), agent score half-life,
+    event-matrix features and event spectrogram CNN (opt-in).
+  * Read-only VMI cross-view (mock backend; libvmi backend behind config).
+  * Timeseries store with rollups for dashboards.
+
+ -- Salfetka <salfetka@users.noreply.github.com>  Sat, 10 Oct 2026 12:00:00 +0300
+
 sysspectogram (0.9.0-1) unstable; urgency=medium
 
   * Hardening: pickle-free artifacts, remote alert sinks, FIM baselines,

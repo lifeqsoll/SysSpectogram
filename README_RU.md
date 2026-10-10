@@ -4,7 +4,7 @@
 
 Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
 
-**Область (v0.9):** всё из v0.8 плюс безопасные артефакты моделей без pickle, удалённые sinks алертов, FIM baseline по умолчанию, hybrid watchdog (Phoenix + optional DKMS). Live **VMI** — **v1.0** ([docs/VMI.md](docs/VMI.md)).
+**Область (v1.0):** десктопное Control Center (Tauri 2 + Svelte), привилегированный helper с polkit, подписанные релизы, движок инцидентов с ATT&CK и HTML-отчётами, признаки на уровне событий с опциональной моделью спектрограммы, дашборды от 1 ч до 30 д и только-чтение сверка VMI для своего KVM-хоста ([docs/VMI.md](docs/VMI.md)).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
@@ -18,7 +18,23 @@ Linux-утилита для **защиты VPS / хоста**: ML по «спе�
 
 **Данные / ML:** [Рецепты](docs/RECIPES_RU.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Role lab](docs/ROLE_LAB.md) · [Симуляции](simulations/README_RU.md)
 
-**Roadmap:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+**Продукт и v1.0:** [Product description](docs/PRODUCT_v1.0.md) · [Control Center](docs/CONTROL_CENTER.md) · [ADR](docs/adr/) · [Release v1.0](docs/RELEASE_v1.0.0.md)
+
+**Roadmap:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v1.0](docs/RELEASE_v1.0.0.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+
+### Что нового в v1.0
+
+| Часть | Статус |
+| --- | --- |
+| Control Center: Обзор, Онлайн, Дашборды (1 ч — 30 д), Инциденты, Агент, Периметр, Настройки, Сценарии, Тесты и лаборатория, Установка и обновления, Логи, О программе | да (`control-center/`) |
+| `sysspectogram-helper`: разрешённый список root-операций, polkit на каждое действие, проверка peer credentials | да (`helper/`) |
+| Установка подписанного bundle (minisign + sha256, проверка в каталоге staging под root) | да; загрузка релиза при первом запуске пока не реализована |
+| Движок инцидентов: корреляция, маппинг ATT&CK, отчёты HTML и Markdown | да |
+| Гейт слияния: алерт, если host ≥ порога ИЛИ итоговый риск ≥ порога; полураспад оценки агента | да |
+| Признаки на уровне событий (матрица по каналам) и CNN по спектрограмме событий | да, модель спектрограммы опциональна (`agent.spectrogram`) |
+| Только-чтение сверка VMI, бэкенд mock; бэкенд libvmi не проверен на железе | да, выключено по умолчанию (`kirk.vmi`) |
+| Хранилище временных рядов с агрегатами для дашбордов | да |
+| Схема настроек (EN/RU), пресеты сценариев, запуски лаборатории только на localhost | да |
 
 ### Что нового в v0.9
 
@@ -317,6 +333,23 @@ python -m sysspectogram audit report --out reports/triage.json
 
 ---
 
+## Control Center
+
+Десктопное приложение для Linux с боковой панелью: Обзор, Онлайн, Дашборды, Инциденты, Агент, Периметр, Настройки, Сценарии, Тесты и лаборатория, Установка и обновления, Логи и аудит, О программе. По умолчанию английский, русский переключается одним нажатием. Иконки SVG, без emoji.
+
+```bash
+# разработка (нужны Node 20+, Rust stable, системные библиотеки Tauri 2)
+cd control-center && npm install && npm run tauri dev
+
+# релизная сборка (AppImage, deb)
+cd control-center && npm run tauri build
+
+# привилегированный helper (root-сервис; см. docs/CONTROL_CENTER.md)
+cd helper && cargo build --release
+```
+
+Интерфейс сам не выполняет привилегированных команд. Изменения настроек, управление службой и установка bundle идут через `sysspectogram-helper`, который проверяет каждое действие через polkit. Дашборды читают `state/timeseries.sqlite` только на чтение. Подробнее: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
+
 ## Справочник CLI
 
 Общий вид:
@@ -553,6 +586,49 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 Длинные `train` / `build-dataset` / `monitor` — только в терминале. На алерте — dual heatmap + confirm Ban/Kill.
 
+### `incidents`
+
+```bash
+python -m sysspectogram incidents list --window 300
+python -m sysspectogram incidents show <id>
+python -m sysspectogram incidents report <id> --format html --out reports/incident.html
+```
+
+Сводит `reports/alerts.jsonl`, `agent.jsonl` и `perimeter.jsonl` в записи `incident.v1` в `reports/incidents.jsonl`.
+
+### `lab`
+
+```bash
+python -m sysspectogram lab list --json
+python -m sysspectogram lab run sim-cpu
+```
+
+Зарегистрированные запуски лаборатории только на localhost. Каждый заявляет алерт, который должен появиться, а Control Center проверяет отчёты на его наличие. Запуски со скриптами вторжения сначала спрашивают согласие.
+
+### `scenario`
+
+```bash
+python -m sysspectogram scenario list
+python -m sysspectogram scenario show hardened-observe --lang ru
+```
+
+Пресеты защиты из `configs/scenarios/`. `show` печатает каждое изменение с пояснением. Применение пресета делается в Control Center.
+
+### `settings`
+
+```bash
+python -m sysspectogram settings export    # JSON для UI: схема, значения, сценарии
+python -m sysspectogram settings check     # CI: схема, i18n, значения по умолчанию, сценарии
+```
+
+### `timeseries`
+
+```bash
+python -m sysspectogram timeseries query host_risk --range 6h
+```
+
+Точки из `state/timeseries.sqlite`. Периоды: `1h`, `6h`, `12h`, `24h`, `7d`, `30d`.
+
 ### `lab-nmap`
 
 ```bash
@@ -645,4 +721,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-**v0.9:** безопасные артефакты без pickle, remote alert sinks, FIM baseline, hybrid watchdog и перегруппированные доки. См. [RELEASE_v0.9.0.md](docs/RELEASE_v0.9.0.md), [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Дальше: условный VMI в v1.0.
+**v1.0:** Control Center, привилегированный helper, движок инцидентов, признаки по событиям, дашборды и только-чтение сверка VMI. См. [RELEASE_v1.0.0.md](docs/RELEASE_v1.0.0.md), [PRODUCT_v1.0.md](docs/PRODUCT_v1.0.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Известные пробелы перечислены в заметках к релизу.

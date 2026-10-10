@@ -27,7 +27,7 @@ profile-ubuntu-nginx-v1/
   manifest.json
   README.md
   host/          # CNN+IF artifacts (meta.json, models…)
-  agent/         # optional agent_iforest.joblib
+  agent/         # optional agent_iforest.ssf.npz
 ```
 
 Sidecar: `profile-….tar.gz.sha256`.
@@ -39,7 +39,7 @@ python -m sysspectogram profiles list
 python -m sysspectogram profiles pack \
   --name profile-ubuntu-nginx-v1 --role ubuntu-nginx \
   --host artifacts/real_v3 --out dist/profile-ubuntu-nginx-v1.tar.gz \
-  --agent-if artifacts/agent_iforest.joblib
+  --agent-if artifacts/agent_iforest.ssf.npz
 
 python -m sysspectogram profiles pull \
   --url https://github.com/<org>/SysSpectogram/releases/download/v0.4.0/profile-ubuntu-nginx-v1.tar.gz \
