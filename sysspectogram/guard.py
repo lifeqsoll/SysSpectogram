@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import signal
 import socket
 import threading
@@ -25,8 +26,9 @@ from sysspectogram.preprocess.window import rows_to_matrix
 from sysspectogram.response.actions import NftBackend
 from sysspectogram.response.tokens import TokenStore
 from sysspectogram.telegram_bot import TelegramBot
-from sysspectogram.alert_text import is_unattributed
+from sysspectogram.alert_text import describe, is_unattributed
 from sysspectogram.console_unlock import ConsoleUnlock
+from sysspectogram.control_socket import ControlSocketServer, make_handler
 from sysspectogram.integrations.webhook import post_webhook
 from sysspectogram.agent_bridge import AgentSocketListener
 from sysspectogram.kirk_trust import ima_watch_new_lines, probe_kirk_trust
@@ -170,6 +172,10 @@ def run_guard(
     mon_cfg = config.get("monitor", {})
     col_cfg = config.get("collector", {})
     tg_cfg = config.get("telegram", {})
+    ui_lang = str((config.get("ui") or {}).get("lang") or "en").strip().lower()
+    if ui_lang not in ("en", "ru"):
+        ui_lang = "en"
+    notify_lang = ui_lang  # type: ignore[assignment]
     recon_cfg = config.get("recon", {})
     web_cfg = config.get("web") or {}
     ens_cfg = config.get("ensemble") or {}
@@ -301,36 +307,51 @@ def run_guard(
     resp_mode = str(resp_cfg.get("mode") or "observe").strip().lower()
     never_ban = set(str(x) for x in (resp_cfg.get("never_ban_cidrs") or []))
     auto_ban_cfg = dict(per_cfg.get("auto_ban") or {})
-    # Derive auto_ban from response.mode
+    _aggressive_rules = {
+        "bruteforce_ssh",
+        "honeypot_hit",
+        "canary_hit",
+        "egress_denylist_hit",
+        "port_scan_suspected",
+    }
+    # Derive auto_ban (+ kirk isolate) from response.mode
     if resp_mode == "observe":
         auto_ban_cfg["enabled"] = False
         auto_ban_rules: set[str] = set()
-    elif resp_mode == "shield":
+    elif resp_mode in ("shield", "enforce"):
+        # enforce = legacy alias for shield (older helper overlays)
         auto_ban_cfg["enabled"] = True
         auto_ban_rules = {"bruteforce_ssh", "honeypot_hit", "canary_hit"}
     elif resp_mode == "aggressive":
         auto_ban_cfg["enabled"] = True
-        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or {
-            "bruteforce_ssh",
-            "honeypot_hit",
-            "canary_hit",
-            "egress_denylist_hit",
-            "port_scan_suspected",
-        }
+        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or set(_aggressive_rules)
+    elif resp_mode == "isolate":
+        # Full auto-ban + enable kirk network isolation on critical signals
+        auto_ban_cfg["enabled"] = True
+        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or set(_aggressive_rules)
+        kirk_auto_isolate = True
+        if not kirk_enabled:
+            kirk_enabled = True
+            console.print("[cyan]response.mode=isolate[/] enabling kirk for auto-isolate")
     else:
         auto_ban_rules = set(auto_ban_cfg.get("rules") or []) if auto_ban_cfg.get("enabled") else set()
     auto_ban_ttl = float(auto_ban_cfg.get("ttl_sec", 3600))
-    console.print(f"[cyan]response.mode[/] {resp_mode} auto_ban_rules={sorted(auto_ban_rules) or '-'}")
+    console.print(
+        f"[cyan]response.mode[/] {resp_mode} auto_ban_rules={sorted(auto_ban_rules) or '-'} "
+        f"kirk_auto_isolate={kirk_auto_isolate}"
+    )
 
     def on_alert(alert, recon):
+        rid = str(getattr(alert, "rule_id", "") or "alert")
+        plain = describe(rid, str(getattr(alert, "message", "") or ""), lang=notify_lang)  # type: ignore[arg-type]
         GLOBAL_BUS.push_alert(
             LiveAlert(
                 ts=getattr(alert, "ts", None) or __import__("time").time(),
                 severity=str(getattr(alert, "severity", "medium")),
-                title=f"PERIMETER | {getattr(alert, 'rule_id', 'alert')}",
-                body=str(getattr(alert, "message", "")),
+                title=plain.title,
+                body=f"{plain.what}\n{plain.action}",
                 kind="perimeter",
-                rule_id=getattr(alert, "rule_id", None),
+                rule_id=rid,
                 extras={"ip": getattr(alert, "ip", None), "port": getattr(alert, "port", None)},
             )
         )
@@ -417,7 +438,7 @@ def run_guard(
         passive_dns_url=recon_cfg.get("passive_dns_url"),
         poll_sec=float(per_cfg.get("poll_sec", 2.0)),
         alert_new_egress=bool(per_cfg.get("alert_new_egress", False)),
-        on_alert=on_alert if (telegram or enable_web) else None,
+        on_alert=on_alert,
         on_auto_ban=on_auto_ban if auto_ban_rules else None,
         nft=nft,
         auto_ban_rules=auto_ban_rules,
@@ -444,12 +465,15 @@ def run_guard(
         console.print("[dim]Stolen bot token alone cannot control the host without this code.[/]")
         console.print("")
 
-    # Shared unlock for Telegram + Mini App (not needed for pure local web without bot/tunnel)
+    # Shared unlock for Telegram + Mini App + control socket (CC)
     want_unlock = bool(tg_cfg.get("require_console_unlock", True))
     web_on = bool(enable_web or web_cfg.get("enabled"))
-    tg_on = bool(telegram and client.configured)
+    want_telegram = bool(telegram or tg_cfg.get("enabled"))
+    tg_on = bool(want_telegram and client.configured)
     has_bot_creds = bool(tg_cfg.get("bot_token") and tg_cfg.get("chat_id"))
-    unlock_enabled = want_unlock and (tg_on or (web_on and (bool(webapp_url) or has_bot_creds)))
+    unlock_enabled = want_unlock and (
+        tg_on or web_on or bool(webapp_url) or has_bot_creds
+    )
     unlock_gate = ConsoleUnlock(
         enabled=unlock_enabled,
         ttl_sec=float(tg_cfg.get("unlock_ttl_sec", 7200)),
@@ -458,7 +482,7 @@ def run_guard(
     if unlock_gate.enabled and unlock_gate.pending_code:
         _print_unlock(unlock_gate.pending_code)
 
-    if telegram and client.configured:
+    if want_telegram and client.configured:
         bot = TelegramBot(
             client,
             watcher=watcher,
@@ -483,40 +507,72 @@ def run_guard(
             widen_rules=widen_rules,
             if_refit=if_refit_enabled,
             supply_chain=config.get("supply_chain") or {},
+            lang=notify_lang,
         )
         if unlock_gate.enabled:
             try:
-                client.send_message(
-                    bot.prefix(
-                        "control plane LOCKED after guard start.\n"
-                        "Get the 6-digit code on the host (Control Center: Show code),\n"
-                        "then send it here as: /unlock <code>"
-                    )
-                )
+                # One language only; skip if we already announced this process start.
+                announce = _resolve("state/unlock.tg_announced")
+                already = False
+                try:
+                    if announce.is_file():
+                        raw = announce.read_text(encoding="utf-8").strip()
+                        # Same pending code → do not spam Telegram on restart loops.
+                        already = raw == str(unlock_gate.pending_code or "")
+                except OSError:
+                    already = False
+                if not already:
+                    if notify_lang == "ru":
+                        locked_msg = (
+                            "Управление заблокировано после запуска.\n"
+                            "Откройте Control Center → Показать код, затем отправьте боту:\n"
+                            "/unlock КОД"
+                        )
+                    else:
+                        locked_msg = (
+                            "Control is locked after guard start.\n"
+                            "Open Control Center → Show code, then send the bot:\n"
+                            "/unlock CODE"
+                        )
+                    client.send_message(bot.prefix(locked_msg))
+                    try:
+                        _write_private(announce, str(unlock_gate.pending_code or ""))
+                    except OSError:
+                        pass
             except Exception:
                 pass
         bot_holder["bot"] = bot
-        console.print("[green]telegram enabled[/]")
-    elif telegram:
+        console.print(f"[green]telegram enabled[/] lang={notify_lang}")
+    elif want_telegram:
         console.print("[yellow]telegram requested but TELEGRAM_BOT_TOKEN/CHAT_ID missing[/]")
 
     stop = threading.Event()
 
     httpd = None
+    control_srv = None
+    GLOBAL_BUS.set_host(host_id, 0.5, model_loaded=bool(artifacts_dir))
+    controllers = WebControllers(
+        bus=GLOBAL_BUS,
+        nft=nft,
+        watcher=watcher,
+        dry_run=dry_run_actions,
+        lab_nmap_targets=list(lab_cfg.get("nmap_targets") or ["127.0.0.1", "::1"]),
+        include_nmap=bool(recon_cfg.get("nmap", False)),
+        recon_dir=_resolve(recon_cfg.get("dir", "reports/recon")),
+        unlock_ok=unlock_gate.unlocked if unlock_gate.enabled else None,
+        feedback=feedback,
+    )
+    control_path = _resolve("state/control.sock")
+    try:
+        control_srv = ControlSocketServer(control_path, handler=make_handler(controllers))
+        control_srv.start()
+        console.print(f"[bold]control socket[/] {control_path}")
+    except Exception as exc:
+        console.print(f"[yellow]control socket[/] {exc}")
+        control_srv = None
     if enable_web or bool(web_cfg.get("enabled")):
         bind = str(web_cfg.get("host") or "127.0.0.1")
         port = int(web_cfg.get("port") or 8765)
-        GLOBAL_BUS.set_host(host_id, 0.5, model_loaded=bool(artifacts_dir))
-        controllers = WebControllers(
-            bus=GLOBAL_BUS,
-            nft=nft,
-            watcher=watcher,
-            dry_run=dry_run_actions,
-            lab_nmap_targets=list(lab_cfg.get("nmap_targets") or ["127.0.0.1", "::1"]),
-            include_nmap=bool(recon_cfg.get("nmap", False)),
-            recon_dir=_resolve(recon_cfg.get("dir", "reports/recon")),
-            unlock_ok=unlock_gate.unlocked if unlock_gate.enabled else None,
-        )
         httpd = start_web_server(
             GLOBAL_BUS,
             host=bind,
@@ -872,16 +928,17 @@ def run_guard(
             body = explain_host_anomaly(top_procs=tops, **expl_kw)
             body = f"{body}\nrisk={risk:.2f} host={host_score:.2f} agent={ascore:.2f}"
             console.print(f"[red bold]HOST ALERT[/] pattern={pattern}\n{body}")
+            host_plain = describe("host_anomaly", lang=notify_lang)  # type: ignore[arg-type]
             GLOBAL_BUS.push_alert(
                 LiveAlert(
                     ts=__import__("time").time(),
                     severity="high",
-                    title=f"HOST ANOMALY | {pattern}",
-                    body=body,
+                    title=host_plain.title,
+                    body=f"{host_plain.what}\n{body}\n{host_plain.action}",
                     kind="host",
                     score=risk,
                     rule_id="host_anomaly",
-                    extras={"host_score": pred.score, "agent_score": ascore, "risk": risk},
+                    extras={"host_score": pred.score, "agent_score": ascore, "risk": risk, "pattern": pattern},
                 )
             )
             notify("SysSpectogram host anomaly", body)
@@ -1165,6 +1222,9 @@ def run_guard(
         agent_score_threshold = float(agent_cfg.get("score_threshold", 0.65))
         last_agent_seen = {"ts": time.time()}
         agent_heartbeat_sec = float(agent_cfg.get("heartbeat_sec", 180))
+        # After auto_start, wait before first "agent down" alert.
+        agent_down_grace_until = time.time() + max(120.0, agent_heartbeat_sec)
+        agent_down_backoff_sec = float(agent_cfg.get("down_alert_backoff_sec", 1800))  # 30 min
         clean_shutdown_grace = {"until": 0.0}
 
 
@@ -1531,21 +1591,31 @@ def run_guard(
         def agent_heartbeat_loop():
             last_alert_sent = 0.0
             while not stop.is_set():
-                if time.time() < float(clean_shutdown_grace.get("until") or 0):
+                now = time.time()
+                if now < float(clean_shutdown_grace.get("until") or 0):
                     stop.wait(5.0)
                     continue
-                silence = time.time() - last_agent_seen["ts"]
-                if silence >= agent_heartbeat_sec and time.time() - last_alert_sent > agent_heartbeat_sec:
-                    last_alert_sent = time.time()
-                    msg = f"agent heartbeat missing ({silence:.0f}s) - agent_kirk_agent_down"
-                    console.print(f"[red]{msg}[/]")
+                if now < agent_down_grace_until:
+                    stop.wait(5.0)
+                    continue
+                silence = now - last_agent_seen["ts"]
+                # First alert after silence; then at most every backoff (default 30 min).
+                min_gap = agent_down_backoff_sec if last_alert_sent else agent_heartbeat_sec
+                if silence >= agent_heartbeat_sec and (now - last_alert_sent) >= min_gap:
+                    last_alert_sent = now
+                    plain = describe(
+                        "agent_kirk_agent_down",
+                        f"agent heartbeat missing ({silence:.0f}s)",
+                        lang=notify_lang,  # type: ignore[arg-type]
+                    )
+                    console.print(f"[red]agent_kirk_agent_down[/] silence={silence:.0f}s")
                     try:
                         alert_fanout.emit(
                             {
                                 "type": "agent_kirk_agent_down",
                                 "host_id": host_id,
                                 "silence_sec": silence,
-                                "message": msg,
+                                "message": plain.what,
                             }
                         )
                     except Exception:
@@ -1553,7 +1623,8 @@ def run_guard(
                     bot = bot_holder["bot"]
                     if bot is not None:
                         try:
-                            bot.client.send_message(bot.prefix(f"KIRK [high] {msg}"))
+                            body = f"{plain.title}\n{plain.what}\n{plain.action}"
+                            bot.client.send_message(bot.prefix(body))
                         except Exception:
                             pass
                 stop.wait(15.0)
@@ -1713,6 +1784,15 @@ def run_guard(
                             f"[red]agent auto_start[/] exited rc={rc} — see {agent_log}\n{tail}"
                         )
                         agent_proc = None
+                        plain = describe("agent_start_failed", lang=notify_lang)  # type: ignore[arg-type]
+                        bot = bot_holder["bot"]
+                        if bot is not None:
+                            try:
+                                bot.client.send_message(
+                                    bot.prefix(f"{plain.title}\n{plain.what}\n{plain.action}")
+                                )
+                            except Exception:
+                                pass
                     else:
                         console.print(
                             f"[green]agent auto_start[/] pid={agent_proc.pid} log={agent_log}"
@@ -1754,11 +1834,29 @@ def run_guard(
                                 pass
                 except OSError as exc:
                     console.print(f"[yellow]agent auto_start[/] {exc}")
+                    plain = describe("agent_start_failed", str(exc), lang=notify_lang)  # type: ignore[arg-type]
+                    bot = bot_holder["bot"]
+                    if bot is not None:
+                        try:
+                            bot.client.send_message(
+                                bot.prefix(f"{plain.title}\n{plain.what}\n{plain.action}")
+                            )
+                        except Exception:
+                            pass
             else:
                 console.print(
                     "[yellow]agent auto_start[/] binary not found - build agent/ "
                     "or put sysspectogram-agent on PATH"
                 )
+                plain = describe("agent_start_failed", lang=notify_lang)  # type: ignore[arg-type]
+                bot = bot_holder["bot"]
+                if bot is not None:
+                    try:
+                        bot.client.send_message(
+                            bot.prefix(f"{plain.title}\n{plain.what}\n{plain.action}")
+                        )
+                    except Exception:
+                        pass
         elif agent_listener is not None:
             # external agent (systemd): load prior seal if present
             seal_path = _resolve("state/agent_binary.seal.json")
@@ -1939,6 +2037,11 @@ def run_guard(
         clean_stop = True
     finally:
         stop.set()
+        if control_srv is not None:
+            try:
+                control_srv.stop()
+            except Exception:
+                pass
         if httpd is not None:
             try:
                 httpd.shutdown()

@@ -2,90 +2,68 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-Linux-утилита для **защиты VPS / хоста**: ML по «спектрограммам» метрик (CNN + Isolation Forest), периметр/egress, Telegram SOAR-lite, live web / Mini App и **Rust-агент v3** (процессы / пути / модули + лёгкие метрики).
+Self-hosted **защита Linux VPS / хоста**: понятные алерты, Telegram, графики в десктоп-приложении, опциональный web, Rust-агент целостности и опциональный host ML (обучение — на другой машине, на VPS — ONNX).
 
-**Область (v1.0):** десктопное Control Center (Tauri 2 + Svelte), привилегированный helper с polkit, подписанные релизы, движок инцидентов с ATT&CK и HTML-отчётами, признаки на уровне событий с опциональной моделью спектрограммы, дашборды от 1 ч до 30 д и только-чтение сверка VMI для своего KVM-хоста ([docs/VMI.md](docs/VMI.md)).
+**Для большинства:** скачать Linux **AppImage** или **`.deb`** с [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → при необходимости **Установить стек** → короткий онбординг → защита. Гик-инструменты — за **Advanced**. Старт: **[Simple home](docs/HOME.md)**. Релиз: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (скрины + bootstrap).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
+<p align="center">
+  <img src="docs/assets/v1.1/home.png" alt="Главная" width="720" />
+</p>
+
+### Never-ban своего IP (важно)
+
+Перед мягким/полным автобаном внесите себя в белый список, иначе можно отрезать свой доступ:
+
+```bash
+curl -4 ifconfig.me   # например 203.0.113.10
+```
+
+В **Настройки → Never-ban IP** укажите один или несколько (запятая или с новой строки; голый IP → `/32`), например `203.0.113.10` и `198.51.100.20/32` → Применить → перезапуск guard.  
+Ключ: `response.never_ban_cidrs`. Подробнее: [RELEASE_v1.1.0](docs/RELEASE_v1.1.0.md) · [HOME.md](docs/HOME.md).
+
 ### Документы (по темам)
 
-**Развёртывание:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md) · [Day-0](docs/DAY0_VPS.md) · [Golden path](docs/GOLDEN_PATH.md) · [Profiles](docs/PROFILES.md)
+**Старт:** [Simple home](docs/HOME.md) · [Release v1.1.0](docs/RELEASE_v1.1.0.md) · [Day-0 CLI](docs/DAY0_VPS.md) · [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md)
 
-**Защита:** [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [VMI](docs/VMI.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Supply chain story](docs/SUPPLY_CHAIN_STORY.md)
+**Защита:** [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md)
 
-**Управление:** [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md)
+**Управление:** [Control Center](docs/CONTROL_CENTER.md) · [Telegram](docs/TELEGRAM_RU.md) · [Live web](docs/WEBAPP_RU.md) · [Feedback](docs/FEEDBACK.md)
 
-**Данные / ML:** [Рецепты](docs/RECIPES_RU.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Role lab](docs/ROLE_LAB.md) · [Симуляции](simulations/README_RU.md)
+**ML / данные:** [Рецепты](docs/RECIPES_RU.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Симуляции](simulations/README_RU.md)
 
-**Продукт и v1.0:** [Product description](docs/PRODUCT_v1.0.md) · [Control Center](docs/CONTROL_CENTER.md) · [ADR](docs/adr/) · [Release v1.0](docs/RELEASE_v1.0.0.md)
+**Продукт:** [Product description](docs/PRODUCT_v1.0.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [ADR](docs/adr/)
 
-**Roadmap:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v1.0](docs/RELEASE_v1.0.0.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+### Что внутри
 
-### Что нового в v1.0
-
-| Часть | Статус |
+| Часть | Заметки |
 | --- | --- |
-| Control Center: Обзор, Онлайн, Дашборды (1 ч — 30 д), Инциденты, Агент, Периметр, Настройки, Сценарии, Тесты и лаборатория, Установка и обновления, Логи, О программе | да (`control-center/`) |
-| `sysspectogram-helper`: разрешённый список root-операций, polkit на каждое действие, проверка peer credentials | да (`helper/`) |
-| Установка подписанного bundle (minisign + sha256, проверка в каталоге staging под root) | да; загрузка релиза при первом запуске пока не реализована |
-| Движок инцидентов: корреляция, маппинг ATT&CK, отчёты HTML и Markdown | да |
-| Гейт слияния: алерт, если host ≥ порога ИЛИ итоговый риск ≥ порога; полураспад оценки агента | да |
-| Признаки на уровне событий (матрица по каналам) и CNN по спектрограмме событий | да, модель спектрограммы опциональна (`agent.spectrogram`) |
-| Только-чтение сверка VMI, бэкенд mock; бэкенд libvmi не проверен на железе | да, выключено по умолчанию (`kirk.vmi`) |
-| Хранилище временных рядов с агрегатами для дашбордов | да |
-| Схема настроек (EN/RU), пресеты сценариев, запуски лаборатории только на localhost | да |
-
-### Что нового в v0.9
-
-| Часть | Статус |
-| --- | --- |
-| `scaler.json` + `iforest.ssf.npz` без pickle (joblib только с env) | да |
-| Alert fan-out: file / syslog / HTTPS | да |
-| FIM baseline на диск; включён в профиле `lite` | да |
-| Hybrid watchdog: Phoenix + optional DKMS | да (kmod opt-in) |
-| Узкий `kirk.auto_isolate_host_risk` (выкл по умолчанию) | да |
-| Сгруппированные доки + ONNX-путь на VPS | да |
+| Control Center (простой + Advanced) | Главная, графики, алерты, настройки; светлая/тёмная; EN/RU; онбординг |
+| Telegram + опциональный web | Понятные алерты; Ban/Kill после unlock; web выкл по умолчанию |
+| Guard + Rust-агент | Периметр (брутфорс SSH…), FIM/процессы, графики timeseries |
+| Helper | polkit-allowlist для настроек / сервиса / подписанных bundle |
+| Опциональный ML | Обучение на builder; импорт ONNX на VPS ([HOME.md](docs/HOME.md)) |
 
 ### Ограничения (честно)
 
 Root на том же хосте может остановить сервис и стереть локальные логи. Удалённые sinks и подписи уменьшают «тишину», но не делают утилиту неуязвимой. См. [SECURITY.md](SECURITY.md).
 
-### Инференс на VPS (ONNX, без Torch)
+### Быстрый старт (приложение)
 
 ```bash
-# На builder:
-python -m sysspectogram train --dataset dataset/out --out artifacts/live
-python -m sysspectogram export-onnx --model artifacts/live
-python -m sysspectogram artifacts migrate --model artifacts/live
-
-# На VPS: runtime.prefer: onnx  (или SYSSPECTOGRAM_RUNTIME=onnx)
-python -m sysspectogram guard --model artifacts/live --telegram --dry-run
+sudo scripts/install-helper.sh
+cd control-center && npm install && npm run tauri dev
+# онбординг → Главная → Включить защиту
 ```
 
-Подробнее: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
-
-### Что нового в v0.8 (перенесено)
-
-| Часть | Статус |
-| --- | --- |
-| Minisign + `artifacts.manifest.json` | да — [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) |
-| SPDX SBOM | да |
-| Opt-in `supply_chain.enforce` | да |
-| Safe `cnn.pt` (`weights_only=True`) | да |
-| AUR + Debian packaging | да — `packaging/` |
+CLI без GUI: [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX после обучения на другой машине: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
 
 ```bash
 source .venv/bin/activate
-# Day-0: меню в ЭТОМ терминале (не браузер и не отдельное окно)
-python -m sysspectogram configure
-# или без вопросов:
-# python -m sysspectogram configure --accept-recommended --role ssh
-
+python -m sysspectogram configure --accept-recommended --role ssh
 cd agent && cargo build --release && cd ..
-python -m sysspectogram kirk trust
-python -m sysspectogram supply-chain verify artifacts/real_v3
-python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
+python -m sysspectogram guard --telegram --dry-run
 ```
 
 ---
@@ -335,7 +313,7 @@ python -m sysspectogram audit report --out reports/triage.json
 
 ## Control Center
 
-Десктопное приложение для Linux с боковой панелью: Обзор, Онлайн, Дашборды, Инциденты, Агент, Периметр, Настройки, Сценарии, Тесты и лаборатория, Установка и обновления, Логи и аудит, О программе. По умолчанию английский, русский переключается одним нажатием. Иконки SVG, без emoji.
+По умолчанию: **Главная / Графики / Алерты / Настройки** (светлая и тёмная тема, EN/RU). **Advanced** в настройках открывает полный гик-сайдбар. Онбординг и ML: [HOME.md](docs/HOME.md). Архитектура: [CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
 ```bash
 # разработка (нужны Node 20+, Rust stable, системные библиотеки Tauri 2)
@@ -347,6 +325,8 @@ cd control-center && npm run tauri build
 # привилегированный helper (root-сервис; см. docs/CONTROL_CENTER.md)
 cd helper && cargo build --release
 ```
+
+Тегированные релизы публикуют AppImage + deb (CI). Для друзей: открыть пакет → **Установить стек v1.1.0** качает подписанный wheel/agent в `~/.local/share/sysspectogram` (без git clone). См. [RELEASE_v1.1.0.md](docs/RELEASE_v1.1.0.md).
 
 Интерфейс сам не выполняет привилегированных команд. Изменения настроек, управление службой и установка bundle идут через `sysspectogram-helper`, который проверяет каждое действие через polkit. Дашборды читают `state/timeseries.sqlite` только на чтение. Подробнее: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
@@ -721,4 +701,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О следующих версиях
 
-**v1.0:** Control Center, привилегированный helper, движок инцидентов, признаки по событиям, дашборды и только-чтение сверка VMI. См. [RELEASE_v1.0.0.md](docs/RELEASE_v1.0.0.md), [PRODUCT_v1.0.md](docs/PRODUCT_v1.0.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Известные пробелы перечислены в заметках к релизу.
+**v1.1:** простой home-UX (онбординг, понятные алерты, Telegram/web, Advanced для гиков). См. [RELEASE_v1.1.0.md](docs/RELEASE_v1.1.0.md), [HOME.md](docs/HOME.md), [PRODUCT_v1.0.md](docs/PRODUCT_v1.0.md), [ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md).

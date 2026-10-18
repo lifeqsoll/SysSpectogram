@@ -160,6 +160,15 @@
                       <option value={choice}>{choice}</option>
                     {/each}
                   </select>
+                {:else if entry.type === 'string'}
+                  <input
+                    type="text"
+                    value={String(valueOf(entry) ?? '')}
+                    oninput={(e) => setDraft(entry, e.currentTarget.value)}
+                    placeholder="203.0.113.10/32"
+                    style="width: min(280px, 40vw); padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg)"
+                    aria-label={entry.key}
+                  />
                 {:else}
                   <input
                     type="number"

@@ -5,6 +5,8 @@
 
 schema: config.schema.v1
 groups:
+  home:
+    title: {en: Home, ru: Основное}
   ensemble:
     title: {en: Risk fusion, ru: Слияние риска}
   agent:
@@ -19,10 +21,39 @@ groups:
     title: {en: Response, ru: Реагирование}
   telegram:
     title: {en: Telegram, ru: Telegram}
+  web:
+    title: {en: Web dashboard, ru: Веб-дашборд}
   timeseries:
     title: {en: Dashboards storage, ru: Хранилище дашбордов}
 
 settings:
+  - key: ui.lang
+    group: home
+    type: enum
+    choices: [en, ru]
+    default: en
+    title: {en: Alert language, ru: Язык алертов}
+    description:
+      en: Language for Telegram and in-app alert titles. Match the Control Center language.
+      ru: Язык заголовков алертов в Telegram и в приложении. Совпадает с языком Control Center.
+  - key: web.enabled
+    group: web
+    type: bool
+    default: false
+    restart: true
+    title: {en: Enable web dashboard, ru: Включить веб-дашборд}
+    description:
+      en: Serve the local web UI (charts and actions). Off by default — the desktop app is enough for most people.
+      ru: Поднять локальный веб-интерфейс (графики и действия). По умолчанию выкл — большинству хватает приложения.
+  - key: telegram.enabled
+    group: telegram
+    type: bool
+    default: false
+    restart: true
+    title: {en: Enable Telegram alerts, ru: Включить Telegram-алерты}
+    description:
+      en: Send plain-language alerts to your Telegram chat. Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.
+      ru: Присылать понятные алерты в Telegram. Нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env.
   - key: ensemble.host_weight
     group: ensemble
     type: float
@@ -159,12 +190,22 @@ settings:
   - key: response.mode
     group: response
     type: enum
-    choices: [observe, enforce]
+    choices: [observe, shield, aggressive, isolate]
     default: observe
-    title: {en: Response mode, ru: Режим реагирования}
+    restart: true
+    title: {en: Protection mode, ru: Режим защиты}
     description:
-      en: observe only records and notifies. enforce allows the configured actions, still gated by unlock.
-      ru: observe только записывает и уведомляет. enforce разрешает настроенные действия, которые всё равно требуют разблокировки.
+      en: "observe: notify only. shield: soft auto-ban (SSH brute / honeypot / canary). aggressive: full auto-ban (scans, egress, …). isolate: full auto-ban + kirk network isolation on critical signals. Manual actions still need unlock."
+      ru: "observe: только уведомления. shield: мягкий автобан (SSH-брут / honeypot / canary). aggressive: полная автозащита (сканы, egress, …). isolate: полная автозащита + сетевая изоляция kirk при критических сигналах. Ручные действия всё равно требуют разблокировки."
+  - key: response.never_ban_cidrs
+    group: response
+    type: string
+    default: ""
+    restart: true
+    title: {en: Never-ban IPs / CIDRs, ru: Never-ban IP / CIDR}
+    description:
+      en: "One or many. Comma or newline separated. Bare IPs become /32. Example: 203.0.113.10, 198.51.100.20/32. Find a public IP with curl -4 ifconfig.me."
+      ru: "Один или несколько. Через запятую или с новой строки. Голый IP → /32. Пример: 203.0.113.10, 198.51.100.20/32. Публичный IP: curl -4 ifconfig.me."
   - key: telegram.require_console_unlock
     group: telegram
     type: bool

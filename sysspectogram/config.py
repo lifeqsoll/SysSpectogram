@@ -69,8 +69,12 @@ OVERLAY_ALLOWED = frozenset(
         "kirk.vmi_confirm",
         "monitor.interval_sec",
         "response.mode",
+        "response.never_ban_cidrs",
+        "telegram.enabled",
         "telegram.require_console_unlock",
         "timeseries.enabled",
+        "ui.lang",
+        "web.enabled",
     }
 )
 
@@ -91,6 +95,104 @@ def settings_overlay_path() -> Path:
     return Path(raw) if raw else DEFAULT_SETTINGS_OVERLAY
 
 
+def _normalize_cidr_token(raw: str) -> str:
+    """Turn a bare IP into /32 (v4) or /128 (v6); leave real CIDRs alone."""
+    token = raw.strip()
+    if not token:
+        return ""
+    if "/" in token:
+        return token
+    try:
+        from ipaddress import ip_address
+
+        addr = ip_address(token)
+        return f"{addr}/32" if addr.version == 4 else f"{addr}/128"
+    except ValueError:
+        return token
+
+
+def _parse_cidr_list(value: Any) -> list[str]:
+    """Accept a YAML list or a comma/newline/space-separated string of IPs/CIDRs."""
+    parts: list[str] = []
+    if isinstance(value, list):
+        for item in value:
+            parts.extend(str(item).replace(";", ",").replace("\n", ",").split(","))
+    elif isinstance(value, str):
+        text = value.replace(";", ",").replace("\n", ",")
+        # Also split on runs of whitespace so "a b" works next to "a, b".
+        for chunk in text.split(","):
+            parts.extend(chunk.split())
+    else:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        cidr = _normalize_cidr_token(part)
+        if cidr and cidr not in seen:
+            seen.add(cidr)
+            out.append(cidr)
+    return out
+
+
+def _merge_overlay_dict(data: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    for dotted, value in overlay.items():
+        if dotted not in OVERLAY_ALLOWED:
+            continue
+        # Normalize legacy response.mode from old helpers
+        if dotted == "response.mode" and value == "enforce":
+            value = "shield"
+        # CIDR lists are stored as strings in the overlay / Control Center.
+        if dotted == "response.never_ban_cidrs":
+            value = _parse_cidr_list(value)
+        elif not isinstance(value, _OVERLAY_TYPES):
+            continue
+        cur: dict[str, Any] = data
+        parts = str(dotted).split(".")
+        for part in parts[:-1]:
+            nxt = cur.get(part)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                cur[part] = nxt
+            cur = nxt
+        cur[parts[-1]] = value
+    return data
+
+
+def user_settings_path() -> Path:
+    return state_root() / "state" / "user-settings.json"
+
+
+def _user_settings_trusted(path: Path) -> bool:
+    """Allow a project-local overlay owned by the current user (home / Day-0)."""
+    if os.name != "posix":
+        return path.is_file()
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    if st.st_uid != os.getuid():
+        return False
+    if st.st_mode & 0o022:
+        return False
+    return True
+
+
+def _apply_user_settings(data: dict[str, Any]) -> dict[str, Any]:
+    """Merge user home settings (state/user-settings.json) when helper overlay is unavailable."""
+    import json
+
+    path = user_settings_path()
+    try:
+        if not path.is_file() or not _user_settings_trusted(path):
+            return data
+        overlay = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return data
+    if not isinstance(overlay, dict):
+        return data
+    return _merge_overlay_dict(data, overlay)
+
+
 def _apply_settings_overlay(data: dict[str, Any]) -> dict[str, Any]:
     """Merge root-written overrides (written by sysspectogram-helper) on top of YAML.
 
@@ -109,19 +211,7 @@ def _apply_settings_overlay(data: dict[str, Any]) -> dict[str, Any]:
         return data
     if not isinstance(overlay, dict):
         return data
-    for dotted, value in overlay.items():
-        if dotted not in OVERLAY_ALLOWED or not isinstance(value, _OVERLAY_TYPES):
-            continue
-        cur: dict[str, Any] = data
-        parts = dotted.split(".")
-        for part in parts[:-1]:
-            nxt = cur.get(part)
-            if not isinstance(nxt, dict):
-                nxt = {}
-                cur[part] = nxt
-            cur = nxt
-        cur[parts[-1]] = value
-    return data
+    return _merge_overlay_dict(data, overlay)
 
 
 def load_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -146,6 +236,8 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         data["load_profile"] = os.environ["SYSSPECTOGRAM_LOAD_PROFILE"]
     if os.environ.get("SYSSPECTOGRAM_RUNTIME"):
         data["runtime"] = os.environ["SYSSPECTOGRAM_RUNTIME"].strip().lower()
+    # User home overlay first; root helper overlay wins on conflict.
+    data = _apply_user_settings(data)
     data = _apply_settings_overlay(data)
     from sysspectogram.load_profile import apply_load_profile
 

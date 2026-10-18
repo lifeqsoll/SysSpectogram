@@ -73,6 +73,14 @@ def test_unlock_wrong_code_does_not_clear():
 
 def test_describe_known_rule():
     assert "всплеск" in describe("agent_connect_burst").title.lower()
+    assert "burst" in describe("agent_connect_burst", lang="en").title.lower()
+
+
+def test_describe_ssh_brute_and_miner():
+    assert "брутфорс" in describe("bruteforce_ssh").title.lower()
+    assert "brute" in describe("bruteforce_ssh", lang="en").title.lower()
+    assert "майнер" in describe("host_anomaly").title.lower()
+    assert "miner" in describe("host_anomaly", lang="en").title.lower()
 
 
 def test_describe_unknown_rule_keeps_message():

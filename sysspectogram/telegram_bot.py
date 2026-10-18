@@ -135,6 +135,7 @@ class TelegramBot:
         widen_rules: str | bool | None = "comm_prefix",
         if_refit: bool = False,
         supply_chain: dict[str, Any] | None = None,
+        lang: str = "en",
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -164,6 +165,7 @@ class TelegramBot:
         self.widen_rules = widen_rules
         self.if_refit = bool(if_refit)
         self.supply_chain = dict(supply_chain or {})
+        self.lang = "ru" if str(lang).lower() == "ru" else "en"
         self.last_host_window = None
         self.last_host_columns: list[str] | None = None
         self.last_host_score: float | None = None
@@ -412,7 +414,7 @@ class TelegramBot:
             severity=alert.severity,
             rule_id=alert.rule_id,
             message=alert.message,
-            explain=explain_perimeter(alert),
+            explain=explain_perimeter(alert, lang=self.lang),
             pattern=perimeter_pattern(alert.rule_id),
             recon_summary=recon_txt,
         )
@@ -431,19 +433,45 @@ class TelegramBot:
         comm = getattr(alert, "comm", None)
         path = getattr(alert, "path", None)
         live_comm = read_proc_comm(int(pid)) if pid and int(pid) > 1 else None
-        info = describe(str(rid), str(msg))
-        sev_tag = {
-            "critical": "КРИТИЧНО",
-            "high": "ВАЖНО",
-            "medium": "ВНИМАНИЕ",
-            "low": "ИНФО",
-        }.get(str(sev), str(sev).upper())
+        info = describe(str(rid), str(msg), lang=self.lang)  # type: ignore[arg-type]
+        if self.lang == "ru":
+            sev_tag = {
+                "critical": "КРИТИЧНО",
+                "high": "ВАЖНО",
+                "medium": "ВНИМАНИЕ",
+                "low": "ИНФО",
+            }.get(str(sev), str(sev).upper())
+            what_l, detail_l, do_l, proc_l, obj_l, unattr, dry_l = (
+                "Что произошло",
+                "Детали",
+                "Что делать",
+                "Процесс",
+                "Объект",
+                "Процесс не определён: ядро не сопоставило событие с программой.",
+                "Режим: только наблюдение, ничего не завершается автоматически.",
+            )
+        else:
+            sev_tag = {
+                "critical": "CRITICAL",
+                "high": "HIGH",
+                "medium": "NOTICE",
+                "low": "INFO",
+            }.get(str(sev), str(sev).upper())
+            what_l, detail_l, do_l, proc_l, obj_l, unattr, dry_l = (
+                "What happened",
+                "Details",
+                "What to do",
+                "Process",
+                "Object",
+                "Process unknown: the kernel did not map the event to a program.",
+                "Mode: observe only — nothing is stopped automatically.",
+            )
         lines = [
             self.prefix(f"{sev_tag}: {info.title}"),
-            f"Что произошло: {info.what}",
+            f"{what_l}: {info.what}",
         ]
         if msg and str(msg) != info.what:
-            lines.append(f"Детали: {msg}")
+            lines.append(f"{detail_l}: {msg}")
         meta = []
         if comm:
             meta.append(f"comm={comm}")
@@ -456,13 +484,13 @@ class TelegramBot:
         if path:
             meta.append(f"path={path}")
         if meta:
-            label = "Процесс" if (pid or comm) else "Объект"
+            label = proc_l if (pid or comm) else obj_l
             lines.append(f"{label}: " + " | ".join(meta))
         if pid is not None and is_unattributed(int(pid)):
-            lines.append("Процесс не определён: ядро не сопоставило событие с программой.")
-        lines.append(f"Что делать: {info.action}")
+            lines.append(unattr)
+        lines.append(f"{do_l}: {info.action}")
         if self.dry_run:
-            lines.append("Режим: только наблюдение, ничего не завершается автоматически.")
+            lines.append(dry_l)
         rows: list[list[dict]] = []
         use_comm = live_comm or (str(comm) if comm else None)
         if pid and int(pid) > 1 and live_comm is not None:
@@ -512,7 +540,7 @@ class TelegramBot:
             return
         from sysspectogram.viz.panels import detect_host_pattern, format_host_alert_caption
 
-        expl = explain_host_anomaly(top_procs=top_procs, **(explain_kwargs or {}))
+        expl = explain_host_anomaly(top_procs=top_procs, lang=self.lang, **(explain_kwargs or {}))
         kw = {k: v for k, v in (explain_kwargs or {}).items() if k != "top_features"}
         pat = pattern or detect_host_pattern(top_procs=top_procs, **kw)
         if caption_override:

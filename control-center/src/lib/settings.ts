@@ -11,7 +11,7 @@ export interface Localized {
 export interface SettingEntry {
   key: string;
   group: string;
-  type: 'bool' | 'int' | 'float' | 'enum';
+  type: 'bool' | 'int' | 'float' | 'enum' | 'string';
   default: unknown;
   current?: unknown;
   min?: number;
@@ -61,6 +61,10 @@ export function validateValue(entry: SettingEntry, value: unknown): string | nul
     }
     case 'enum':
       return entry.choices?.includes(String(value)) ? null : `${entry.key}: must be one of ${entry.choices?.join(', ')}`;
+    case 'string':
+      if (typeof value !== 'string') return `${entry.key}: expected a string`;
+      if (value.length > 2048) return `${entry.key}: string too long`;
+      return null;
     default:
       return `${entry.key}: unknown type`;
   }

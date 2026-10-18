@@ -19,6 +19,7 @@ class WebControllers:
     recon_dir: Any = None
     # When set, destructive actions require True (Telegram console unlock).
     unlock_ok: Any = None  # Callable[[], bool] | None
+    feedback: Any = None  # ProcessLabelStore | None
 
     def status(self) -> dict[str, Any]:
         bans = []
@@ -134,6 +135,26 @@ class WebControllers:
             self.watcher.state.mute(ip, ttl)
             self.watcher.persist()
             return f"muted {ip} for {ttl}s"
+        if action == "mute_rule":
+            rule_id = str(payload.get("rule_id") or payload.get("rule") or "").strip()
+            if not rule_id:
+                raise ValueError("rule_id required")
+            if self.feedback is None:
+                raise RuntimeError("feedback store not attached")
+            hours = float(payload.get("hours") or payload.get("ttl_hours") or 24)
+            hours = max(0.25, min(hours, 24 * 30))
+            import time as _time
+
+            expires = _time.time() + hours * 3600.0
+            entry = self.feedback.mute_rule(
+                rule_id,
+                note=str(payload.get("note") or f"muted {hours:g}h from Control Center"),
+                source="cc",
+                expires_at=expires,
+            )
+            if entry is None:
+                raise ValueError("could not mute rule")
+            return f"muted rule {rule_id} for {hours:g}h"
         if action == "quiet":
             on = bool(payload.get("on", True))
             if self.watcher:

@@ -315,6 +315,8 @@ enum Kind {
     Int(i64, i64),
     Float(f64, f64),
     Enum(&'static [&'static str]),
+    /// Free-form string (CIDR lists, paths). Max length enforced in validate_change.
+    String,
 }
 
 /// Keys the Control Center may change. Must match configs/schema.yaml.
@@ -332,9 +334,13 @@ const SETTINGS_RULES: &[(&str, Kind)] = &[
     ("kirk.vmi_trust", Kind::Enum(&["lab", "out-of-band"])),
     ("kirk.vmi_confirm", Kind::Int(1, 10)),
     ("monitor.interval_sec", Kind::Int(1, 3600)),
-    ("response.mode", Kind::Enum(&["observe", "enforce"])),
+    ("response.mode", Kind::Enum(&["observe", "shield", "aggressive", "isolate"])),
+    ("response.never_ban_cidrs", Kind::String),
+    ("telegram.enabled", Kind::Bool),
     ("telegram.require_console_unlock", Kind::Bool),
     ("timeseries.enabled", Kind::Bool),
+    ("ui.lang", Kind::Enum(&["en", "ru"])),
+    ("web.enabled", Kind::Bool),
 ];
 
 pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
@@ -367,6 +373,27 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
             } else {
                 Err(format!("{key}: must be one of {choices:?}"))
             }
+        }
+        (Kind::String, Value::String(s)) => {
+            if s.len() > 2048 {
+                Err(format!("{key}: string too long (max 2048)"))
+            } else {
+                Ok(())
+            }
+        }
+        // never_ban: allow a JSON array of IP/CIDR strings as well as one comma-separated string
+        (Kind::String, Value::Array(items)) if key == "response.never_ban_cidrs" => {
+            let mut total = 0usize;
+            for item in items {
+                let Some(s) = item.as_str() else {
+                    return Err(format!("{key}: list entries must be strings"));
+                };
+                total = total.saturating_add(s.len());
+                if total > 2048 {
+                    return Err(format!("{key}: string too long (max 2048)"));
+                }
+            }
+            Ok(())
         }
         _ => Err(format!("{key}: wrong value type")),
     }
@@ -482,8 +509,22 @@ mod tests {
     fn settings_values_are_checked() {
         assert!(validate_change("kirk.vmi", &json!(true)).is_ok());
         assert!(validate_change("kirk.vmi", &json!("yes")).is_err());
-        assert!(validate_change("response.mode", &json!("enforce")).is_ok());
+        assert!(validate_change("response.mode", &json!("shield")).is_ok());
         assert!(validate_change("response.mode", &json!("nuke")).is_err());
+        assert!(validate_change(
+            "response.never_ban_cidrs",
+            &json!("203.0.113.10, 198.51.100.20/32")
+        )
+        .is_ok());
+        assert!(validate_change(
+            "response.never_ban_cidrs",
+            &json!(["203.0.113.10/32", "198.51.100.20/32"])
+        )
+        .is_ok());
+        assert!(validate_change("response.never_ban_cidrs", &json!([1, 2])).is_err());
+        assert!(validate_change("ui.lang", &json!("ru")).is_ok());
+        assert!(validate_change("web.enabled", &json!(true)).is_ok());
+        assert!(validate_change("telegram.enabled", &json!(true)).is_ok());
         assert!(validate_change("monitor.interval_sec", &json!(0)).is_err());
         assert!(validate_change("ensemble.risk_threshold", &json!(0.7)).is_ok());
         assert!(validate_change("ensemble.risk_threshold", &json!(1.5)).is_err());

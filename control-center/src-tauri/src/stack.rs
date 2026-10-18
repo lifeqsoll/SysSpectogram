@@ -4,7 +4,8 @@
 //!   It is started through `pkexec`, so polkit shows the password prompt. The app never
 //!   holds root.
 //! - The guard runs as a child of this app with `--dry-run`: it observes and never
-//!   blocks. It stops when the app exits.
+//!   blocks. It stops when the app exits. Model path: `state/model.path` or
+//!   `artifacts/live` when present; otherwise notorch (metrics + perimeter only).
 
 use std::fs::{self, OpenOptions};
 use std::process::{Child, Command, Stdio};
@@ -16,8 +17,6 @@ use serde_json::{json, Value};
 
 use crate::{helper, paths};
 
-/// Model directory for the app-started guard, relative to the project root.
-const GUARD_MODEL: &str = "artifacts/real_v3";
 const HELPER_UNIT: &str = "sysspectogram-helper.service";
 const HELPER_WAIT: Duration = Duration::from_secs(10);
 
@@ -28,6 +27,25 @@ pub struct Stack {
 
 fn step(ok: bool, message: impl Into<String>) -> Value {
     json!({ "ok": ok, "message": message.into() })
+}
+
+fn resolve_model(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let marker = root.join("state").join("model.path");
+    if let Ok(raw) = fs::read_to_string(&marker) {
+        let p = std::path::PathBuf::from(raw.trim());
+        if p.is_dir() {
+            return Some(p);
+        }
+        let rel = root.join(raw.trim());
+        if rel.is_dir() {
+            return Some(rel);
+        }
+    }
+    let live = root.join("artifacts").join("live");
+    if live.is_dir() && (live.join("cnn.onnx").is_file() || live.join("cnn.pt").is_file()) {
+        return Some(live);
+    }
+    None
 }
 
 impl Stack {
@@ -51,11 +69,6 @@ impl Stack {
         json!({ "guard_running": pid.is_some(), "guard_pid": pid })
     }
 
-    /// Stop the guard child, if we started one. Called on app exit and by `stop_guard`.
-    ///
-    /// SIGTERM first, so the guard runs its clean shutdown and removes `state/guard.pid`;
-    /// SIGKILL only if it does not exit in time. Because this stop is deliberate, the
-    /// pidfile is dropped here too, so the agent does not report `agent_kirk_guard_down`.
     pub fn stop_guard(&self) {
         let Ok(mut slot) = self.guard.lock() else {
             return;
@@ -86,7 +99,6 @@ impl Stack {
         if helper::request("status", json!({})).is_ok() {
             return step(true, "helper already running");
         }
-        // pkexec asks for the password through the desktop's polkit agent.
         let out = Command::new("pkexec")
             .args(["systemctl", "start", HELPER_UNIT])
             .output();
@@ -123,12 +135,6 @@ impl Stack {
             return step(true, format!("guard already running (pid {pid})"));
         }
         let root = paths::root();
-        if !root.join(GUARD_MODEL).exists() {
-            return step(
-                false,
-                format!("model not found: {}", root.join(GUARD_MODEL).display()),
-            );
-        }
         let log_path = root.join("state").join("guard-app.log");
         let log_open = fs::create_dir_all(root.join("state")).and_then(|_| {
             OpenOptions::new().create(true).append(true).open(&log_path)
@@ -141,41 +147,78 @@ impl Stack {
             Ok(f) => f,
             Err(e) => return step(false, format!("cannot clone log handle: {e}")),
         };
+        let mut args: Vec<String> = vec![
+            "-m".into(),
+            "sysspectogram".into(),
+            "guard".into(),
+            "--dry-run".into(),
+            "--telegram".into(),
+        ];
+        if let Some(model) = resolve_model(&root) {
+            args.push("--model".into());
+            args.push(model.display().to_string());
+        }
+        let mut path_env = std::env::var("PATH").unwrap_or_default();
+        let home_bin = root.join("bin");
+        if home_bin.is_dir() {
+            path_env = format!("{}:{path_env}", home_bin.display());
+        }
         let spawned = Command::new(paths::python())
-            // --telegram: the bot/alerts only start when TELEGRAM_* in .env is set;
-            // without it the guard just logs "telegram requested but ... missing".
-            .args([
-                "-m",
-                "sysspectogram",
-                "guard",
-                "--model",
-                GUARD_MODEL,
-                "--dry-run",
-                "--telegram",
-            ])
+            .args(&args)
             .current_dir(&root)
             .env("SYSSPECTOGRAM_HOME", &root)
+            .env("PATH", &path_env)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err))
             .spawn();
         match spawned {
-            Ok(child) => {
+            Ok(mut child) => {
                 let pid = child.id();
+                // Catch immediate crashes (import errors, missing unlock write, …).
+                thread::sleep(Duration::from_millis(900));
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        let tail = fs::read_to_string(&log_path)
+                            .unwrap_or_default()
+                            .lines()
+                            .rev()
+                            .take(12)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        return step(
+                            false,
+                            format!(
+                                "guard exited immediately ({status}). Last log lines:\n{tail}"
+                            ),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        return step(false, format!("cannot check guard pid {pid}: {e}"));
+                    }
+                }
                 if let Ok(mut slot) = self.guard.lock() {
                     *slot = Some(child);
                 }
+                let model_note = resolve_model(&root)
+                    .map(|p| format!("model={}", p.display()))
+                    .unwrap_or_else(|| "model=notorch".into());
                 step(
                     true,
-                    format!("guard started (pid {pid}), dry-run; log: {}", log_path.display()),
+                    format!(
+                        "guard started (pid {pid}), dry-run, {model_note}; log: {}",
+                        log_path.display()
+                    ),
                 )
             }
             Err(e) => step(false, format!("cannot start guard: {e}")),
         }
     }
 
-    /// Start everything the app needs. Each step reports on its own; a failed helper
-    /// step does not stop the guard step.
     pub fn start_all(&self) -> Value {
         let helper_step = self.start_helper();
         let guard_step = self.start_guard();

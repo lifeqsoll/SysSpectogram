@@ -115,6 +115,17 @@ class ProcessLabelStore:
         self.path = Path(path)
         self._lock = threading.Lock()
         self.rules: list[ProcessLabelRule] = []
+        self._mtime: float = 0.0
+        self.load()
+
+    def _maybe_reload(self) -> None:
+        """Pick up rules written by Control Center / CLI without restarting the guard."""
+        try:
+            mtime = self.path.stat().st_mtime if self.path.exists() else 0.0
+        except OSError:
+            return
+        if mtime <= self._mtime:
+            return
         self.load()
 
     def load(self) -> None:
@@ -128,6 +139,10 @@ class ProcessLabelStore:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return
+        try:
+            self._mtime = self.path.stat().st_mtime
+        except OSError:
+            self._mtime = time.time()
         schema = str(data.get("schema") or "")
         if "operator_feedback.v1" in schema or "entries" in data:
             self._load_v1_entries(data.get("entries") or [])
@@ -362,6 +377,7 @@ class ProcessLabelStore:
         )
 
     def is_rule_muted(self, rule_id: str | None) -> bool:
+        self._maybe_reload()
         rid = (rule_id or "").strip()
         if not rid:
             return False

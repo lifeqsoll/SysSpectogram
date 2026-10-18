@@ -4,6 +4,7 @@
 //! JSONL read-only, run the Python CLI with argument arrays, or talk to
 //! sysspectogram-helper over its Unix socket (which applies polkit and an allowlist).
 
+mod bootstrap;
 mod cli;
 mod files;
 mod helper;
@@ -41,7 +42,21 @@ fn app_info() -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "root": paths::root().display().to_string(),
         "helper_socket": paths::helper_socket().display().to_string(),
+        "dev_checkout": paths::is_dev_checkout(),
+        "stack_ready": paths::stack_ready(),
     })
+}
+
+#[tauri::command]
+fn bootstrap_status() -> Value {
+    bootstrap::status()
+}
+
+#[tauri::command]
+fn bootstrap_install(tag: Option<String>) -> Result<Value, String> {
+    let ver = env!("CARGO_PKG_VERSION");
+    let tag = tag.unwrap_or_else(|| format!("v{ver}"));
+    bootstrap::install_stack(&tag)
 }
 
 #[tauri::command]
@@ -86,7 +101,37 @@ fn settings_export() -> Result<Value, String> {
 
 #[tauri::command]
 fn settings_apply(changes: Value) -> Result<Value, String> {
-    helper::request("settings.apply", json!({ "changes": changes }))
+    // Always persist the home overlay first so Day-0 / old helpers cannot block onboarding.
+    let raw = serde_json::to_string(&changes).unwrap_or_else(|_| "{}".into());
+    let home = cli::run_json(&["home", "settings", "--changes", raw.as_str()]);
+
+    // Old helpers only accept observe/enforce — remap newer modes for the socket call.
+    let mut helper_changes = changes.clone();
+    if let Some(obj) = helper_changes.as_object_mut() {
+        if let Some(mode) = obj.get("response.mode").and_then(Value::as_str) {
+            if matches!(mode, "shield" | "aggressive" | "isolate") {
+                obj.insert("response.mode".into(), json!("enforce"));
+            }
+        }
+    }
+
+    match helper::request("settings.apply", json!({ "changes": helper_changes })) {
+        Ok(v) => Ok(json!({
+            "ok": true,
+            "via": "helper",
+            "helper": v,
+            "home": home.ok(),
+        })),
+        Err(helper_err) => match home {
+            Ok(v) => Ok(json!({
+                "ok": true,
+                "via": "user-settings",
+                "helper_error": helper_err,
+                "result": v,
+            })),
+            Err(home_err) => Err(format!("{helper_err}; home fallback: {home_err}")),
+        },
+    }
 }
 
 #[tauri::command]
@@ -222,12 +267,126 @@ fn lab_run(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn control_status() -> Result<Value, String> {
+    cli::run_json(&["control", "status"])
+}
+
+#[tauri::command]
+fn control_action(name: String, payload: Value) -> Result<Value, String> {
+    let safe = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.is_empty()
+        && name.len() <= 32;
+    if !safe {
+        return Err("bad action name".into());
+    }
+    let raw = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into());
+    cli::run_json(&["control", "action", name.as_str(), "--payload", raw.as_str()])
+}
+
+#[tauri::command]
+fn home_import_model(source: String) -> Result<Value, String> {
+    if source.is_empty() || source.contains('\0') {
+        return Err("bad source path".into());
+    }
+    cli::run_json(&["home", "import-model", source.as_str()])
+}
+
+#[tauri::command]
+fn home_write_env(bot_token: Option<String>, chat_id: Option<String>) -> Result<Value, String> {
+    let mut args = vec!["home".to_string(), "env".to_string()];
+    if let Some(t) = bot_token.filter(|s| !s.is_empty()) {
+        args.push("--bot-token".into());
+        args.push(t);
+    }
+    if let Some(c) = chat_id.filter(|s| !s.is_empty()) {
+        args.push("--chat-id".into());
+        args.push(c);
+    }
+    let owned: Vec<String> = args;
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    cli::run_json(&refs)
+}
+
+#[tauri::command]
+fn onboarding_status() -> Result<Value, String> {
+    cli::run_json(&["home", "onboarding", "status"])
+}
+
+#[tauri::command]
+fn onboarding_done() -> Result<Value, String> {
+    cli::run_json(&["home", "onboarding", "done"])
+}
+
+#[tauri::command]
+fn home_health(ping: Option<bool>) -> Result<Value, String> {
+    let mut args = vec!["home", "health"];
+    if ping.unwrap_or(false) {
+        args.push("--ping");
+    }
+    cli::run_json(&args)
+}
+
+#[tauri::command]
+fn home_digest(hours: Option<f64>, lang: Option<String>) -> Result<Value, String> {
+    let hours_s = hours.unwrap_or(24.0).to_string();
+    let lang_s = lang.unwrap_or_else(|| "en".into());
+    cli::run_json(&[
+        "home",
+        "digest",
+        "--hours",
+        hours_s.as_str(),
+        "--lang",
+        lang_s.as_str(),
+    ])
+}
+
+#[tauri::command]
+fn home_checklist() -> Result<Value, String> {
+    cli::run_json(&["home", "checklist"])
+}
+
+#[tauri::command]
+fn home_mute_rule(rule_id: String, hours: Option<f64>) -> Result<Value, String> {
+    if rule_id.is_empty() || rule_id.len() > 128 {
+        return Err("bad rule_id".into());
+    }
+    let hours_s = hours.unwrap_or(24.0).to_string();
+    cli::run_json(&[
+        "home",
+        "mute-rule",
+        "--rule-id",
+        rule_id.as_str(),
+        "--hours",
+        hours_s.as_str(),
+    ])
+}
+
 /// Background loop: pushes the latest sample of each live metric to the UI every 2 s.
+/// Ignores stale SQLite rows (retention leaves old samples that would paint a flat fake line).
 fn live_loop(app: AppHandle) {
+    const FRESH_SEC: f64 = 90.0;
     loop {
         std::thread::sleep(Duration::from_secs(2));
+        let now = now_secs();
         if let Ok(latest) = timeseries::latest(&paths::timeseries_db(), LIVE_METRICS) {
-            let _ = app.emit("live", json!({ "at": now_secs(), "latest": latest }));
+            let fresh: Vec<_> = latest
+                .into_iter()
+                .filter(|row| now - row.ts <= FRESH_SEC)
+                .collect();
+            if fresh.is_empty() {
+                continue;
+            }
+            let sample_at = fresh
+                .iter()
+                .map(|row| row.ts)
+                .fold(0.0_f64, f64::max);
+            let _ = app.emit(
+                "live",
+                json!({ "at": sample_at.max(now - FRESH_SEC), "latest": fresh }),
+            );
         }
     }
 }
@@ -261,6 +420,18 @@ pub fn run() {
             log_tail,
             lab_list,
             lab_run,
+            control_status,
+            control_action,
+            home_import_model,
+            home_write_env,
+            onboarding_status,
+            onboarding_done,
+            home_health,
+            home_digest,
+            home_checklist,
+            home_mute_rule,
+            bootstrap_status,
+            bootstrap_install,
         ])
         .build(tauri::generate_context!())
         .expect("error while building SysSpectogram Control Center");

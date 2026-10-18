@@ -4,16 +4,17 @@
 //! Resolution order for the project root:
 //! 1. SYSSPECTOGRAM_HOME
 //! 2. the source checkout this binary was built in (if it sits inside one)
-//! 3. the installed state directory
+//! 3. user data dir (~/.local/share/sysspectogram) for AppImage / deb
+//! 4. the system-installed state directory (/var/lib/sysspectogram)
 
 use std::path::{Path, PathBuf};
 
-const INSTALLED_ROOT: &str = "/var/lib/sysspectogram"; // WorkingDirectory of the guard unit
+const INSTALLED_ROOT: &str = "/var/lib/sysspectogram";
 const INSTALLED_PYTHON: &str = "/opt/sysspectogram/venv/bin/python";
 const HELPER_SOCKET: &str = "/run/sysspectogram/helper.sock";
 
 /// A source checkout contains both the default config and the Python package.
-fn is_checkout(dir: &Path) -> bool {
+pub fn is_checkout(dir: &Path) -> bool {
     dir.join("configs").join("default.yaml").is_file()
         && dir.join("sysspectogram").join("__init__.py").is_file()
 }
@@ -21,26 +22,65 @@ fn is_checkout(dir: &Path) -> bool {
 /// Walk up from the running binary to find the checkout it was built from.
 fn dev_checkout() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    exe.ancestors().skip(1).find(|dir| is_checkout(dir)).map(Path::to_path_buf)
+    exe.ancestors()
+        .skip(1)
+        .find(|dir| is_checkout(dir))
+        .map(Path::to_path_buf)
 }
 
-/// Project root: env override, else the source checkout, else the installed state dir.
+/// Writable home for packaged installs (AppImage / deb without a system install).
+pub fn user_data_root() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+        return PathBuf::from(xdg).join("sysspectogram");
+    }
+    dirs_next_home()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".local")
+        .join("share")
+        .join("sysspectogram")
+}
+
+fn dirs_next_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// True when we are running from a source checkout (dev / `tauri dev`).
+pub fn is_dev_checkout() -> bool {
+    dev_checkout().is_some()
+}
+
+/// Project root: env override, else the source checkout, else user data, else system dir.
 pub fn root() -> PathBuf {
     if let Some(home) = std::env::var_os("SYSSPECTOGRAM_HOME") {
         return PathBuf::from(home);
     }
-    dev_checkout().unwrap_or_else(|| PathBuf::from(INSTALLED_ROOT))
+    if let Some(checkout) = dev_checkout() {
+        return checkout;
+    }
+    let user = user_data_root();
+    if user.join(".venv").join("bin").join("python").is_file()
+        || user.join("configs").join("default.yaml").is_file()
+    {
+        return user;
+    }
+    let system = PathBuf::from(INSTALLED_ROOT);
+    if system.join("configs").join("default.yaml").is_file()
+        || Path::new(INSTALLED_PYTHON).is_file()
+    {
+        return system;
+    }
+    // Packaged first-run: prefer creating the user data dir.
+    user
 }
 
-/// Python for the CLI and the app-started guard: env override, the checkout's .venv,
-/// the installed venv, then whatever `python3` is on PATH.
+/// Python for the CLI and the app-started guard.
 pub fn python() -> PathBuf {
     if let Some(p) = std::env::var_os("SYSSPECTOGRAM_PYTHON") {
         return PathBuf::from(p);
     }
-    let checkout_venv = root().join(".venv").join("bin").join("python");
-    if checkout_venv.exists() {
-        return checkout_venv;
+    let home_venv = root().join(".venv").join("bin").join("python");
+    if home_venv.exists() {
+        return home_venv;
     }
     let installed = PathBuf::from(INSTALLED_PYTHON);
     if installed.exists() {
@@ -62,4 +102,16 @@ pub fn timeseries_db() -> PathBuf {
 
 pub fn reports_dir() -> PathBuf {
     root().join("reports")
+}
+
+/// Whether the Python package is importable with our resolved interpreter.
+pub fn stack_ready() -> bool {
+    let py = python();
+    let status = std::process::Command::new(&py)
+        .args(["-c", "import sysspectogram"])
+        .env("SYSSPECTOGRAM_HOME", root())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    matches!(status, Ok(s) if s.success())
 }

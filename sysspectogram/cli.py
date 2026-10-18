@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
 
 from rich.console import Console
@@ -638,6 +640,588 @@ def _cmd_scenario(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_control(args: argparse.Namespace) -> int:
+    """Talk to the running guard's local control socket (SOAR)."""
+    import json
+    from pathlib import Path
+
+    from sysspectogram.control_socket import request
+    from sysspectogram.config import state_root
+
+    sock = Path(args.socket) if getattr(args, "socket", None) else state_root() / "control.sock"
+    payload: dict = {"op": args.control_op}
+    if args.control_op == "action":
+        payload["name"] = args.name
+        raw = getattr(args, "payload", None) or "{}"
+        try:
+            extra = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(f"bad --payload JSON: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(extra, dict):
+            print("--payload must be a JSON object", file=sys.stderr)
+            return 2
+        payload["payload"] = extra
+    elif args.control_op not in ("status", "ping"):
+        # shorthand fields
+        if getattr(args, "ip", None):
+            payload["ip"] = args.ip
+        if getattr(args, "pid", None) is not None:
+            payload["pid"] = args.pid
+        if getattr(args, "ttl", None) is not None:
+            payload["ttl"] = args.ttl
+        if getattr(args, "comm", None):
+            payload["expect_comm"] = args.comm
+    try:
+        resp = request(sock, payload)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 1
+    print(json.dumps(resp, ensure_ascii=False))
+    return 0 if resp.get("ok") else 1
+
+
+def _cmd_home_model(args: argparse.Namespace) -> int:
+    """Copy a training-machine model dir into artifacts/live for the VPS."""
+    import json
+    import shutil
+    from pathlib import Path
+
+    src = Path(args.source).expanduser().resolve()
+    if not src.is_dir():
+        print(json.dumps({"ok": False, "error": f"not a directory: {src}"}))
+        return 2
+    has_onnx = (src / "cnn.onnx").is_file()
+    has_pt = (src / "cnn.pt").is_file()
+    if not has_onnx and not has_pt:
+        print(json.dumps({"ok": False, "error": "need cnn.onnx or cnn.pt in the folder"}))
+        return 2
+    dest = (ROOT / "artifacts" / "live").resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    for name in src.iterdir():
+        if not name.is_file():
+            continue
+        if name.name.startswith("."):
+            continue
+        target = dest / name.name
+        shutil.copy2(name, target)
+        copied.append(name.name)
+    marker = ROOT / "state" / "model.path"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(str(dest) + "\n", encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "dest": str(dest),
+                "copied": copied,
+                "hint": "set runtime.prefer=onnx (or auto) and restart the guard with --model artifacts/live",
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _cmd_home_env(args: argparse.Namespace) -> int:
+    """Write or update Telegram keys in project .env (gitignored)."""
+    import json
+    from pathlib import Path
+
+    env_path = ROOT / ".env"
+    lines: list[str] = []
+    if env_path.is_file():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    mapping = {
+        "TELEGRAM_BOT_TOKEN": getattr(args, "bot_token", None),
+        "TELEGRAM_CHAT_ID": getattr(args, "chat_id", None),
+    }
+    for key, val in mapping.items():
+        if val is None:
+            continue
+        found = False
+        out: list[str] = []
+        for line in lines:
+            if line.startswith(f"{key}=") or line.startswith(f"export {key}="):
+                out.append(f"{key}={val}")
+                found = True
+            else:
+                out.append(line)
+        if not found:
+            out.append(f"{key}={val}")
+        lines = out
+    env_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    print(json.dumps({"ok": True, "path": str(env_path)}))
+    return 0
+
+
+def _cmd_home_onboarding(args: argparse.Namespace) -> int:
+    """Mark onboarding complete (or report status)."""
+    import json
+    from pathlib import Path
+
+    from sysspectogram.config import state_root
+
+    marker = state_root() / "state" / "onboarding.done"
+    if args.onboarding_action == "status":
+        print(json.dumps({"done": marker.is_file(), "path": str(marker)}))
+        return 0
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("1\n", encoding="utf-8")
+    print(json.dumps({"ok": True, "path": str(marker)}))
+    return 0
+
+
+def _cmd_home_health(args: argparse.Namespace) -> int:
+    """Quick Day-0 health: helper, metrics freshness, telegram, unlock."""
+    import json
+    import socket
+    import time
+    from pathlib import Path
+
+    from sysspectogram.config import state_root
+
+    root = state_root()
+    checks: list[dict] = []
+
+    def add(id_: str, ok: bool, detail: str, *, severity: str = "info") -> None:
+        checks.append({"id": id_, "ok": ok, "detail": detail, "severity": severity if not ok else "ok"})
+
+    # Helper socket
+    helper_sock = Path(os.environ.get("SYSSPECTOGRAM_HELPER_SOCKET", "/run/sysspectogram/helper.sock"))
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1.0)
+            s.connect(str(helper_sock))
+        add("helper", True, f"reachable at {helper_sock}")
+    except OSError as exc:
+        add("helper", False, f"unreachable ({exc})", severity="warn")
+
+    # Control socket (guard)
+    control = root / "state" / "control.sock"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1.0)
+            s.connect(str(control))
+        add("guard", True, "control socket open (guard running)")
+    except OSError:
+        add("guard", False, "guard not running — press Start protection", severity="warn")
+
+    # Timeseries freshness
+    ts_path = root / "state" / "timeseries.sqlite"
+    now = time.time()
+    if not ts_path.is_file():
+        add("metrics", False, "no timeseries.sqlite yet", severity="warn")
+    else:
+        try:
+            import sqlite3
+
+            conn = sqlite3.connect(f"file:{ts_path}?mode=ro", uri=True)
+            row = conn.execute("SELECT MAX(ts) FROM raw").fetchone()
+            conn.close()
+            latest = float(row[0] or 0)
+            age = now - latest if latest else 1e9
+            if age <= 90:
+                add("metrics", True, f"fresh samples ({age:.0f}s ago)")
+            elif age < 3600:
+                add("metrics", False, f"stale ({age:.0f}s ago) — start the guard", severity="warn")
+            else:
+                add(
+                    "metrics",
+                    False,
+                    f"stale ({age / 3600:.1f}h ago) — start the guard",
+                    severity="warn",
+                )
+        except Exception as exc:
+            add("metrics", False, f"cannot read store: {exc}", severity="warn")
+
+    # Telegram
+    cfg = load_config()
+    tg = cfg.get("telegram") or {}
+    token = bool(tg.get("bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN"))
+    chat = bool(tg.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID"))
+    enabled = bool(tg.get("enabled"))
+    if enabled and token and chat:
+        add("telegram", True, "configured")
+    elif token and chat:
+        add("telegram", True, "keys present (enable in Settings to use)", severity="info")
+    else:
+        add("telegram", False, "not configured — alerts stay in the app", severity="info")
+
+    # Ping telegram if requested
+    ping = getattr(args, "ping", False)
+    if ping and token and chat:
+        try:
+            from sysspectogram.notify_telegram import TelegramClient
+
+            client = TelegramClient(
+                str(tg.get("bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN")),
+                str(tg.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID")),
+            )
+            client.send_message("SysSpectogram health check: ok")
+            add("telegram_ping", True, "test message sent")
+        except Exception as exc:
+            add("telegram_ping", False, str(exc), severity="warn")
+
+    # Mode / isolate readiness
+    mode = str((cfg.get("response") or {}).get("mode") or "observe")
+    kirk = cfg.get("kirk") or {}
+    allow = list(kirk.get("allow_ssh_cidrs") or [])
+    if mode == "isolate" and not allow:
+        add(
+            "isolate",
+            False,
+            "isolate mode needs kirk.allow_ssh_cidrs or you may lock yourself out",
+            severity="warn",
+        )
+    else:
+        add("mode", True, f"response.mode={mode}")
+
+    ok = all(c["ok"] or c.get("severity") == "info" for c in checks if c["id"] in ("helper", "guard", "metrics"))
+    print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False))
+    return 0 if ok else 1
+
+
+def _cmd_home_digest(args: argparse.Namespace) -> int:
+    """Plain-language summary of the last 24h."""
+    import json
+    import time
+    from collections import Counter
+    from pathlib import Path
+
+    from sysspectogram.config import state_root
+
+    root = state_root()
+    hours = float(getattr(args, "hours", 24) or 24)
+    cutoff = time.time() - hours * 3600
+    lang = str(getattr(args, "lang", "en") or "en")
+
+    incidents_path = root / "reports" / "incidents.jsonl"
+    alerts_path = root / "reports" / "alerts.jsonl"
+    perim_path = root / "reports" / "perimeter.jsonl"
+
+    def _as_epoch(raw) -> float:
+        if raw is None or raw == "":
+            return 0.0
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        text = str(raw).strip()
+        try:
+            return float(text)
+        except ValueError:
+            pass
+        try:
+            from datetime import datetime
+
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+
+    def read_jsonl(path: Path) -> list[dict]:
+        if not path.is_file():
+            return []
+        out: list[dict] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict):
+                    out.append(row)
+        except OSError:
+            return []
+        return out
+
+    incidents = [
+        r
+        for r in read_jsonl(incidents_path)
+        if _as_epoch(r.get("last_ts") or r.get("first_ts")) >= cutoff
+    ]
+    alerts = [r for r in read_jsonl(alerts_path) if _as_epoch(r.get("ts")) >= cutoff]
+    perimeter = [r for r in read_jsonl(perim_path) if _as_epoch(r.get("ts")) >= cutoff]
+
+    sev = Counter(str(r.get("severity") or "unknown") for r in incidents)
+    rules = Counter()
+    for r in incidents:
+        for rule in r.get("rules") or []:
+            rules[str(rule)] += 1
+    for r in alerts + perimeter:
+        rid = r.get("rule_id") or r.get("rule")
+        if rid:
+            rules[str(rid)] += 1
+
+    top_rules = [{"rule": k, "count": v} for k, v in rules.most_common(5)]
+
+    # Metrics snapshot
+    risk_max = None
+    cpu_avg = None
+    ts_path = root / "state" / "timeseries.sqlite"
+    if ts_path.is_file():
+        try:
+            from sysspectogram.timeseries.store import TimeseriesStore
+
+            store = TimeseriesStore(ts_path)
+            risk_pts = store.query("host_risk", "24h" if hours >= 24 else "1h")
+            cpu_pts = store.query("cpu_percent", "24h" if hours >= 24 else "1h")
+            if risk_pts:
+                risk_max = max(p.max for p in risk_pts)
+            if cpu_pts:
+                cpu_avg = sum(p.avg for p in cpu_pts) / len(cpu_pts)
+        except Exception:
+            pass
+
+    if lang == "ru":
+        lines = [
+            f"За последние {hours:g} ч:",
+            f"· инцидентов: {len(incidents)} (critical={sev.get('critical', 0)}, high={sev.get('high', 0)}, medium={sev.get('medium', 0)})",
+            f"· алертов периметра: {len(perimeter)}, host: {len(alerts)}",
+        ]
+        if risk_max is not None:
+            lines.append(f"· макс. риск хоста: {risk_max:.3f}")
+        if cpu_avg is not None:
+            lines.append(f"· средний CPU: {cpu_avg:.1f}%")
+        if top_rules:
+            lines.append("· частые правила: " + ", ".join(f"{r['rule']}×{r['count']}" for r in top_rules))
+        if not incidents and not perimeter and not alerts:
+            lines.append("· всё тихо — подозрительной активности не видно.")
+        text = "\n".join(lines)
+    else:
+        lines = [
+            f"Last {hours:g} h:",
+            f"· incidents: {len(incidents)} (critical={sev.get('critical', 0)}, high={sev.get('high', 0)}, medium={sev.get('medium', 0)})",
+            f"· perimeter alerts: {len(perimeter)}, host: {len(alerts)}",
+        ]
+        if risk_max is not None:
+            lines.append(f"· peak host risk: {risk_max:.3f}")
+        if cpu_avg is not None:
+            lines.append(f"· avg CPU: {cpu_avg:.1f}%")
+        if top_rules:
+            lines.append("· top rules: " + ", ".join(f"{r['rule']}×{r['count']}" for r in top_rules))
+        if not incidents and not perimeter and not alerts:
+            lines.append("· quiet — nothing suspicious recorded.")
+        text = "\n".join(lines)
+
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "hours": hours,
+                "text": text,
+                "incidents": len(incidents),
+                "perimeter": len(perimeter),
+                "alerts": len(alerts),
+                "severity": dict(sev),
+                "top_rules": top_rules,
+                "risk_max": risk_max,
+                "cpu_avg": cpu_avg,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _cmd_home_mute_rule(args: argparse.Namespace) -> int:
+    """Mute an alert rule_id for N hours (no unlock required)."""
+    import json
+    import time
+
+    from sysspectogram.config import state_root
+    from sysspectogram.process_labels import ProcessLabelStore
+
+    rule_id = str(getattr(args, "rule_id", "") or "").strip()
+    hours = float(getattr(args, "hours", 24) or 24)
+    hours = max(0.25, min(hours, 24 * 30))
+    if not rule_id:
+        print(json.dumps({"ok": False, "error": "rule_id required"}))
+        return 2
+    store = ProcessLabelStore(state_root() / "state" / "process_labels.json")
+    entry = store.mute_rule(
+        rule_id,
+        note=f"muted {hours:g}h from Control Center",
+        source="cc",
+        expires_at=time.time() + hours * 3600.0,
+    )
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "rule_id": rule_id,
+                "hours": hours,
+                "id": getattr(entry, "id", None),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _cmd_home_checklist(args: argparse.Namespace) -> int:
+    """VPS readiness checklist for operators."""
+    import json
+    import sqlite3
+    import time
+
+    from sysspectogram.config import state_root
+
+    cfg = load_config()
+    items: list[dict] = []
+
+    def item(id_: str, title: dict, ok: bool, hint: dict) -> None:
+        items.append({"id": id_, "title": title, "ok": ok, "hint": hint})
+
+    tg = cfg.get("telegram") or {}
+    token = bool(tg.get("bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN"))
+    chat = bool(tg.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID"))
+    item(
+        "telegram",
+        {"en": "Telegram alerts", "ru": "Алерты Telegram"},
+        token and chat,
+        {
+            "en": "Add bot token + chat id in Settings.",
+            "ru": "Добавьте токен бота и chat id в Настройках.",
+        },
+    )
+
+    mode = str((cfg.get("response") or {}).get("mode") or "observe")
+    item(
+        "mode",
+        {"en": "Protection beyond observe", "ru": "Защита сильнее observe"},
+        mode in ("shield", "aggressive", "isolate", "enforce"),
+        {
+            "en": "Switch to Soft auto / Full / Isolation when ready.",
+            "ru": "Переключите на мягкий авто / полную защиту / изоляцию.",
+        },
+    )
+
+    never = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
+    item(
+        "never_ban",
+        {"en": "Your IP allowlisted (never_ban)", "ru": "Ваш IP в never_ban"},
+        bool(never),
+        {
+            "en": "Settings → Never-ban CIDRs, e.g. YOUR_IP/32 (curl -4 ifconfig.me).",
+            "ru": "Настройки → Never-ban CIDR, например ВАШ_IP/32 (curl -4 ifconfig.me).",
+        },
+    )
+
+    kirk = cfg.get("kirk") or {}
+    allow = list(kirk.get("allow_ssh_cidrs") or [])
+    item(
+        "ssh_allow",
+        {"en": "SSH allowlist for isolation", "ru": "SSH allowlist для изоляции"},
+        bool(allow) or mode != "isolate",
+        {
+            "en": "Required before Isolation mode (kirk.allow_ssh_cidrs).",
+            "ru": "Нужен перед режимом изоляции (kirk.allow_ssh_cidrs).",
+        },
+    )
+
+    metrics_ok = False
+    ts_path = state_root() / "state" / "timeseries.sqlite"
+    if ts_path.is_file():
+        try:
+            conn = sqlite3.connect(f"file:{ts_path}?mode=ro", uri=True)
+            latest = float((conn.execute("SELECT MAX(ts) FROM raw").fetchone() or [0])[0] or 0)
+            conn.close()
+            metrics_ok = time.time() - latest <= 120
+        except Exception:
+            metrics_ok = False
+    item(
+        "metrics",
+        {"en": "Metrics flowing", "ru": "Метрики пишутся"},
+        metrics_ok,
+        {
+            "en": "Start protection so Charts and Live fill with data.",
+            "ru": "Включите защиту — заполнятся Графики и Онлайн.",
+        },
+    )
+
+    unlock_on = bool(tg.get("require_console_unlock", True))
+    item(
+        "unlock",
+        {"en": "Console unlock for Telegram actions", "ru": "Разблокировка консоли для Telegram"},
+        unlock_on,
+        {
+            "en": "Keep telegram.require_console_unlock on.",
+            "ru": "Оставьте telegram.require_console_unlock включённым.",
+        },
+    )
+
+    web = bool((cfg.get("web") or {}).get("enabled"))
+    item(
+        "web_off",
+        {"en": "Web UI off by default", "ru": "Веб выключен по умолчанию"},
+        not web,
+        {
+            "en": "Leave web.enabled false unless you need the browser UI.",
+            "ru": "Оставьте web.enabled=false, если браузерный UI не нужен.",
+        },
+    )
+
+    ready = sum(1 for i in items if i["ok"])
+    print(
+        json.dumps(
+            {"ok": ready == len(items), "ready": ready, "total": len(items), "items": items},
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _cmd_home_settings(args: argparse.Namespace) -> int:
+    """Write allowlisted keys to state/user-settings.json (no root helper required)."""
+    import json
+    from pathlib import Path
+
+    from sysspectogram.config import OVERLAY_ALLOWED, user_settings_path
+
+    raw = getattr(args, "changes", None) or "{}"
+    try:
+        changes = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(json.dumps({"ok": False, "error": f"bad JSON: {exc}"}))
+        return 2
+    if not isinstance(changes, dict):
+        print(json.dumps({"ok": False, "error": "changes must be an object"}))
+        return 2
+    path = user_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current: dict = {}
+    if path.is_file():
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(current, dict):
+                current = {}
+        except (OSError, ValueError):
+            current = {}
+    applied: dict = {}
+    rejected: list[str] = []
+    for key, value in changes.items():
+        if key not in OVERLAY_ALLOWED:
+            rejected.append(str(key))
+            continue
+        if key == "response.mode" and value == "enforce":
+            value = "shield"
+        if not isinstance(value, (bool, int, float, str)):
+            rejected.append(str(key))
+            continue
+        current[str(key)] = value
+        applied[str(key)] = value
+    path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    print(json.dumps({"ok": True, "path": str(path), "applied": applied, "rejected": rejected}))
+    return 0
+
+
 def _cmd_settings(args: argparse.Namespace) -> int:
     import json as _json
 
@@ -658,7 +1242,13 @@ def _cmd_settings(args: argparse.Namespace) -> int:
         settings = []
         for entry in schema.get("settings") or []:
             row = dict(entry)
-            row["current"] = get_value(cfg, entry["key"])
+            cur = get_value(cfg, entry["key"])
+            # Schema type string: present list CIDRs as a comma-separated field for the UI.
+            if entry.get("type") == "string" and isinstance(cur, list):
+                cur = ", ".join(str(x) for x in cur)
+            elif entry.get("type") == "string" and cur is None:
+                cur = ""
+            row["current"] = cur
             settings.append(row)
         scenarios = [
             {"id": s.id, "title": s.title, "description": s.description, "overrides": s.overrides}
@@ -1226,6 +1816,57 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--port", type=int, default=None)
     w.add_argument("--duration", type=float, default=None)
     w.set_defaults(func=_cmd_web)
+
+    ctl = sub.add_parser("control", help="SOAR via local guard control socket")
+    ctl_sub = ctl.add_subparsers(dest="control_op", required=True)
+    ctl_st = ctl_sub.add_parser("status", help="control plane status")
+    ctl_st.add_argument("--socket", default=None)
+    ctl_st.set_defaults(func=_cmd_control)
+    ctl_act = ctl_sub.add_parser("action", help="run named action (ban/kill/...)")
+    ctl_act.add_argument("name")
+    ctl_act.add_argument("--payload", default="{}")
+    ctl_act.add_argument("--socket", default=None)
+    ctl_act.set_defaults(func=_cmd_control)
+    for op in ("ban", "unban", "kill", "allow", "mute", "mute_rule", "quiet", "lockdown", "recon"):
+        p_op = ctl_sub.add_parser(op)
+        p_op.add_argument("--ip", default=None)
+        p_op.add_argument("--pid", type=int, default=None)
+        p_op.add_argument("--ttl", default=None)
+        p_op.add_argument("--comm", default=None)
+        p_op.add_argument("--socket", default=None)
+        p_op.set_defaults(func=_cmd_control)
+
+    hm = sub.add_parser("home", help="simple-home helpers (onboarding, model import, .env)")
+    hm_sub = hm.add_subparsers(dest="home_action", required=True)
+    hm_model = hm_sub.add_parser("import-model", help="copy weights into artifacts/live")
+    hm_model.add_argument("source", help="folder with cnn.onnx (or cnn.pt) from the builder PC")
+    hm_model.set_defaults(func=_cmd_home_model)
+    hm_env = hm_sub.add_parser("env", help="write Telegram keys into .env")
+    hm_env.add_argument("--bot-token", default=None)
+    hm_env.add_argument("--chat-id", default=None)
+    hm_env.set_defaults(func=_cmd_home_env)
+    hm_ob = hm_sub.add_parser("onboarding", help="onboarding marker")
+    hm_ob_sub = hm_ob.add_subparsers(dest="onboarding_action", required=True)
+    hm_ob_st = hm_ob_sub.add_parser("status")
+    hm_ob_st.set_defaults(func=_cmd_home_onboarding)
+    hm_ob_done = hm_ob_sub.add_parser("done")
+    hm_ob_done.set_defaults(func=_cmd_home_onboarding)
+    hm_set = hm_sub.add_parser("settings", help="write state/user-settings.json (home overlay)")
+    hm_set.add_argument("--changes", required=True, help="JSON object of dotted keys")
+    hm_set.set_defaults(func=_cmd_home_settings)
+    hm_health = hm_sub.add_parser("health", help="quick health: helper, guard, metrics, telegram")
+    hm_health.add_argument("--ping", action="store_true", help="send a Telegram test message")
+    hm_health.set_defaults(func=_cmd_home_health)
+    hm_digest = hm_sub.add_parser("digest", help="plain-language summary of recent activity")
+    hm_digest.add_argument("--hours", type=float, default=24.0)
+    hm_digest.add_argument("--lang", choices=["en", "ru"], default="en")
+    hm_digest.set_defaults(func=_cmd_home_digest)
+    hm_mute = hm_sub.add_parser("mute-rule", help="mute an alert rule_id for N hours")
+    hm_mute.add_argument("--rule-id", required=True)
+    hm_mute.add_argument("--hours", type=float, default=24.0)
+    hm_mute.set_defaults(func=_cmd_home_mute_rule)
+    hm_check = hm_sub.add_parser("checklist", help="VPS readiness checklist")
+    hm_check.set_defaults(func=_cmd_home_checklist)
 
     ln = sub.add_parser("lab-nmap", help="nmap allowlisted lab targets only")
     ln.add_argument("target")

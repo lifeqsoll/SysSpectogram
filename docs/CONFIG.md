@@ -75,7 +75,8 @@ Notable **v0.6** keys:
 | --- | --- | --- | --- |
 | `load_profile` | `lite` / `full` | `lite` | CPU budget (VPS vs VDS) |
 | `runtime` | `prefer` | `notorch` | `notorch` \| `onnx` \| `torch_ml` |
-| `response` | `mode` | `observe` | `observe` \| `shield` \| `aggressive` |
+| `response` | `mode` | `observe` | `observe` \| `shield` \| `aggressive` \| `isolate` |
+| `response` | `never_ban_cidrs` | `[]` | CIDRs that must never be auto-banned (your admin IP as `/32`) |
 | `telegram` | `require_console_unlock` | `true` | Gate TG + web actions until `/unlock` |
 | `agent` | `mode` | `userspace` | `userspace` or `ebpf` (attach needs root) |
 | `agent` | `require_hmac` | `true` | Reject unsigned critical agent rules |

@@ -2,79 +2,67 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-Linux **VPS / host defense** utility: behavioral ML on metric “spectrograms” (CNN + Isolation Forest), perimeter/egress watching, Telegram SOAR-lite, live web / Mini App, and a **v3 Rust integrity agent** (process / path / module signals + lightweight metrics).
+Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS).
 
-**Scope (v1.0):** Control Center desktop app (Tauri 2 + Svelte), a privileged helper with polkit, signed release bundles, an incident engine with ATT&CK mapping and HTML reports, event-level features with an opt-in event spectrogram model, dashboards from 1 h to 30 d, and a read-only VMI cross-view for self-hosted KVM ([docs/VMI.md](docs/VMI.md)).
+**For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect. Geek tools stay behind **Advanced**. Start here: **[Simple home](docs/HOME.md)**. Release notes: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (screenshots + bootstrap).
+
+<p align="center">
+  <img src="docs/assets/v1.1/home.png" alt="Home" width="720" />
+</p>
+
+<p align="center">
+  <img src="docs/assets/v1.1/charts.png" alt="Charts" width="340" />
+  <img src="docs/assets/v1.1/live.png" alt="Live" width="340" />
+</p>
+
+### Never-ban your own IP (important)
+
+Before soft/full auto-ban, whitelist yourself so the guard cannot lock you out:
+
+```bash
+curl -4 ifconfig.me   # e.g. 203.0.113.10
+```
+
+Then in **Settings → Never-ban IPs** enter one or more (comma or new lines; bare IP → `/32`), e.g. `203.0.113.10` and `198.51.100.20/32` → Apply → restart guard.  
+Same key: `response.never_ban_cidrs`. Details: [RELEASE_v1.1.0](docs/RELEASE_v1.1.0.md) · [HOME.md](docs/HOME.md).
 
 ### Docs (by topic)
 
-**Deploy & configure:** [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Day-0](docs/DAY0_VPS.md) · [Golden path](docs/GOLDEN_PATH.md) · [Profiles](docs/PROFILES.md)
+**Start here:** [Simple home](docs/HOME.md) · [Release v1.1.0](docs/RELEASE_v1.1.0.md) · [Day-0 CLI](docs/DAY0_VPS.md) · [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md)
 
-**Defense components:** [Agent](docs/AGENT.md) · [Agent protect](docs/AGENT_PROTECT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [VMI](docs/VMI.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Supply chain story](docs/SUPPLY_CHAIN_STORY.md)
+**Defense:** [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md)
 
-**Control surfaces:** [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Sessions](docs/SESSIONS.md) · [Feedback](docs/FEEDBACK.md)
+**Control:** [Control Center](docs/CONTROL_CENTER.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Feedback](docs/FEEDBACK.md)
 
-**Data / ML ops:** [Recipes](docs/RECIPES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Role lab](docs/ROLE_LAB.md) · [Simulations](simulations/README.md)
+**ML / data:** [Recipes](docs/RECIPES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Simulations](simulations/README.md)
 
-**Product & v1.0:** [Product description](docs/PRODUCT_v1.0.md) · [Control Center](docs/CONTROL_CENTER.md) · [ADRs](docs/adr/) · [Release v1.0](docs/RELEASE_v1.0.0.md)
+**Product:** [Product description](docs/PRODUCT_v1.0.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [ADRs](docs/adr/)
 
-**Roadmap & releases:** [Roadmap](docs/ROADMAP_QUALITY.md) · [Release v1.0](docs/RELEASE_v1.0.0.md) · [Release v0.9](docs/RELEASE_v0.9.0.md) · [Release v0.8](docs/RELEASE_v0.8.0.md)
+### What you get
 
-### What's new in v1.0
-
-| Piece | Status |
+| Piece | Notes |
 | --- | --- |
-| Control Center: Overview, Live, Dashboards (1 h to 30 d), Incidents, Agent, Perimeter, Settings, Scenarios, Tests and Lab, Install and Updates, Logs, About | yes (`control-center/`) |
-| `sysspectogram-helper`: allowlisted root operations, polkit per action, peer credentials | yes (`helper/`) |
-| Signed bundle install (minisign + sha256, verified in root-owned staging) | yes; network download on first run is not yet implemented |
-| Incident engine: correlation, ATT&CK mapping, HTML and Markdown reports | yes |
-| Fusion gate: alert if host ≥ threshold OR fused risk ≥ threshold; agent score half-life | yes |
-| Event-level features (per-channel matrix) and event spectrogram CNN | yes, spectrogram model is opt-in (`agent.spectrogram`) |
-| Read-only VMI cross-view, mock backend; libvmi backend unverified on hardware | yes, off by default (`kirk.vmi`) |
-| Timeseries store with rollups for dashboards | yes |
-| Schema-driven settings (EN/RU), scenario presets, localhost lab runs | yes |
-
-### What's new in v0.9
-
-| Piece | Status |
-| --- | --- |
-| Pickle-free `scaler.json` + `iforest.ssf.npz` (joblib runtime removed) | yes |
-| Alert fan-out: file / syslog / HTTPS | yes |
-| FIM baseline on disk; enabled on `lite` profile | yes |
-| Hybrid watchdog: Phoenix harden + optional DKMS `sysspectogram_wd` | yes (kmod opt-in) |
-| Narrow `kirk.auto_isolate_host_risk` (default off) | yes |
-| Grouped README docs + ONNX VPS path + agent operator notes | yes |
+| Control Center (simple + Advanced) | Home, Charts, Alerts, Settings; light/dark; EN/RU; first-run wizard |
+| Telegram + optional web | Clear alerts; Ban/Kill after console unlock; web off by default |
+| Guard + Rust agent | Perimeter (SSH brute, …), FIM/process signals, timeseries charts |
+| Privileged helper | polkit allowlist for settings / service / signed bundles |
+| Optional host ML | Train on a builder PC; import ONNX weights on the VPS ([HOME.md](docs/HOME.md)) |
 
 ### Limitations (honest)
 
 Same-host root can still stop services and wipe local logs. Remote alert sinks and signed manifests reduce silence/subversion; they do **not** make the tool unkillable. Optional kernel helper is off by default and often unavailable on locked-down cloud kernels. See [SECURITY.md](SECURITY.md).
 
-### VPS inference path (ONNX, no Torch)
+### Quick start (app)
 
 ```bash
-# On a builder (with Torch):
-python -m sysspectogram train --dataset dataset/out --out artifacts/live
-python -m sysspectogram export-onnx --model artifacts/live
-# optional: migrate legacy joblib → safe formats
-python -m sysspectogram artifacts migrate --model artifacts/live
+# helper once (polkit + systemd)
+sudo scripts/install-helper.sh
 
-# On the VPS: prefer ONNX runtime (or notorch without CNN)
-# configs/default.yaml → runtime.prefer: onnx
-# or: export SYSSPECTOGRAM_RUNTIME=onnx
-python -m sysspectogram guard --model artifacts/live --telegram --dry-run
+cd control-center && npm install && npm run tauri dev
+# complete onboarding → Home → Start protection
 ```
 
-`cnn.onnx` is the recommended VPS CNN artifact; `cnn.pt` is for builder / `runtime: torch_ml`. Details: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md), [CONFIG.md](docs/CONFIG.md).
-
-### What's new in v0.8 (carried)
-
-| Piece | Status |
-| --- | --- |
-| Minisign + `artifacts.manifest.json` (SHA-256) | yes — [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) |
-| Deterministic SPDX 2.3 SBOM | yes |
-| Opt-in `supply_chain.enforce` | yes |
-| Safe `cnn.pt` load (`weights_only=True`) | yes |
-| AUR + Debian packaging recipes | yes — `packaging/` |
+CLI Day-0 path (no GUI): [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX on the VPS after training elsewhere: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md), [CONFIG.md](docs/CONFIG.md).
 
 ```bash
 source .venv/bin/activate
@@ -330,7 +318,7 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 ## Control Center
 
-Desktop application for Linux with a sidebar: Overview, Live, Dashboards, Incidents, Agent, Perimeter, Settings, Scenarios, Tests and Lab, Install and Updates, Logs and Audit, About. English is the default; Russian is one click away. Icons are SVG; no emoji.
+Default UI: **Home / Charts / Alerts / Settings** (light + dark, EN/RU). Turn on **Advanced** in Settings for the full geek sidebar. Onboarding + ML import: [HOME.md](docs/HOME.md). Architecture: [CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
 ```bash
 # development (needs Node 20+, Rust stable, Tauri 2 system libraries)
@@ -342,6 +330,8 @@ cd control-center && npm run tauri build
 # privileged helper (root service; see docs/CONTROL_CENTER.md)
 cd helper && cargo build --release
 ```
+
+Tagged releases also publish AppImage + deb via CI (`.github/workflows/release-assets.yml`). Friends: open the package → **Install stack v1.1.0** downloads the signed wheel/agent into `~/.local/share/sysspectogram` (no git clone).
 
 ### Build the Control Center from source
 
@@ -366,7 +356,7 @@ Run it:
 
 The app icons are already in `control-center/src-tauri/icons/`. To replace them, put a square 1024×1024 PNG anywhere and run `npm run tauri icon path/to/icon.png`.
 
-The Control Center reads `$SYSSPECTOGRAM_HOME` (default `/var/lib/sysspectogram`) and runs the Python CLI from `$SYSSPECTOGRAM_PYTHON` (default `/opt/sysspectogram/venv/bin/python` if present, else `python3`). Without an installed guard, the pages are empty; that is expected for a first look.
+Root resolution: `$SYSSPECTOGRAM_HOME`, else a source checkout, else `~/.local/share/sysspectogram` (AppImage/deb), else `/var/lib/sysspectogram`. Python: `$SYSSPECTOGRAM_PYTHON`, else home `.venv`, else `/opt/sysspectogram/venv/bin/python`, else `python3`. Packaged first-run without a stack shows **Install stack**.
 
 The UI never runs privileged commands itself. Settings changes, service control and bundle installs go through `sysspectogram-helper`, which checks each action with polkit. Dashboards read `state/timeseries.sqlite` read-only. Details: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
@@ -754,4 +744,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v1.0** ships the Control Center, the privileged helper, the incident engine, event-level scoring, dashboards and a read-only VMI cross-view. See [docs/RELEASE_v1.0.0.md](docs/RELEASE_v1.0.0.md), [docs/PRODUCT_v1.0.md](docs/PRODUCT_v1.0.md) and [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md). Known gaps are listed in the release notes.
+**v1.1** focuses on simple-home UX (wizard, plain alerts, Telegram/web toggles, Advanced for geeks). See [docs/RELEASE_v1.1.0.md](docs/RELEASE_v1.1.0.md), [docs/HOME.md](docs/HOME.md), [docs/PRODUCT_v1.0.md](docs/PRODUCT_v1.0.md) and [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md).

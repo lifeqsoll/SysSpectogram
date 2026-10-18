@@ -10,6 +10,19 @@ export interface AppInfo {
   version: string;
   root: string;
   helper_socket: string;
+  dev_checkout?: boolean;
+  stack_ready?: boolean;
+}
+
+export interface BootstrapStatus {
+  ok: boolean;
+  dev_checkout: boolean;
+  home: string;
+  python: string;
+  stack_ready: boolean;
+  helper_ok: boolean;
+  github_repo: string;
+  app_version: string;
 }
 
 export interface Point {
@@ -86,6 +99,43 @@ export interface StackStatus {
   guard_pid: number | null;
 }
 
+export interface HealthCheck {
+  id: string;
+  ok: boolean;
+  detail: string;
+  severity: string;
+}
+
+export interface HomeHealth {
+  ok: boolean;
+  checks: HealthCheck[];
+}
+
+export interface HomeDigest {
+  ok: boolean;
+  hours: number;
+  text: string;
+  incidents: number;
+  perimeter: number;
+  alerts: number;
+  risk_max: number | null;
+  cpu_avg: number | null;
+}
+
+export interface ChecklistItem {
+  id: string;
+  title: { en: string; ru: string };
+  ok: boolean;
+  hint: { en: string; ru: string };
+}
+
+export interface HomeChecklist {
+  ok: boolean;
+  ready: number;
+  total: number;
+  items: ChecklistItem[];
+}
+
 export const api = {
   appInfo: () => invoke<AppInfo>('app_info'),
   helperStatus: () => invoke<{ guard: string }>('helper_status'),
@@ -107,6 +157,23 @@ export const api = {
   startAll: () => invoke<StartAllResult>('start_all'),
   stopGuard: () => invoke<void>('stop_guard'),
   stackStatus: () => invoke<StackStatus>('stack_status'),
+  controlStatus: () => invoke<Record<string, unknown>>('control_status'),
+  controlAction: (name: string, payload: Record<string, unknown> = {}) =>
+    invoke<Record<string, unknown>>('control_action', { name, payload }),
+  homeImportModel: (source: string) => invoke<Record<string, unknown>>('home_import_model', { source }),
+  homeWriteEnv: (botToken?: string, chatId?: string) =>
+    invoke<Record<string, unknown>>('home_write_env', { botToken, chatId }),
+  onboardingStatus: () => invoke<{ done: boolean; path: string }>('onboarding_status'),
+  onboardingDone: () => invoke<Record<string, unknown>>('onboarding_done'),
+  homeHealth: (ping = false) => invoke<HomeHealth>('home_health', { ping }),
+  homeDigest: (hours = 24, lang?: string) =>
+    invoke<HomeDigest>('home_digest', { hours, lang }),
+  homeChecklist: () => invoke<HomeChecklist>('home_checklist'),
+  homeMuteRule: (ruleId: string, hours = 24) =>
+    invoke<Record<string, unknown>>('home_mute_rule', { ruleId, hours }),
+  bootstrapStatus: () => invoke<BootstrapStatus>('bootstrap_status'),
+  bootstrapInstall: (tag?: string) =>
+    invoke<Record<string, unknown>>('bootstrap_install', { tag: tag ?? null }),
   onLive: (cb: (e: LiveEvent) => void): Promise<UnlistenFn> =>
     listen<LiveEvent>('live', (e) => cb(e.payload)),
   onLabOutput: (cb: (e: LabLine) => void): Promise<UnlistenFn> =>
@@ -119,4 +186,9 @@ export function errorText(err: unknown): string {
   if (typeof err === 'string') return err;
   if (err instanceof Error) return err.message;
   return JSON.stringify(err);
+}
+
+/** True only inside the Tauri webview (not a plain browser / Vite tab). */
+export function isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }

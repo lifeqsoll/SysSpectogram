@@ -21,7 +21,7 @@
   <header class="topbar">
     <div>
       <h1 class="brand">SysSpectogram</h1>
-      <p class="live-badge" id="live-badge">LIVE · real host metrics</p>
+      <p class="live-badge" id="live-badge">Host guard · live metrics</p>
     </div>
     <div class="topbar-actions">
       <button type="button" class="theme-btn" id="btn-settings">Settings</button>
@@ -32,15 +32,15 @@
   <main class="stage">
     <div class="stage-head">
       <div>
-        <p class="host-line"><span class="dot" id="status-dot"></span> host <strong id="host-id">—</strong> · score <strong id="score-val">—</strong> · thr <span id="thr-val">—</span></p>
-        <p class="meta-line">cnn <span id="cnn-val">—</span> · iforest <span id="ifo-val">—</span> · model <span id="model-val">—</span> · dry_run <span id="dry-val">—</span> · control <span id="lock-val">—</span></p>
+        <p class="host-line"><span class="dot" id="status-dot"></span> <strong id="host-id">—</strong> · risk <strong id="score-val">—</strong> · thr <span id="thr-val">—</span></p>
+        <p class="meta-line">model <span id="model-val">—</span> · dry_run <span id="dry-val">—</span> · control <span id="lock-val">—</span> · cnn <span id="cnn-val">—</span> · if <span id="ifo-val">—</span></p>
         <p class="meta-line">kirk <span id="kirk-badge" class="kirk-badge">—</span> · isolated <span id="kirk-iso">—</span></p>
       </div>
-      <p class="pattern" id="pattern-label">pattern: —</p>
+      <p class="pattern" id="pattern-label">—</p>
     </div>
 
     <section class="controls" aria-label="Response actions">
-      <h3>Response</h3>
+      <h3>Actions (same as Telegram)</h3>
       <div class="ctrl-row">
         <input id="ip-input" type="text" placeholder="IP e.g. 203.0.113.10" />
         <button type="button" data-act="ban" data-ttl="3600">Ban 1h</button>

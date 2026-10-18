@@ -48,6 +48,8 @@ response:
   mode: observe
   never_ban_cidrs: []
   learn_hours: 24
+ui:
+  lang: en
 recon:
   auto: false
   nmap: false
@@ -55,6 +57,7 @@ recon:
   dir: reports/recon
   passive_dns_url: null
 telegram:
+  enabled: false
   bot_token: null
   chat_id: null
   token_secret: null

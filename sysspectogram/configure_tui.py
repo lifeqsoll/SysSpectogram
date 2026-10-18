@@ -172,7 +172,11 @@ def run_configure(
             prefer = prefer_rec
 
     resp_rec = "observe"
-    resp = Prompt.ask("response.mode", choices=["observe", "shield", "aggressive"], default=resp_rec)
+    resp = Prompt.ask(
+        "response.mode",
+        choices=["observe", "shield", "aggressive", "isolate"],
+        default=resp_rec,
+    )
     if resp != resp_rec:
         it = next(i for i in rec.items if i.key == "response.mode")
         if not _confirm_override("response.mode", resp_rec, resp, it.reason):

@@ -26,8 +26,8 @@
   let plot: uPlot | null = null;
   let resizeObserver: ResizeObserver | null = null;
 
-  const AXIS = '#8a96a0';
-  const GRID = '#242b31';
+  const AXIS = '#6b7c94';
+  const GRID = 'rgba(148, 178, 230, 0.06)';
 
   function options(width: number): uPlot.Options {
     return {
@@ -40,8 +40,8 @@
         y: yRange ? { range: () => yRange } : { auto: true },
       },
       axes: [
-        { stroke: AXIS, grid: { stroke: GRID, width: 1 }, ticks: { stroke: GRID } },
-        { stroke: AXIS, grid: { stroke: GRID, width: 1 }, ticks: { stroke: GRID } },
+        { stroke: AXIS, grid: { show: false }, ticks: { stroke: GRID } },
+        { stroke: AXIS, grid: { stroke: GRID, width: 1 }, ticks: { show: false } },
       ],
       series: [
         {},

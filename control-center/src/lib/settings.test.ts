@@ -29,9 +29,9 @@ const entries: SettingEntry[] = [
     type: 'enum',
     default: 'observe',
     current: 'observe',
-    choices: ['observe', 'enforce'],
-    title: { en: 'Response mode', ru: 'Режим реагирования' },
-    description: { en: 'Records only.', ru: 'Только запись.' },
+    choices: ['observe', 'shield', 'aggressive', 'isolate'],
+    title: { en: 'Protection mode', ru: 'Режим защиты' },
+    description: { en: 'Notify or soft auto-ban.', ru: 'Уведомления или мягкий автобан.' },
   },
 ];
 
@@ -44,14 +44,14 @@ describe('validateValue', () => {
   });
 
   it('checks enum choices', () => {
-    expect(validateValue(entries[2], 'enforce')).toBeNull();
+    expect(validateValue(entries[2], 'shield')).toBeNull();
     expect(validateValue(entries[2], 'nuke')).not.toBeNull();
   });
 });
 
 describe('explainChanges', () => {
   it('reports only real changes and carries restart flag and localized text', () => {
-    const draft = { 'kirk.vmi': true, 'ensemble.risk_threshold': 0.7, 'response.mode': 'enforce' };
+    const draft = { 'kirk.vmi': true, 'ensemble.risk_threshold': 0.7, 'response.mode': 'shield' };
     const changes = explainChanges(entries, draft, 'ru');
     expect(changes.map((c) => c.key)).toEqual(['kirk.vmi', 'response.mode']);
     expect(changes[0].restart).toBe(true);
@@ -62,19 +62,19 @@ describe('explainChanges', () => {
   it('falls back to English when a translation is empty', () => {
     const copy = structuredClone(entries);
     copy[2].title.ru = '';
-    const [change] = explainChanges(copy, { 'response.mode': 'enforce' }, 'ru');
-    expect(change.title).toBe('Response mode');
+    const [change] = explainChanges(copy, { 'response.mode': 'shield' }, 'ru');
+    expect(change.title).toBe('Protection mode');
   });
 });
 
 describe('scenarioDraft', () => {
   it('rejects unknown keys and invalid values', () => {
     const { draft, errors } = scenarioDraft(entries, {
-      'response.mode': 'enforce',
+      'response.mode': 'shield',
       'ssh.PermitRootLogin': 'yes',
       'ensemble.risk_threshold': 2,
     });
-    expect(draft).toEqual({ 'response.mode': 'enforce' });
+    expect(draft).toEqual({ 'response.mode': 'shield' });
     expect(errors).toHaveLength(2);
   });
 });

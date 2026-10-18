@@ -75,6 +75,17 @@ def validate_value(entry: dict[str, Any], value: Any) -> list[str]:
     elif kind == "enum":
         if value not in (entry.get("choices") or []):
             errors.append(f"{key}: must be one of {entry.get('choices')}")
+    elif kind == "string":
+        # never_ban_cidrs: UI sends a comma-separated string; YAML/export may be a list.
+        if key == "response.never_ban_cidrs" and isinstance(value, list):
+            if not all(isinstance(x, str) for x in value):
+                errors.append(f"{key}: list entries must be strings")
+            elif sum(len(x) for x in value) > 2048:
+                errors.append(f"{key}: string too long (max 2048)")
+        elif not isinstance(value, str):
+            errors.append(f"{key}: expected a string")
+        elif len(value) > 2048:
+            errors.append(f"{key}: string too long (max 2048)")
     return errors
 
 
