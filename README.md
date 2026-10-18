@@ -7,12 +7,7 @@ Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts 
 **For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect. Geek tools stay behind **Advanced**. Start here: **[Simple home](docs/HOME.md)**. Release notes: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (screenshots + bootstrap).
 
 <p align="center">
-  <img src="docs/assets/v1.1/home.png" alt="Home" width="720" />
-</p>
-
-<p align="center">
-  <img src="docs/assets/v1.1/charts.png" alt="Charts" width="340" />
-  <img src="docs/assets/v1.1/live.png" alt="Live" width="340" />
+  <img src="docs/assets/v1.1/home.png" alt="Home — Start protection" width="720" />
 </p>
 
 ### Never-ban your own IP (important)
