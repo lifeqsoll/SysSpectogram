@@ -4,9 +4,17 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach assets to (e.g. v1.1.0). Empty = use ref name."
+        required: false
+        default: ""
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   musl-agent:
@@ -116,11 +124,7 @@ jobs:
         run: |
           npm ci
           npm run tauri build -- --bundles appimage,deb
-      - name: Collect and sign desktop bundles
-        env:
-          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
-          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+      - name: Collect desktop bundles
         run: |
           set -euo pipefail
           mkdir -p dist/desktop
@@ -128,21 +132,25 @@ jobs:
           for f in \
             control-center/src-tauri/target/release/bundle/appimage/*.AppImage \
             control-center/src-tauri/target/release/bundle/deb/*.deb; do
-            # Spaces in Tauri productName → sanitize for friend downloads
             base="$(basename "$f")"
             safe="${base// /_}"
             cp -v "$f" "dist/desktop/$safe"
           done
           test -n "$(ls -A dist/desktop)" || { echo "no AppImage/deb produced"; exit 1; }
-          (
-            cd dist/desktop
-            sha256sum * | sort -k2 > SHA256SUMS
-          )
+          (cd dist/desktop && sha256sum * | sort -k2 > SHA256SUMS)
+          ls -la dist/desktop
+      - name: Sign desktop bundles (best-effort)
+        continue-on-error: true
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
           if [[ -z "${MINISIGN_SECRET_KEY:-}" || -z "${MINISIGN_PUBLIC_KEY:-}" ]]; then
-            echo "minisign secrets missing — upload unsigned desktop bundles"
+            echo "minisign secrets missing — skip sign"
             exit 0
           fi
-          # ubuntu-22.04 often lacks apt minisign; fall back to upstream static binary.
           if ! command -v minisign >/dev/null 2>&1; then
             sudo apt-get update -qq || true
             if ! sudo apt-get install -y -qq minisign; then
@@ -172,8 +180,9 @@ jobs:
               -s "$RUNNER_TEMP/minisign.key" -m "$asset" -x "$asset.minisig"
           done
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           fail_on_unmatched_files: false
           files: |
             dist/desktop/*

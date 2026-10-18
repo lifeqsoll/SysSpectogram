@@ -1,5 +1,5 @@
 pkgname=sysspectogram
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 install=sysspectogram.install
 pkgdesc='Linux hybrid ML host IDS, perimeter guard, and Rust integrity agent'

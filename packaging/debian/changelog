@@ -1,3 +1,10 @@
+sysspectogram (1.1.0-1) unstable; urgency=medium
+
+  * Simple home UX, AppImage/deb Control Center, signed stack bootstrap,
+    never-ban multi-IP, Telegram RU unlock, agent_down backoff.
+
+ -- Salfetka <salfetka@users.noreply.github.com>  Mon, 19 Oct 2026 01:00:00 +0300
+
 sysspectogram (1.0.0-1) unstable; urgency=medium
 
   * Control Center (Tauri 2 + Svelte): dashboards 1h..30d, live values,
