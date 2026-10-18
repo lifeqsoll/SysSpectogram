@@ -48,6 +48,46 @@ fn resolve_model(root: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
+/// Alive PID from state/guard.pid when the process still looks like our guard.
+fn foreign_guard_pid(root: &std::path::Path) -> Option<u32> {
+    let raw = fs::read_to_string(root.join("state").join("guard.pid")).ok()?;
+    let pid: u32 = raw.trim().parse().ok()?;
+    if pid == 0 {
+        return None;
+    }
+    let status = Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .ok()?;
+    if !status.success() {
+        return None;
+    }
+    let cmdline = fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    let flat = cmdline.replace('\0', " ");
+    if flat.contains("sysspectogram") && flat.contains("guard") {
+        Some(pid)
+    } else {
+        None
+    }
+}
+
+fn kill_pid(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+    thread::sleep(Duration::from_millis(400));
+    let still = Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if still {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+}
+
 impl Stack {
     /// Returns the guard pid if our child is still alive. A dead child is forgotten.
     fn guard_pid(&self) -> Option<u32> {
@@ -70,29 +110,34 @@ impl Stack {
     }
 
     pub fn stop_guard(&self) {
-        let Ok(mut slot) = self.guard.lock() else {
-            return;
-        };
-        let Some(mut child) = slot.take() else {
-            return;
-        };
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg(child.id().to_string())
-            .status();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break;
+        let root = paths::root();
+        // Prefer our tracked child; also clear orphans left by previous app sessions.
+        if let Ok(mut slot) = self.guard.lock() {
+            if let Some(mut child) = slot.take() {
+                let _ = Command::new("kill")
+                    .arg("-TERM")
+                    .arg(child.id().to_string())
+                    .status();
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) if Instant::now() < deadline => {
+                            thread::sleep(Duration::from_millis(100))
+                        }
+                        _ => {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break;
+                        }
+                    }
                 }
             }
         }
-        let _ = fs::remove_file(paths::root().join("state").join("guard.pid"));
+        if let Some(pid) = foreign_guard_pid(&root) {
+            kill_pid(pid);
+        }
+        let _ = fs::remove_file(root.join("state").join("guard.pid"));
     }
 
     fn start_helper(&self) -> Value {
@@ -135,6 +180,10 @@ impl Stack {
             return step(true, format!("guard already running (pid {pid})"));
         }
         let root = paths::root();
+        // Another Control Center / terminal may already own the guard (pidfile + flock).
+        if let Some(pid) = foreign_guard_pid(&root) {
+            return step(true, format!("guard already running (pid {pid})"));
+        }
         let log_path = root.join("state").join("guard-app.log");
         let log_open = fs::create_dir_all(root.join("state")).and_then(|_| {
             OpenOptions::new().create(true).append(true).open(&log_path)

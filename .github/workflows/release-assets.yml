@@ -128,7 +128,10 @@ jobs:
           for f in \
             control-center/src-tauri/target/release/bundle/appimage/*.AppImage \
             control-center/src-tauri/target/release/bundle/deb/*.deb; do
-            cp -v "$f" dist/desktop/
+            # Spaces in Tauri productName → sanitize for friend downloads
+            base="$(basename "$f")"
+            safe="${base// /_}"
+            cp -v "$f" "dist/desktop/$safe"
           done
           test -n "$(ls -A dist/desktop)" || { echo "no AppImage/deb produced"; exit 1; }
           (
@@ -139,8 +142,17 @@ jobs:
             echo "minisign secrets missing — upload unsigned desktop bundles"
             exit 0
           fi
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq minisign
+          # ubuntu-22.04 often lacks apt minisign; fall back to upstream static binary.
+          if ! command -v minisign >/dev/null 2>&1; then
+            sudo apt-get update -qq || true
+            if ! sudo apt-get install -y -qq minisign; then
+              curl -fsSL -o /tmp/minisign.tgz \
+                "https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz"
+              tar -xzf /tmp/minisign.tgz -C /tmp
+              sudo install -m755 /tmp/minisign-linux/x86_64/minisign /usr/local/bin/minisign
+            fi
+          fi
+          command -v minisign
           python3 - <<'PY'
           import os
           from pathlib import Path

@@ -137,6 +137,8 @@ Every top-level subcommand of `python -m sysspectogram` has a row. `scripts/chec
 | `scenario` | Scenarios | `scenario list`, `scenario show ID --lang en` (or `ru`) |
 | `settings` | Settings | `settings export` (UI), `settings check` (CI) |
 | `timeseries` | Dashboards | `timeseries query METRIC --range 1h` for scripts |
+| `control` | Home / Alerts | Local SOAR over `state/control.sock` (`status`, ban/allow/mute/kill after unlock) |
+| `home` | Settings / Home | Onboarding, `.env`, model import, health/digest/checklist, user-settings overlay |
 
 ## Non-goals for v1.0
 

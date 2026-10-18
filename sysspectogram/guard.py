@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import atexit
+import fcntl
 import os
 import signal
 import socket
@@ -133,6 +135,70 @@ def _running_agent_pid(pidfile: Path) -> int | None:
     return pid if "sysspectogram-agent" in cmdline else None
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _running_guard_pid(pidfile: Path) -> int | None:
+    """PID from state/guard.pid if that process is still a live guard."""
+    try:
+        pid = int(pidfile.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    if pid <= 0 or pid == os.getpid() or not _pid_alive(pid):
+        return None
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return None
+    if "sysspectogram" in cmdline and "guard" in cmdline:
+        return pid
+    return None
+
+
+def _acquire_guard_lock() -> object | None:
+    """Exclusive flock so only one guard owns the agent socket / Telegram.
+
+    Returns an open file object that must stay alive for the process lifetime,
+    or None if another guard already holds the lock.
+    """
+    lock_path = _resolve("state/guard.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        other = _running_guard_pid(_resolve("state/guard.pid"))
+        fh.close()
+        console.print(
+            f"[red]guard[/] another instance is already running"
+            + (f" (pid {other})" if other else "")
+            + " — refuse to start a second one (would steal the agent socket and spam Telegram)"
+        )
+        return None
+    fh.seek(0)
+    fh.truncate()
+    fh.write(f"{os.getpid()}\n")
+    fh.flush()
+
+    def _release() -> None:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            fh.close()
+        except OSError:
+            pass
+
+    atexit.register(_release)
+    return fh
+
+
 def _heatmap_png_bytes(window: np.ndarray) -> bytes | None:
     """Legacy single-panel fallback (prefer render_alert_panel)."""
     try:
@@ -196,6 +262,10 @@ def run_guard(
 
     host_id = host_cfg.get("id") or socket.gethostname()
     state_path = _resolve(per_cfg.get("state_path", "state/perimeter.json"))
+    # One guard only: multiple instances steal the AF_UNIX agent socket and flood agent_down.
+    _guard_lock = _acquire_guard_lock()
+    if _guard_lock is None:
+        raise SystemExit(2)
     # Agent self-protect: publish guard pid for Rust twin watch
     try:
         gp = _resolve("state/guard.pid")
@@ -1589,7 +1659,13 @@ def run_guard(
             agent_listener = None
 
         def agent_heartbeat_loop():
-            last_alert_sent = 0.0
+            # Persist last TG alert across restarts so we do not re-flood every Start.
+            alert_marker = _resolve("state/agent_down_alert.ts")
+            try:
+                last_alert_sent = float(alert_marker.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                last_alert_sent = 0.0
+            agent_pidfile = _resolve(agent_cfg.get("pidfile", "state/agent.pid"))
             while not stop.is_set():
                 now = time.time()
                 if now < float(clean_shutdown_grace.get("until") or 0):
@@ -1598,14 +1674,26 @@ def run_guard(
                 if now < agent_down_grace_until:
                     stop.wait(5.0)
                     continue
+                # Process alive ⇒ not "down" even if metrics packets were missed
+                # (e.g. socket briefly rebound). Still want metrics eventually.
+                alive_pid = _running_agent_pid(agent_pidfile)
+                if alive_pid is not None:
+                    last_agent_seen["ts"] = now
+                    stop.wait(15.0)
+                    continue
                 silence = now - last_agent_seen["ts"]
-                # First alert after silence; then at most every backoff (default 30 min).
+                # First alert after silence threshold; then at most every backoff (30 min).
                 min_gap = agent_down_backoff_sec if last_alert_sent else agent_heartbeat_sec
                 if silence >= agent_heartbeat_sec and (now - last_alert_sent) >= min_gap:
                     last_alert_sent = now
+                    try:
+                        alert_marker.parent.mkdir(parents=True, exist_ok=True)
+                        alert_marker.write_text(f"{now:.3f}\n", encoding="utf-8")
+                    except OSError:
+                        pass
                     plain = describe(
                         "agent_kirk_agent_down",
-                        f"agent heartbeat missing ({silence:.0f}s)",
+                        f"silence={silence:.0f}s",
                         lang=notify_lang,  # type: ignore[arg-type]
                     )
                     console.print(f"[red]agent_kirk_agent_down[/] silence={silence:.0f}s")
