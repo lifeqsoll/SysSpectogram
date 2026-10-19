@@ -174,6 +174,30 @@ export const api = {
   bootstrapStatus: () => invoke<BootstrapStatus>('bootstrap_status'),
   bootstrapInstall: (tag?: string) =>
     invoke<Record<string, unknown>>('bootstrap_install', { tag: tag ?? null }),
+  bootstrapPreflight: () =>
+    invoke<{
+      ok: boolean;
+      ready: boolean;
+      checks: { id: string; ok: boolean; detail: string }[];
+      hints: Record<string, string>;
+    }>('bootstrap_preflight'),
+  protectStatus: () =>
+    invoke<{
+      ok: boolean;
+      installed?: boolean;
+      enabled?: boolean;
+      active?: boolean;
+      detail?: string;
+      home?: string;
+      hint?: string;
+      linger?: boolean;
+    }>('protect_status'),
+  protectEnable: () => invoke<Record<string, unknown>>('protect_enable'),
+  protectDisable: () => invoke<Record<string, unknown>>('protect_disable'),
+  homeUpdate: (tag?: string) =>
+    invoke<Record<string, unknown>>('home_update', { tag: tag ?? null }),
+  installHelperRelease: (tag?: string) =>
+    invoke<Record<string, unknown>>('install_helper_release', { tag: tag ?? null }),
   onLive: (cb: (e: LiveEvent) => void): Promise<UnlistenFn> =>
     listen<LiveEvent>('live', (e) => cb(e.payload)),
   onLabOutput: (cb: (e: LabLine) => void): Promise<UnlistenFn> =>

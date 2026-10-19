@@ -3,9 +3,9 @@
 //! - The privileged helper is a systemd unit (installed once by scripts/install-helper.sh).
 //!   It is started through `pkexec`, so polkit shows the password prompt. The app never
 //!   holds root.
-//! - The guard runs as a child of this app with `--dry-run`: it observes and never
-//!   blocks. It stops when the app exits. Model path: `state/model.path` or
-//!   `artifacts/live` when present; otherwise notorch (metrics + perimeter only).
+//! - Session "Start protection" runs the guard as a child with `--dry-run` (safe try).
+//!   Real auto-ban is via `sysspectogram-protect.service` (no dry-run). Child stops on
+//!   app exit unless that unit is active. Model: `state/model.path` or `artifacts/live`.
 
 use std::fs::{self, OpenOptions};
 use std::process::{Child, Command, Stdio};

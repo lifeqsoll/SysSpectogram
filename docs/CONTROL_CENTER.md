@@ -49,7 +49,7 @@ The helper writes `/etc/sysspectogram/settings.json` (a flat JSON object of dott
 
 ## First run and updates
 
-Version v1.0 installs a signed bundle from a local folder: open Install and Updates, enter the version and the folder, and press Install. Downloading the matching release from the network on first launch is not implemented yet. The bundle is the trust anchor, so a download step can be added later without changing the helper checks.
+From v1.1 the Control Center can install the stack from a signed GitHub release (Bootstrap / Update stack): wheel + musl agent with sha256 and optional minisign when the `minisign` binary is present. A local signed bundle folder install remains available for air-gapped use.
 
 ## Sidebar
 
@@ -138,8 +138,11 @@ Every top-level subcommand of `python -m sysspectogram` has a row. `scripts/chec
 | `settings` | Settings | `settings export` (UI), `settings check` (CI) |
 | `timeseries` | Dashboards | `timeseries query METRIC --range 1h` for scripts |
 | `control` | Home / Alerts | Local SOAR over `state/control.sock` (`status`, ban/allow/mute/kill after unlock) |
-| `home` | Settings / Home | Onboarding, `.env`, model import, health/digest/checklist, user-settings overlay |
+| `home` | Settings / Home | Onboarding, `.env`, model import, health/digest/checklist, user-settings overlay, `home update` |
+| `protect` | Home / Onboarding | User systemd unit (real mode); Start + finish enable it |
+| `menu` | cli-only | Friend interactive menu for VPS/SSH (zapret-like) |
+| helper release install | Settings | `install-helper-from-release.sh` / `install_helper_release` (no git) |
 
 ## Non-goals for v1.0
 
-Multi-host management, remote control over the internet, mobile UI, Windows and macOS builds, network download of releases on first launch.
+Multi-host management, remote control over the internet, mobile UI, Windows and macOS builds.

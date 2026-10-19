@@ -190,7 +190,42 @@
   </label>
   <div class="row">
     <button class="btn primary" disabled={busy} onclick={saveBasics}>{t('common.apply')}</button>
+    <button
+      class="btn"
+      disabled={busy}
+      onclick={async () => {
+        busy = true;
+        error = null;
+        notice = null;
+        try {
+          const res = await api.homeUpdate();
+          notice = res.ok === false ? String(res.error || 'update failed') : t('home.update');
+          if (res.ok !== false) needsRestart = true;
+        } catch (e) {
+          error = errorText(e);
+        } finally {
+          busy = false;
+        }
+      }}>{t('home.update')}</button>
   </div>
+  <p class="muted" style="margin: 8px 0 0; font-size: 12px">{t('home.installHelperHelp')}</p>
+  <button
+    class="btn"
+    disabled={busy}
+    onclick={async () => {
+      busy = true;
+      error = null;
+      notice = null;
+      try {
+        const res = await api.installHelperRelease();
+        notice = res.ok === false ? String(res.error || 'helper install failed') : t('home.installHelper');
+        if (typeof res.detail === 'string' && res.detail) notice = `${notice}: ${res.detail.slice(0, 200)}`;
+      } catch (e) {
+        error = errorText(e);
+      } finally {
+        busy = false;
+      }
+    }}>{t('home.installHelper')}</button>
 </div>
 
 <div class="panel stack" style="margin-bottom: 16px">

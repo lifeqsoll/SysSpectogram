@@ -1174,6 +1174,44 @@ def _cmd_home_checklist(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_home_update(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.friend_update import update_stack
+
+    res = update_stack(str(getattr(args, "tag", None) or "v1.1.0"))
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0 if res.get("ok") else 1
+
+
+def _cmd_protect(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram import protect_service as ps
+
+    action = str(getattr(args, "protect_action", "") or "")
+    fn = {
+        "status": ps.status,
+        "enable": ps.install_and_enable,
+        "disable": ps.disable_and_stop,
+        "start": ps.start,
+        "stop": ps.stop,
+        "restart": ps.restart,
+    }.get(action)
+    if not fn:
+        print(json.dumps({"ok": False, "error": f"unknown action {action}"}))
+        return 2
+    res = fn()
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0 if res.get("ok") else 1
+
+
+def _cmd_menu(args: argparse.Namespace) -> int:
+    from sysspectogram.friend_menu import run_menu
+
+    return int(run_menu())
+
+
 def _cmd_home_settings(args: argparse.Namespace) -> int:
     """Write allowlisted keys to state/user-settings.json (no root helper required)."""
     import json
@@ -1867,6 +1905,25 @@ def build_parser() -> argparse.ArgumentParser:
     hm_mute.set_defaults(func=_cmd_home_mute_rule)
     hm_check = hm_sub.add_parser("checklist", help="VPS readiness checklist")
     hm_check.set_defaults(func=_cmd_home_checklist)
+    hm_upd = hm_sub.add_parser("update", help="download signed wheel+agent from GitHub Releases")
+    hm_upd.add_argument("--tag", default="v1.1.0", help="release tag (e.g. v1.1.0)")
+    hm_upd.set_defaults(func=_cmd_home_update)
+
+    protect_p = sub.add_parser("protect", help="user systemd protect service (survives CC exit)")
+    protect_sub = protect_p.add_subparsers(dest="protect_action", required=True)
+    for name, help_ in (
+        ("status", "show unit status"),
+        ("enable", "install unit + enable --now"),
+        ("disable", "disable --now"),
+        ("start", "start unit"),
+        ("stop", "stop unit"),
+        ("restart", "restart unit"),
+    ):
+        protect_one = protect_sub.add_parser(name, help=help_)
+        protect_one.set_defaults(func=_cmd_protect)
+
+    menu_p = sub.add_parser("menu", help="friend interactive menu for VPS/SSH (zapret-like)")
+    menu_p.set_defaults(func=_cmd_menu)
 
     ln = sub.add_parser("lab-nmap", help="nmap allowlisted lab targets only")
     ln.add_argument("target")

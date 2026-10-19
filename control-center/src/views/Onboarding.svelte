@@ -7,17 +7,38 @@
   let step = $state(0);
   let role = $state<'ssh' | 'web' | 'other'>('ssh');
   let protect = $state<'observe' | 'shield' | 'aggressive' | 'isolate'>('observe');
+  let neverBan = $state('');
+  let skipNeverBan = $state(false);
   let botToken = $state('');
   let chatId = $state('');
   let skipTg = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
   let finished = $state(false);
+  let lingerHint = $state<string | null>(null);
 
-  const total = 7;
+  // lang, theme, role, mode, never-ban, telegram, ml, finish
+  const total = 8;
 
   function next(): void {
+    error = null;
+    if (step === 3 && protect !== 'observe') {
+      skipNeverBan = false;
+    }
+    if (step === 4 && protect !== 'observe' && !neverBan.trim()) {
+      error = t('ob.neverBanNeed');
+      return;
+    }
     if (step < total - 1) step += 1;
+  }
+
+  function trySkipNeverBan(): void {
+    if (protect !== 'observe') {
+      error = t('ob.neverBanSkipBlocked');
+      return;
+    }
+    const ok = window.confirm(t('ob.neverBanSkipWarn'));
+    if (ok) skipNeverBan = !skipNeverBan;
   }
   function back(): void {
     if (step > 0) step -= 1;
@@ -27,6 +48,11 @@
     busy = true;
     error = null;
     try {
+      if (protect !== 'observe' && !neverBan.trim()) {
+        error = t('ob.neverBanNeed');
+        busy = false;
+        return;
+      }
       const changes: Record<string, unknown> = {
         'ui.lang': ui.lang,
         'response.mode': protect,
@@ -34,18 +60,22 @@
         'web.enabled': false,
         'agent.enabled': true,
       };
-      if (role === 'ssh') {
-        /* soft defaults already fine */
+      if (neverBan.trim()) {
+        changes['response.never_ban_cidrs'] = neverBan.trim();
       }
       await api.settingsApply(changes);
       if (!skipTg && (botToken || chatId)) {
         await api.homeWriteEnv(botToken || undefined, chatId || undefined);
       }
       await api.onboardingDone();
-      const started = await api.startAll();
-      if (!started.helper.ok && !started.guard.ok) {
-        error = `${started.helper.message}\n${started.guard.message}`;
+      // Real background protect (systemd --user), not session dry-run Start.
+      const pe = await api.protectEnable();
+      if (pe.ok === false) {
+        error = String(pe.error || pe.detail || 'protect enable failed');
+      } else if (pe.hint) {
+        error = null;
       }
+      lingerHint = typeof pe.hint === 'string' ? pe.hint : null;
       finished = true;
       ui.onboardingDone = true;
     } catch (e) {
@@ -62,6 +92,8 @@
       <div class="wizard-step">
         <h1>{t('ob.doneTitle')}</h1>
         <p class="lead">{t('ob.doneLead')}</p>
+        <p class="muted">{t('home.keepAliveActive')}</p>
+        {#if lingerHint}<div class="notice warn">{lingerHint}</div>{/if}
         <div class="wizard-actions">
           <button class="btn primary" onclick={() => (ui.section = 'home')}>{t('nav.home')}</button>
         </div>
@@ -131,6 +163,25 @@
             </button>
           </div>
         {:else if step === 4}
+          <h1>{t('ob.neverBan')}</h1>
+          <p class="lead">{t('ob.neverBanLead')}</p>
+          <div class="field">
+            <textarea
+              rows="3"
+              bind:value={neverBan}
+              placeholder={"203.0.113.10\n198.51.100.20/32"}
+              disabled={skipNeverBan}
+            ></textarea>
+          </div>
+          <p class="muted" style="font-size: 12px">curl -4 ifconfig.me</p>
+          {#if protect === 'observe'}
+            <button class="btn" style="margin-top: 12px" onclick={trySkipNeverBan}>
+              {skipNeverBan ? t('ob.neverBanSkipOn') : t('ob.neverBanSkip')}
+            </button>
+          {:else}
+            <p class="notice warn" style="margin-top: 12px">{t('ob.neverBanSkipBlocked')}</p>
+          {/if}
+        {:else if step === 5}
           <h1>{t('ob.s5')}</h1>
           <p class="lead">{t('set.basicLead')}</p>
           {#if !skipTg}
@@ -148,7 +199,7 @@
           <button class="btn" style="margin-top: 12px" onclick={() => (skipTg = !skipTg)}>
             {t('ob.tgSkip')}
           </button>
-        {:else if step === 5}
+        {:else if step === 6}
           <h1>{t('ob.s6')}</h1>
           <div class="notice warn">{t('set.mlWarn')}</div>
           <p class="muted" style="margin-top: 12px">{t('set.mlHow')}</p>

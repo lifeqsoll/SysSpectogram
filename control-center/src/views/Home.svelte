@@ -30,6 +30,10 @@
   let digest = $state<HomeDigest | null>(null);
   let checklist = $state<HomeChecklist | null>(null);
   let healthBusy = $state(false);
+  let protectActive = $state(false);
+  let protectBusy = $state(false);
+  let protectHint = $state<string | null>(null);
+  let lingerOk = $state<boolean | null>(null);
 
   const UNLOCK_SHOW_SEC = 20;
   let unlockCode = $state<string | null>(null);
@@ -95,6 +99,33 @@
     } catch {
       health = null;
     }
+    try {
+      const ps = await api.protectStatus();
+      protectActive = Boolean(ps.active || ps.enabled);
+      protectHint = typeof ps.hint === 'string' ? ps.hint : null;
+      lingerOk = typeof ps.linger === 'boolean' ? ps.linger : null;
+    } catch {
+      protectActive = false;
+      protectHint = null;
+      lingerOk = null;
+    }
+  }
+
+  async function toggleProtect(): Promise<void> {
+    protectBusy = true;
+    error = null;
+    try {
+      if (protectActive) await api.protectDisable();
+      else {
+        const pe = await api.protectEnable();
+        if (typeof pe.hint === 'string') protectHint = pe.hint;
+      }
+    } catch (e) {
+      error = errorText(e);
+    } finally {
+      protectBusy = false;
+      await load();
+    }
   }
 
   async function runHealth(ping: boolean): Promise<void> {
@@ -109,10 +140,23 @@
   }
 
   async function startEverything(): Promise<void> {
+    // Hand off to real protect unit (not session dry-run).
     startBusy = true;
     startResult = null;
+    error = null;
     try {
-      startResult = await api.startAll();
+      const pe = await api.protectEnable();
+      if (pe.ok === false) {
+        error = String(pe.error || pe.detail || 'protect enable failed');
+      }
+      if (typeof pe.hint === 'string') protectHint = pe.hint;
+      startResult = {
+        helper: { ok: true, message: 'skipped (background protect)' },
+        guard: {
+          ok: pe.ok !== false,
+          message: pe.ok === false ? String(pe.error || 'failed') : 'systemd --user protect enabled',
+        },
+      };
     } catch (e) {
       error = errorText(e);
     } finally {
@@ -230,6 +274,23 @@
     <span class="pill" class:ok={unlocked} class:warn={!unlocked}>
       {unlocked ? 'unlocked' : 'LOCKED'}
     </span>
+  </div>
+  <div class="notice" class:ok={protectActive} style="margin-top: 8px">
+    <div>{protectActive ? t('home.keepAliveActive') : t('home.keepAliveInactive')}</div>
+    <p class="muted" style="margin: 6px 0; font-size: 12px">{t('home.keepAlive')}</p>
+    {#if lingerOk === false || protectHint}
+      <div class="notice warn" style="margin: 8px 0">
+        {protectHint || t('home.lingerNeed')}
+        <div class="row" style="margin-top: 8px">
+          <code class="mono" style="font-size: 12px">loginctl enable-linger $USER</code>
+        </div>
+      </div>
+    {:else if lingerOk === true}
+      <p class="muted" style="margin: 6px 0; font-size: 12px">{t('home.lingerOk')}</p>
+    {/if}
+    <button class="btn" disabled={protectBusy} onclick={toggleProtect}>
+      {protectActive ? t('home.keepAliveOff') : t('home.keepAliveOn')}
+    </button>
   </div>
   {#if startResult}
     <div class="notice" class:ok={startResult.helper.ok && startResult.guard.ok} class:error={!(startResult.helper.ok && startResult.guard.ok)}>

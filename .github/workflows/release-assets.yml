@@ -99,6 +99,83 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  helper:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: helper
+      - name: Build privileged helper
+        working-directory: helper
+        run: |
+          cargo build --release
+          cp target/release/sysspectogram-helper ../sysspectogram-helper-x86_64-linux
+          sha256sum ../sysspectogram-helper-x86_64-linux | tee ../sysspectogram-helper-x86_64-linux.sha256
+      - name: Sign helper
+        continue-on-error: true
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MINISIGN_SECRET_KEY:-}" || -z "${MINISIGN_PUBLIC_KEY:-}" ]]; then
+            echo "skip sign"
+            exit 0
+          fi
+          if ! command -v minisign >/dev/null 2>&1; then
+            sudo apt-get update -qq || true
+            if ! sudo apt-get install -y -qq minisign; then
+              curl -fsSL -o /tmp/minisign.tgz \
+                "https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz"
+              tar -xzf /tmp/minisign.tgz -C /tmp
+              sudo install -m755 /tmp/minisign-linux/x86_64/minisign /usr/local/bin/minisign
+            fi
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          raw = os.environ["MINISIGN_SECRET_KEY"].replace("\r\n", "\n").strip("\n") + "\n"
+          if "\\n" in raw and raw.count("\n") < 2:
+              raw = raw.replace("\\n", "\n")
+          path = Path(os.environ["RUNNER_TEMP"]) / "minisign.key"
+          path.write_text(raw)
+          path.chmod(0o600)
+          PY
+          for asset in sysspectogram-helper-x86_64-linux sysspectogram-helper-x86_64-linux.sha256; do
+            printf '%s\n' "${MINISIGN_PASSWORD-}" | minisign -S \
+              -s "$RUNNER_TEMP/minisign.key" -m "$asset" -x "$asset.minisig"
+          done
+      - name: Bundle friend helper install scripts
+        run: |
+          cp scripts/install-helper-from-release.sh .
+          cp scripts/friend-day0.sh .
+          tar -czf sysspectogram-helper-packaging.tgz \
+            packaging/helper/sysspectogram-helper.service \
+            packaging/helper/sysusers.conf \
+            packaging/polkit/org.sysspectogram.helper.policy \
+            scripts/install-helper-from-release.sh
+          sha256sum install-helper-from-release.sh friend-day0.sh sysspectogram-helper-packaging.tgz \
+            | tee friend-scripts.sha256
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          fail_on_unmatched_files: false
+          files: |
+            sysspectogram-helper-x86_64-linux
+            sysspectogram-helper-x86_64-linux.sha256
+            sysspectogram-helper-x86_64-linux.minisig
+            sysspectogram-helper-x86_64-linux.sha256.minisig
+            install-helper-from-release.sh
+            friend-day0.sh
+            sysspectogram-helper-packaging.tgz
+            friend-scripts.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   control-center:
     runs-on: ubuntu-22.04
     steps:

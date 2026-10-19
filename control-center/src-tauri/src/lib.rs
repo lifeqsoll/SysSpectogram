@@ -73,6 +73,135 @@ fn guard_service(action: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn protect_status() -> Result<Value, String> {
+    cli::run_json(&["protect", "status"])
+}
+
+#[tauri::command]
+async fn protect_enable(stack: tauri::State<'_, Stack>) -> Result<Value, String> {
+    // Hand off to systemd --user; stop the app-owned child to avoid dual guards.
+    let stack = stack.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        stack.stop_guard();
+        cli::run_json(&["protect", "enable"])
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn protect_disable() -> Result<Value, String> {
+    cli::run_json(&["protect", "disable"])
+}
+
+#[tauri::command]
+fn home_update(tag: Option<String>) -> Result<Value, String> {
+    let t = tag.unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
+    cli::run_json(&["home", "update", "--tag", &t])
+}
+
+/// Download + run `scripts/install-helper-from-release.sh` via pkexec (no git checkout).
+#[tauri::command]
+fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let t = tag.unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
+    let t = if t.starts_with('v') {
+        t
+    } else {
+        format!("v{t}")
+    };
+    let repo = std::env::var("SYSSPECTOGRAM_GITHUB_REPO")
+        .unwrap_or_else(|_| "lifeqsoll/SysSpectogram".into());
+    let url = format!(
+        "https://raw.githubusercontent.com/{repo}/{t}/scripts/install-helper-from-release.sh"
+    );
+    let cache = paths::user_data_root().join("state").join("bootstrap-cache");
+    fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let script = cache.join("install-helper-from-release.sh");
+    let body = ureq::get(&url)
+        .set("User-Agent", "SysSpectogram-CC/1.1")
+        .call()
+        .map_err(|e| format!("download helper install script: {e}"))?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    fs::write(&script, body).map_err(|e| e.to_string())?;
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).ok();
+
+    let runner = ["/usr/bin/pkexec", "/usr/bin/sudo"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .ok_or_else(|| "need pkexec or sudo to install helper".to_string())?;
+    let out = Command::new(runner)
+        .arg("bash")
+        .arg(&script)
+        .arg(&t)
+        .output()
+        .map_err(|e| format!("run helper install: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !out.status.success() {
+        return Err(format!(
+            "helper install failed: {}\n{}",
+            stderr,
+            stdout
+        ));
+    }
+    Ok(json!({
+        "ok": true,
+        "tag": t,
+        "detail": if stdout.is_empty() { stderr } else { stdout },
+    }))
+}
+
+#[tauri::command]
+fn bootstrap_preflight() -> Result<Value, String> {
+    // Lightweight checks the UI can show before Install stack.
+    use std::process::Command;
+    let mut checks = Vec::new();
+    let py3 = Command::new("python3")
+        .args(["-c", "import sys; print(sys.version.split()[0])"])
+        .output();
+    match py3 {
+        Ok(o) if o.status.success() => checks.push(json!({
+            "id": "python3", "ok": true,
+            "detail": String::from_utf8_lossy(&o.stdout).trim()
+        })),
+        _ => checks.push(json!({"id": "python3", "ok": false, "detail": "python3 missing"})),
+    }
+    let venv = Command::new("python3")
+        .args(["-c", "import venv"])
+        .status();
+    checks.push(json!({
+        "id": "venv",
+        "ok": matches!(venv, Ok(s) if s.success()),
+        "detail": "python3 -m venv"
+    }));
+    let minisign = Command::new("minisign").arg("-h").status();
+    checks.push(json!({
+        "id": "minisign",
+        "ok": matches!(minisign, Ok(s) if s.success()),
+        "detail": "optional for signature verify"
+    }));
+    let ready = checks.iter().all(|c| {
+        c.get("id").and_then(|v| v.as_str()) == Some("minisign")
+            || c.get("ok").and_then(|v| v.as_bool()) == Some(true)
+    });
+    Ok(json!({
+        "ok": true,
+        "ready": ready,
+        "checks": checks,
+        "hints": {
+            "debian": "sudo apt install python3 python3-venv minisign",
+            "arch": "sudo pacman -S python python-virtualenv minisign",
+            "fedora": "sudo dnf install python3 python3-virtualenv minisign"
+        }
+    }))
+}
+
+#[tauri::command]
 async fn start_all(stack: tauri::State<'_, Stack>) -> Result<Value, String> {
     let stack = stack.inner().clone();
     tauri::async_runtime::spawn_blocking(move || stack.start_all())
@@ -432,12 +561,25 @@ pub fn run() {
             home_mute_rule,
             bootstrap_status,
             bootstrap_install,
+            bootstrap_preflight,
+            protect_status,
+            protect_enable,
+            protect_disable,
+            home_update,
+            install_helper_release,
         ])
         .build(tauri::generate_context!())
         .expect("error while building SysSpectogram Control Center");
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
-            handle.state::<Stack>().stop_guard();
+            // If user systemd protect is active, leave it running (friend path).
+            let keep = cli::run_json(&["protect", "status"])
+                .ok()
+                .and_then(|v| v.get("active").and_then(|x| x.as_bool()))
+                .unwrap_or(false);
+            if !keep {
+                handle.state::<Stack>().stop_guard();
+            }
         }
     });
 }

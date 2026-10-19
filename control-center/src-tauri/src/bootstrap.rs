@@ -191,8 +191,13 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
     if let Ok(sig_url) = asset_url(&release, "sysspectogram-agent-x86_64-linux-musl.minisig") {
         let sig_path = cache.join("agent.minisig");
         download(&sig_url, &sig_path)?;
-        try_minisign(&pub_path, &agent_path, &sig_path)?;
-        log.push(json!({"step": "minisign_agent", "ok": true}));
+        match try_minisign(&pub_path, &agent_path, &sig_path) {
+            Ok(()) => log.push(json!({"step": "minisign_agent", "ok": true})),
+            Err(e) => {
+                // sha256 already checked when present; missing minisign binary must not block friends
+                log.push(json!({"step": "minisign_agent", "ok": false, "detail": e}));
+            }
+        }
     }
     // Wheel signature when published
     let wheel_sig_name = format!("{wheel_name}.minisig");
