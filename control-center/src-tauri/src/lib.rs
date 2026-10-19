@@ -100,6 +100,44 @@ fn home_update(tag: Option<String>) -> Result<Value, String> {
     cli::run_json(&["home", "update", "--tag", &t])
 }
 
+#[tauri::command]
+fn home_seed_role(role: String) -> Result<Value, String> {
+    cli::run_json(&["home", "seed-role", "--role", &role])
+}
+
+/// Fetch public IPv4 via ifconfig.me (fallbacks). For never-ban wizard.
+#[tauri::command]
+fn detect_public_ip() -> Result<Value, String> {
+    const URLS: &[&str] = &[
+        "https://ifconfig.me/ip",
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+    ];
+    let mut last = String::from("no response");
+    for url in URLS {
+        match ureq::get(url)
+            .set("User-Agent", "SysSpectogram-CC/1.1")
+            .timeout(std::time::Duration::from_secs(8))
+            .call()
+        {
+            Ok(resp) => match resp.into_string() {
+                Ok(body) => {
+                    let ip = body.trim().to_string();
+                    if ip.parse::<std::net::Ipv4Addr>().is_ok()
+                        || ip.parse::<std::net::Ipv6Addr>().is_ok()
+                    {
+                        return Ok(json!({ "ok": true, "ip": ip, "source": url }));
+                    }
+                    last = format!("bad body from {url}: {ip}");
+                }
+                Err(e) => last = format!("{url}: {e}"),
+            },
+            Err(e) => last = format!("{url}: {e}"),
+        }
+    }
+    Err(format!("detect public IP failed: {last}"))
+}
+
 /// Download + run `scripts/install-helper-from-release.sh` via pkexec (no git checkout).
 #[tauri::command]
 fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
@@ -566,6 +604,8 @@ pub fn run() {
             protect_enable,
             protect_disable,
             home_update,
+            home_seed_role,
+            detect_public_ip,
             install_helper_release,
         ])
         .build(tauri::generate_context!())

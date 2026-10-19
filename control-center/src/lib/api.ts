@@ -196,6 +196,13 @@ export const api = {
   protectDisable: () => invoke<Record<string, unknown>>('protect_disable'),
   homeUpdate: (tag?: string) =>
     invoke<Record<string, unknown>>('home_update', { tag: tag ?? null }),
+  homeSeedRole: (role: string) =>
+    invoke<{ ok: boolean; role?: string; rules_added?: number; error?: string }>(
+      'home_seed_role',
+      { role },
+    ),
+  detectPublicIp: () =>
+    invoke<{ ok: boolean; ip: string; source?: string }>('detect_public_ip'),
   installHelperRelease: (tag?: string) =>
     invoke<Record<string, unknown>>('install_helper_release', { tag: tag ?? null }),
   onLive: (cb: (e: LiveEvent) => void): Promise<UnlistenFn> =>

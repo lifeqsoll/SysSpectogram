@@ -17,6 +17,7 @@
   let botToken = $state('');
   let chatId = $state('');
   let modelPath = $state('');
+  let detectBusy = $state(false);
 
   const HOME_KEYS = [
     'ui.lang',
@@ -179,6 +180,30 @@
       autocomplete="off"
     ></textarea>
     <p class="muted" style="margin: 4px 0 0; font-size: 12px; white-space: pre-line">{t('set.neverBanHelp')}</p>
+    <button
+      class="btn"
+      style="margin-top: 8px"
+      disabled={busy || detectBusy}
+      onclick={async () => {
+        detectBusy = true;
+        error = null;
+        try {
+          const res = await api.detectPublicIp();
+          const ip = (res.ip || '').trim();
+          if (!ip) throw new Error('empty IP');
+          const line = ip.includes('/') ? ip : `${ip}/32`;
+          const cur = neverBan
+            .split(/[\n,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          if (!cur.includes(line) && !cur.includes(ip)) cur.push(line);
+          neverBan = cur.join('\n');
+        } catch (e) {
+          error = errorText(e);
+        } finally {
+          detectBusy = false;
+        }
+      }}>{detectBusy ? '…' : t('set.detectIp')}</button>
   </div>
   <label class="row">
     <input type="checkbox" bind:checked={telegramEnabled} />

@@ -265,7 +265,7 @@ def _cmd_checklist() -> None:
 
 def _cmd_update() -> None:
     _show_preflight()
-    tag = Prompt.ask(_t("Release tag", "Тег релиза"), default="v1.1.0")
+    tag = Prompt.ask(_t("Release tag", "Тег релиза"), default="v1.1.1")
     if Confirm.ask(_t("Download & install now?", "Скачать и установить сейчас?"), default=True):
         try:
             from sysspectogram.friend_update import update_stack

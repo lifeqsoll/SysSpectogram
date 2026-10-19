@@ -178,6 +178,14 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
     en: 'Add at least one IP, or switch mode to observe.',
     ru: 'Добавьте хотя бы один IP или выберите режим observe.',
   },
+  'ob.detectIp': {
+    en: 'Detect my public IP',
+    ru: 'Определить мой публичный IP',
+  },
+  'set.detectIp': {
+    en: 'Detect my IP',
+    ru: 'Определить мой IP',
+  },
   'ob.doneLead': {
     en: 'Background protect is on (systemd --user). Alerts appear here and in Telegram if set up.',
     ru: 'Фоновая защита включена (systemd --user). Алерты — здесь и в Telegram, если настроили.',
@@ -196,6 +204,10 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   'ob.roleSsh': { en: 'SSH / small VPS', ru: 'SSH / небольшой VPS' },
   'ob.roleWeb': { en: 'Web server', ru: 'Веб-сервер' },
   'ob.roleOther': { en: 'Other / mixed', ru: 'Другое / смешанное' },
+  'ob.rolePackHint': {
+    en: 'We seed process-label baselines for this role (ssh → ssh, web → nginx, other → python).',
+    ru: 'Посеем baseline process-labels для роли (ssh → ssh, web → nginx, other → python).',
+  },
   'ob.protObserve': { en: 'Only notify me', ru: 'Только уведомлять' },
   'ob.protShield': { en: 'Soft auto: ban SSH brute-force', ru: 'Мягкий авто: бан SSH-брутфорса' },
   'ob.protAggressive': { en: 'Full protection', ru: 'Полная защита' },

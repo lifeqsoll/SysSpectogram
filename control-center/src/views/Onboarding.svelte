@@ -16,9 +16,38 @@
   let error = $state<string | null>(null);
   let finished = $state(false);
   let lingerHint = $state<string | null>(null);
+  let detectBusy = $state(false);
 
   // lang, theme, role, mode, never-ban, telegram, ml, finish
   const total = 8;
+
+  function packRole(): 'ssh' | 'nginx' | 'python' {
+    if (role === 'web') return 'nginx';
+    if (role === 'other') return 'python';
+    return 'ssh';
+  }
+
+  async function detectIp(): Promise<void> {
+    detectBusy = true;
+    error = null;
+    try {
+      const res = await api.detectPublicIp();
+      const ip = (res.ip || '').trim();
+      if (!ip) throw new Error('empty IP');
+      const line = ip.includes('/') ? ip : `${ip}/32`;
+      const cur = neverBan
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!cur.includes(line) && !cur.includes(ip)) cur.push(line);
+      neverBan = cur.join('\n');
+      skipNeverBan = false;
+    } catch (e) {
+      error = errorText(e);
+    } finally {
+      detectBusy = false;
+    }
+  }
 
   function next(): void {
     error = null;
@@ -66,6 +95,12 @@
       await api.settingsApply(changes);
       if (!skipTg && (botToken || chatId)) {
         await api.homeWriteEnv(botToken || undefined, chatId || undefined);
+      }
+      try {
+        await api.homeSeedRole(packRole());
+      } catch (e) {
+        // Non-fatal: protect still useful without FP labels.
+        console.warn('seed-role', e);
       }
       await api.onboardingDone();
       // Real background protect (systemd --user), not session dry-run Start.
@@ -131,6 +166,7 @@
           </div>
         {:else if step === 2}
           <h1>{t('ob.s3')}</h1>
+          <p class="muted" style="margin-bottom: 12px">{t('ob.rolePackHint')}</p>
           <div class="choice-grid">
             <button class="choice" class:active={role === 'ssh'} onclick={() => (role = 'ssh')}>
               <div class="title">{t('ob.roleSsh')}</div>
@@ -173,7 +209,12 @@
               disabled={skipNeverBan}
             ></textarea>
           </div>
-          <p class="muted" style="font-size: 12px">curl -4 ifconfig.me</p>
+          <div class="row" style="margin-top: 12px; gap: 8px; flex-wrap: wrap">
+            <button class="btn" disabled={detectBusy || skipNeverBan} onclick={detectIp}>
+              {detectBusy ? '…' : t('ob.detectIp')}
+            </button>
+            <span class="muted" style="font-size: 12px">curl -4 ifconfig.me</span>
+          </div>
           {#if protect === 'observe'}
             <button class="btn" style="margin-top: 12px" onclick={trySkipNeverBan}>
               {skipNeverBan ? t('ob.neverBanSkipOn') : t('ob.neverBanSkip')}

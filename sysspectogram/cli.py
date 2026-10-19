@@ -1174,12 +1174,31 @@ def _cmd_home_checklist(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_home_seed_role(args: argparse.Namespace) -> int:
+    """Seed role FP process labels (JSON for Control Center onboarding)."""
+    import json
+
+    from sysspectogram.config import state_root
+    from sysspectogram.process_labels import ProcessLabelStore
+    from sysspectogram.role_fp import list_seed_roles, seed_role_labels
+
+    role = str(getattr(args, "role", "") or "").strip().lower()
+    known = list_seed_roles()
+    if role not in known:
+        print(json.dumps({"ok": False, "error": f"unknown role {role!r}", "roles": known}))
+        return 2
+    store = ProcessLabelStore(state_root() / "state" / "process_labels.json")
+    n = seed_role_labels(store, role, source="onboarding")
+    print(json.dumps({"ok": True, "role": role, "rules_added": n, "roles": known}))
+    return 0
+
+
 def _cmd_home_update(args: argparse.Namespace) -> int:
     import json
 
     from sysspectogram.friend_update import update_stack
 
-    res = update_stack(str(getattr(args, "tag", None) or "v1.1.0"))
+    res = update_stack(str(getattr(args, "tag", None) or "v1.1.1"))
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0 if res.get("ok") else 1
 
@@ -1906,8 +1925,11 @@ def build_parser() -> argparse.ArgumentParser:
     hm_check = hm_sub.add_parser("checklist", help="VPS readiness checklist")
     hm_check.set_defaults(func=_cmd_home_checklist)
     hm_upd = hm_sub.add_parser("update", help="download signed wheel+agent from GitHub Releases")
-    hm_upd.add_argument("--tag", default="v1.1.0", help="release tag (e.g. v1.1.0)")
+    hm_upd.add_argument("--tag", default="v1.1.1", help="release tag (e.g. v1.1.1)")
     hm_upd.set_defaults(func=_cmd_home_update)
+    hm_role = hm_sub.add_parser("seed-role", help="seed process-label FP pack for a host role")
+    hm_role.add_argument("--role", required=True, help="ssh|nginx|docker|panel|python|wireguard")
+    hm_role.set_defaults(func=_cmd_home_seed_role)
 
     protect_p = sub.add_parser("protect", help="user systemd protect service (survives CC exit)")
     protect_sub = protect_p.add_subparsers(dest="protect_action", required=True)

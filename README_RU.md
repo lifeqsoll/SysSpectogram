@@ -4,7 +4,7 @@
 
 Self-hosted **защита Linux VPS / хоста**: понятные алерты, Telegram, графики в десктоп-приложении, опциональный web, Rust-агент целостности и опциональный host ML (обучение — на другой машине, на VPS — ONNX).
 
-**Для большинства:** скачать Linux **AppImage** или **`.deb`** с [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → при необходимости **Установить стек** → короткий онбординг → защита. Гик-инструменты — за **Advanced**. Старт: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**. Релиз: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (скрины + bootstrap).
+**Для большинства:** скачать Linux **AppImage** или **`.deb`** с [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → при необходимости **Установить стек** → короткий онбординг → защита. Гик-инструменты — за **Advanced**. Старт: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**. Релиз: **[v1.1.1](docs/RELEASE_v1.1.1.md)** · [v1.1.0](docs/RELEASE_v1.1.0.md).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
@@ -41,7 +41,7 @@ curl -4 ifconfig.me   # например 203.0.113.10
 
 ### Документы (по темам)
 
-**Старт:** [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.1.0](docs/RELEASE_v1.1.0.md) · [Day-0 CLI](docs/DAY0_VPS.md) · [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md)
+**Старт:** [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.1.1](docs/RELEASE_v1.1.1.md) · [Day-0 CLI](docs/DAY0_VPS.md) · [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md)
 
 **Защита:** [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md)
 

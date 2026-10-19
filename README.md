@@ -4,7 +4,7 @@
 
 Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS).
 
-**For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect. Geek tools stay behind **Advanced**. Start here: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**. Release notes: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (screenshots + bootstrap).
+**For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect. Geek tools stay behind **Advanced**. Start here: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**. Release notes: **[v1.1.1](docs/RELEASE_v1.1.1.md)** · [v1.1.0](docs/RELEASE_v1.1.0.md).
 
 <p align="center">
   <img src="docs/assets/v1.1/home.png" alt="Home — Start protection" width="720" />
@@ -39,7 +39,7 @@ Same key: `response.never_ban_cidrs`. Details: [RELEASE_v1.1.0](docs/RELEASE_v1.
 
 ### Docs (by topic)
 
-**Start here:** [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.1.0](docs/RELEASE_v1.1.0.md) · [Day-0 CLI](docs/DAY0_VPS.md) · [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md)
+**Start here:** [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.1.1](docs/RELEASE_v1.1.1.md) · [Day-0 CLI](docs/DAY0_VPS.md) · [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md)
 
 **Defense:** [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md)
 

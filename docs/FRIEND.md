@@ -18,7 +18,7 @@ Update later: Settings → **Update stack from GitHub**, or re-run Install stack
 
 ```bash
 # python3 + python3-venv + curl
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/friend-day0.sh | bash -s -- v1.1.0
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/friend-day0.sh | bash -s -- v1.1.1
 
 # once per user (otherwise user systemd dies on logout):
 loginctl enable-linger $USER
@@ -41,13 +41,13 @@ export SYSSPECTOGRAM_HOME=~/.local/share/sysspectogram
 source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
 python -m sysspectogram protect enable
 python -m sysspectogram home settings --changes '{"response.never_ban_cidrs":"x.x.x.x/32"}'
-python -m sysspectogram home update --tag v1.1.0
+python -m sysspectogram home update --tag v1.1.1
 ```
 
 ## Privileged helper (optional, no git)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.0
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
 ```
 
 Or from Control Center Settings (pkexec). Downloads `sysspectogram-helper-x86_64-linux` + unit/polkit from the tag.
