@@ -4,11 +4,27 @@
 
 Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS).
 
-**For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect. Geek tools stay behind **Advanced**. Start here: **[Simple home](docs/HOME.md)**. Release notes: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (screenshots + bootstrap).
+**For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect. Geek tools stay behind **Advanced**. Start here: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**. Release notes: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (screenshots + bootstrap).
 
 <p align="center">
   <img src="docs/assets/v1.1/home.png" alt="Home — Start protection" width="720" />
 </p>
+
+### Headless VPS (SSH, no git)
+
+```bash
+# python3 + python3-venv + curl; replace tag if needed
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/friend-day0.sh | bash -s -- v1.1.1
+loginctl enable-linger $USER   # else protect stops on logout
+```
+
+Optional privileged helper (polkit; no local checkout):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
+```
+
+Full friend story: [docs/FRIEND.md](docs/FRIEND.md).
 
 ### Never-ban your own IP (important)
 

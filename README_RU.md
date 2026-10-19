@@ -4,13 +4,29 @@
 
 Self-hosted **защита Linux VPS / хоста**: понятные алерты, Telegram, графики в десктоп-приложении, опциональный web, Rust-агент целостности и опциональный host ML (обучение — на другой машине, на VPS — ONNX).
 
-**Для большинства:** скачать Linux **AppImage** или **`.deb`** с [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → при необходимости **Установить стек** → короткий онбординг → защита. Гик-инструменты — за **Advanced**. Старт: **[Simple home](docs/HOME.md)**. Релиз: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (скрины + bootstrap).
+**Для большинства:** скачать Linux **AppImage** или **`.deb`** с [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → при необходимости **Установить стек** → короткий онбординг → защита. Гик-инструменты — за **Advanced**. Старт: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**. Релиз: **[v1.1.0](docs/RELEASE_v1.1.0.md)** (скрины + bootstrap).
 
 **Live demo:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
 <p align="center">
   <img src="docs/assets/v1.1/home.png" alt="Главная" width="720" />
 </p>
+
+### Headless VPS (SSH, без git)
+
+```bash
+# python3 + python3-venv + curl; тег при необходимости замените
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/friend-day0.sh | bash -s -- v1.1.1
+loginctl enable-linger $USER   # иначе protect умрёт после logout
+```
+
+Опциональный privileged helper (polkit; без локального checkout):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
+```
+
+Подробнее: [docs/FRIEND.md](docs/FRIEND.md).
 
 ### Never-ban своего IP (важно)
 
