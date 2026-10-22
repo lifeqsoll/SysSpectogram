@@ -87,6 +87,8 @@ class FlowWatcher:
     window_sec: float = 30.0
     syn_threshold: int = 80
     unique_port_threshold: int = 40
+    # Per-source SYN-ish count for host soft-mitigation (ban-capable alerts).
+    per_ip_syn_threshold: int = 40
     backend: str = "proc"
     _events: list[tuple[float, str, int, str]] = field(default_factory=list)
 
@@ -123,17 +125,48 @@ class FlowWatcher:
             for e in self._events
             if e[3] in {"02", "03"} or str(e[3]).upper() in _SS_SYNISH
         ]
+        # Per-IP SYN-ish (ban-capable). Host soft-mitigation — not volumetric anti-DDoS.
+        syn_by_ip: dict[str, int] = {}
+        for _ts, ip, _port, _st in synish:
+            syn_by_ip[ip] = syn_by_ip.get(ip, 0) + 1
+        per_ip_thr = max(1, int(self.per_ip_syn_threshold))
+        for ip, n in syn_by_ip.items():
+            if n >= per_ip_thr:
+                alerts.append(
+                    {
+                        "rule_id": "flow_syn_burst",
+                        "severity": "high",
+                        "message": (
+                            f"SYN-ish from {ip}: {n} in {self.window_sec:.0f}s "
+                            f"(backend={self.backend}; host mitigation, not anti-DDoS)"
+                        ),
+                        "ip": ip,
+                        "count": n,
+                        "extras": {"backend": self.backend, "scope": "per_ip"},
+                    }
+                )
         if len(synish) >= self.syn_threshold:
+            top_ip = ""
+            top_n = 0
+            if syn_by_ip:
+                top_ip, top_n = max(syn_by_ip.items(), key=lambda kv: kv[1])
             alerts.append(
                 {
                     "rule_id": "flow_syn_burst",
                     "severity": "high",
                     "message": (
                         f"SYN-ish TCP states={len(synish)} in {self.window_sec:.0f}s "
-                        f"(backend={self.backend})"
+                        f"(backend={self.backend}; top={top_ip or '-'} n={top_n})"
                     ),
+                    # Prefer top offender so soft/aggressive auto_ban can act.
+                    "ip": top_ip or None,
                     "count": len(synish),
-                    "extras": {"backend": self.backend},
+                    "extras": {
+                        "backend": self.backend,
+                        "scope": "window",
+                        "top_ip": top_ip or None,
+                        "top_n": top_n,
+                    },
                 }
             )
         by_ip: dict[str, set[int]] = {}

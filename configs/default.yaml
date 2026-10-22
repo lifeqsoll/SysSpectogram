@@ -43,6 +43,8 @@ perimeter:
     - egress_denylist_hit
     - honeypot_hit
     - lockdown_inbound
+    - flow_syn_burst
+    - flow_port_scan
     ttl_sec: 3600
 response:
   mode: observe
@@ -105,6 +107,8 @@ flow:
   window_sec: 30
   syn_threshold: 120
   unique_port_threshold: 60
+  # Per-source SYN-ish count → flow_syn_burst with IP (host soft-mitigation; not anti-DDoS)
+  per_ip_syn_threshold: 40
 agent:
   enabled: true
   auto_start: true
@@ -127,6 +131,8 @@ agent:
     enabled: true
     interval_sec: 300
     baseline_path: state/fim-baseline.json
+    confirm_streak: 2
+    confirm_ttl_sec: 300
 feedback:
   if_refit: false
   widen_rules: comm_prefix
@@ -140,6 +146,9 @@ kirk:
   host_risk_threshold: 0.99
   isolate_ttl_sec: 3600
   allow_ssh_cidrs: []
+  # Hide/drift/IMA: require N hits before TG / auto_isolate (noise control)
+  confirm_streak: 2
+  confirm_ttl_sec: 180
   ima_watch: true
   ima_state_path: state/ima_offset.txt
   baseline_path: state/kirk-baseline.json

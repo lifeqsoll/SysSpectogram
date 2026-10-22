@@ -31,8 +31,11 @@ Zapret-like numbered menu:
 - Status / health  
 - Protect service (`systemd --user`)  
 - Mode / never-ban / Telegram  
-- Unlock code / checklist  
+- Unlock code / checklist (includes Kirk / baseline hints)  
+- **Under-scan** — host soft-mitigation (lockdown + optional SYN rate-limit; **not** anti-DDoS)  
 - Update stack from GitHub tag  
+
+More: [HOST_MITIGATION.md](HOST_MITIGATION.md) · [KIRK.md](KIRK.md). Set never-ban before soft/full or Under-scan.
 
 Non-interactive:
 

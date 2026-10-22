@@ -150,8 +150,14 @@ def test_webhook_hmac_header(monkeypatch):
     monkeypatch.setattr(
         "sysspectogram.integrations.webhook.urllib.request.urlopen", fake_urlopen
     )
-    ok, _ = post_webhook("http://example.test/hook", {"a": 1}, secret="sekrit")
-    assert ok
+    # allow_private: skip DNS/SSRF host check — this test only asserts HMAC header shape.
+    ok, err = post_webhook(
+        "http://example.test/hook",
+        {"a": 1},
+        secret="sekrit",
+        allow_private=True,
+    )
+    assert ok, err
     headers_l = {k.lower(): v for k, v in captured["headers"].items()}
     assert "x-sysspectogram-signature" in headers_l
     body = captured["data"]

@@ -295,6 +295,12 @@ def run_guard(
     kirk_enabled = bool(kirk_cfg.get("enabled", False))
     kirk_auto_isolate = bool(kirk_cfg.get("auto_isolate", False))
     kirk_auto_isolate_host_risk = bool(kirk_cfg.get("auto_isolate_host_risk", False))
+    from sysspectogram.confirm_streak import ConfirmStreak
+
+    kirk_confirm = ConfirmStreak(
+        need=int(kirk_cfg.get("confirm_streak", 2)),
+        ttl_sec=float(kirk_cfg.get("confirm_ttl_sec", 180)),
+    )
     kirk_host_risk_threshold = float(kirk_cfg.get("host_risk_threshold", 0.99))
     kirk_allow_cidrs = list(kirk_cfg.get("allow_ssh_cidrs") or [])
     kirk_isolate_ttl = float(kirk_cfg.get("isolate_ttl_sec", 3600))
@@ -380,21 +386,31 @@ def run_guard(
     resp_mode = str(resp_cfg.get("mode") or "observe").strip().lower()
     never_ban = set(str(x) for x in (resp_cfg.get("never_ban_cidrs") or []))
     auto_ban_cfg = dict(per_cfg.get("auto_ban") or {})
+    _host_flood_rules = {
+        "flow_syn_burst",
+        "flow_port_scan",
+    }
     _aggressive_rules = {
         "bruteforce_ssh",
         "honeypot_hit",
         "canary_hit",
         "egress_denylist_hit",
         "port_scan_suspected",
+        *_host_flood_rules,
     }
     # Derive auto_ban (+ kirk isolate) from response.mode
     if resp_mode == "observe":
         auto_ban_cfg["enabled"] = False
         auto_ban_rules: set[str] = set()
-    elif resp_mode in ("shield", "enforce"):
-        # enforce = legacy alias for shield (older helper overlays)
+    elif resp_mode in ("shield", "enforce", "soft"):
+        # soft/shield: SSH abuse + host flood soft-mitigation (needs never_ban)
         auto_ban_cfg["enabled"] = True
-        auto_ban_rules = {"bruteforce_ssh", "honeypot_hit", "canary_hit"}
+        auto_ban_rules = {
+            "bruteforce_ssh",
+            "honeypot_hit",
+            "canary_hit",
+            *_host_flood_rules,
+        }
     elif resp_mode == "aggressive":
         auto_ban_cfg["enabled"] = True
         auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or set(_aggressive_rules)
@@ -1225,6 +1241,7 @@ def run_guard(
             window_sec=float(flow_cfg.get("window_sec", 30)),
             syn_threshold=int(flow_cfg.get("syn_threshold", 80)),
             unique_port_threshold=int(flow_cfg.get("unique_port_threshold", 40)),
+            per_ip_syn_threshold=int(flow_cfg.get("per_ip_syn_threshold", 40)),
             backend=str(flow_cfg.get("backend") or ("netview" if load_name == "full" else "proc")),
         )
         console.print(
@@ -1262,6 +1279,11 @@ def run_guard(
     agent_listener = None
     agent_proc = None
     agent_cfg = config.get("agent") or {}
+    fim_cfg_early = dict(agent_cfg.get("fim") or {})
+    fim_confirm = ConfirmStreak(
+        need=int(fim_cfg_early.get("confirm_streak", 2)),
+        ttl_sec=float(fim_cfg_early.get("confirm_ttl_sec", 300)),
+    )
     if agent_cfg.get("enabled"):
         from sysspectogram.agent_score import (
             AgentEventMatrix,
@@ -1385,9 +1407,32 @@ def run_guard(
                     "agent_kirk_ima_mismatch",
                 }
             )
+            _KIRK_CONFIRM_RULES = frozenset(
+                {
+                    "agent_kirk_module_hide",
+                    "agent_kirk_symbol_drift",
+                    "agent_kirk_ima_mismatch",
+                    "agent_kirk_pid_hide",
+                }
+            )
+            kirk_confirmed = True
+            if str(alert.rule_id) in _KIRK_CONFIRM_RULES:
+                kkey = (
+                    f"{alert.rule_id}:"
+                    f"{getattr(alert, 'path', '') or getattr(alert, 'comm', '') or ''}"
+                )
+                kirk_confirmed = kirk_confirm.hit(kkey)
+                extras["kirk_confirmed"] = bool(kirk_confirmed)
+                alert.extras = extras
+                if not kirk_confirmed:
+                    console.print(
+                        f"[dim]kirk confirm pending[/] {alert.rule_id} "
+                        f"(need {kirk_confirm.need} in {kirk_confirm.ttl_sec:.0f}s)"
+                    )
             if (
                 kirk_enabled
                 and kirk_auto_isolate
+                and kirk_confirmed
                 and not kirk_status.get("isolated")
                 and str(alert.rule_id) in _AUTO_ISOLATE_RULES
                 and str(alert.severity).lower() == "critical"
@@ -1440,9 +1485,17 @@ def run_guard(
             notify_tg = True
             if alert.rule_id in quiet_unless_hot and ascore < agent_score_threshold:
                 notify_tg = False
-            # kirk: always notify hide/drift/ima/down; module_load has cooldown
+            # FIM: require confirm streak before TG (noise control)
+            if str(alert.rule_id).startswith("agent_fim_"):
+                fkey = f"{alert.rule_id}:{getattr(alert, 'path', '') or ''}"
+                if not fim_confirm.hit(fkey):
+                    notify_tg = False
+                    console.print(f"[dim]fim confirm pending[/] {alert.rule_id}")
+            # kirk: notify hide/drift/ima/down after confirm; module_load has cooldown
             if alert.rule_id.startswith("agent_kirk_"):
                 notify_tg = True
+                if str(alert.rule_id) in _KIRK_CONFIRM_RULES and not kirk_confirmed:
+                    notify_tg = False
                 if alert.rule_id in (
                     "agent_kirk_module_load",
                     "agent_kirk_module_delete",

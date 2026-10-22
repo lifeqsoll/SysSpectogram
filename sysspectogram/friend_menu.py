@@ -240,6 +240,7 @@ def _cmd_checklist() -> None:
     never = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
     tg = bool((cfg.get("telegram") or {}).get("enabled"))
     mode = str((cfg.get("response") or {}).get("mode") or "observe")
+    kirk = dict(cfg.get("kirk") or {})
     st = protect_status()
     import_ok = False
     try:
@@ -248,12 +249,22 @@ def _cmd_checklist() -> None:
         import_ok = True
     except Exception:
         import_ok = False
+    baseline = state_root() / str(kirk.get("baseline_path") or "state/kirk-baseline.json")
     rows = [
         (_t("never-ban set", "never-ban задан"), bool(never)),
         (_t("telegram enabled", "telegram включён"), tg),
         (_t("mode not observe (if you wanted auto-ban)", "режим не observe"), mode != "observe"),
         (_t("protect service active", "служба protect active"), bool(st.get("active"))),
         (_t("stack importable", "стек импортируется"), import_ok),
+        (_t("kirk enabled", "kirk включён"), bool(kirk.get("enabled", True))),
+        (
+            _t("kirk allow_ssh_cidrs (for isolate)", "kirk.allow_ssh_cidrs (для isolate)"),
+            bool(kirk.get("allow_ssh_cidrs")),
+        ),
+        (
+            _t("kirk baseline file present", "есть kirk baseline"),
+            baseline.is_file(),
+        ),
     ]
     table = Table(title=_t("Checklist", "Чеклист"))
     table.add_column("ok")
@@ -261,6 +272,51 @@ def _cmd_checklist() -> None:
     for label, ok in rows:
         table.add_row("✓" if ok else "…", label)
     console.print(table)
+    console.print(
+        _t(
+            "Integrity tip: after protect is up, TG /rootkit is a heuristic audit — not a rootkit verdict. Trust stays best-effort without IMA+SB/TPM.",
+            "Целостность: после protect команда TG /rootkit — эвристика, не вердикт. Trust = best-effort без IMA+SB/TPM.",
+        )
+    )
+
+
+def _cmd_under_scan() -> None:
+    """Host soft-mitigation under scan/flood noise — not anti-DDoS."""
+    cfg = load_config()
+    never = [str(x) for x in ((cfg.get("response") or {}).get("never_ban_cidrs") or [])]
+    if not never:
+        console.print(
+            _t(
+                "[red]Set never-ban IPs first[/] (menu 4) — lockdown must allow your SSH.",
+                "[red]Сначала never-ban[/] (пункт 4) — lockdown должен пропускать ваш SSH.",
+            )
+        )
+        return
+    console.print(
+        _t(
+            "Under-scan preset: nft lockdown (SYN drop, never-ban allowed) + optional SYN rate-limit. "
+            "This is host soft-mitigation, not Cloudflare/anti-DDoS.",
+            "Пресет under-scan: nft lockdown (drop SYN, never-ban разрешён) + опциональный SYN rate-limit. "
+            "Это смягчение на хосте, не Cloudflare/anti-DDoS.",
+        )
+    )
+    dry = Confirm.ask(_t("Dry-run only?", "Только dry-run?"), default=True)
+    from sysspectogram.response.actions import NftBackend
+
+    nft = NftBackend(never_ban_cidrs=never)
+    msg = nft.apply_lockdown(dry_run=dry, allow_cidrs=never)
+    console.print(msg)
+    if Confirm.ask(
+        _t("Also apply SYN rate-limit (25/s)?", "Ещё SYN rate-limit (25/s)?"),
+        default=False,
+    ):
+        console.print(nft.apply_syn_rate_limit(dry_run=dry, allow_cidrs=never))
+    if not dry and Confirm.ask(
+        _t("Switch mode to shield (soft auto-ban)?", "Переключить режим на shield?"),
+        default=False,
+    ):
+        _write_overlay({"response.mode": "shield"})
+        console.print("[green]response.mode=shield[/] — restart protect to apply")
 
 
 def _cmd_update() -> None:
@@ -310,8 +366,9 @@ def run_menu() -> int:
             ("5", _t("Telegram .env", "Telegram .env")),
             ("6", _t("Show unlock code", "Показать unlock-код")),
             ("7", _t("Checklist", "Чеклист")),
-            ("8", _t("Update stack", "Обновить стек")),
-            ("9", _t("Advanced configure", "Расширенный configure")),
+            ("8", _t("Under-scan (host mitigation)", "Under-scan (защита хоста)")),
+            ("9", _t("Update stack", "Обновить стек")),
+            ("a", _t("Advanced configure", "Расширенный configure")),
             ("0", _t("Quit", "Выход")),
         ]
         for k, label in items:
@@ -327,6 +384,7 @@ def run_menu() -> int:
             "5": _cmd_telegram,
             "6": _cmd_unlock,
             "7": _cmd_checklist,
-            "8": _cmd_update,
-            "9": _cmd_configure,
+            "8": _cmd_under_scan,
+            "9": _cmd_update,
+            "a": _cmd_configure,
         }[choice]()

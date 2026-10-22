@@ -249,13 +249,20 @@ class PerimeterWatcher:
                 console.print(f"[yellow]auto_ban failed[/] {exc}")
         self.persist()
 
-    def apply_lockdown(self, dry_run: bool = False) -> str:
+    def apply_lockdown(
+        self,
+        dry_run: bool = False,
+        *,
+        allow_cidrs: list[str] | None = None,
+    ) -> str:
         self.state.lockdown = True
         self.state.quiet = False
         self.persist()
         if self.nft is not None:
             try:
-                return str(self.nft.apply_lockdown(dry_run=dry_run))
+                return str(
+                    self.nft.apply_lockdown(dry_run=dry_run, allow_cidrs=allow_cidrs)
+                )
             except Exception as exc:
                 return f"lockdown flag set; nft failed: {exc}"
         return "lockdown flag set (no nft backend)"

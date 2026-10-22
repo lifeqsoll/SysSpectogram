@@ -180,14 +180,31 @@ class NftBackend:
         self.expire_kirk_isolate()
         return list(self.bans.values())
 
-    def apply_lockdown(self, dry_run: bool = False) -> str:
-        """Drop new inbound TCP except established/related and allowlisted later via unban/allow."""
+    def apply_lockdown(
+        self,
+        dry_run: bool = False,
+        *,
+        allow_cidrs: list[str] | None = None,
+    ) -> str:
+        """Drop new inbound SYN; keep established + explicit allow_cidrs (never-ban / SSH).
+
+        This is a **host soft-mitigation** under scan/flood noise — not anti-DDoS / CDN.
+        Always pass admin SSH CIDRs or you can lock yourself out of new sessions.
+        """
+        allows = [str(c).strip() for c in (allow_cidrs or self.never_ban_cidrs or []) if str(c).strip()]
         if dry_run:
-            return "dry-run lockdown: would drop new inbound tcp on inet sysspectogram input"
+            return (
+                "dry-run lockdown: established+allow_cidrs accept, then SYN drop "
+                f"allow={allows or '-'}"
+            )
         if not shutil.which("nft"):
             return "nft required for lockdown"
+        if not allows:
+            return (
+                "lockdown refused: allow_cidrs/never_ban empty "
+                "(would drop new SSH SYN from your admin IP)"
+            )
         self._ensure_chain()
-        # ct state established,related accept; then drop new tcp (except we keep allow via not adding yet)
         self._run(
             [
                 "nft",
@@ -204,6 +221,29 @@ class NftBackend:
                 "sysspectogram:lockdown:est",
             ]
         )
+        for cidr in allows:
+            try:
+                ip_network(cidr, strict=False)
+            except ValueError:
+                return f"lockdown refused: invalid cidr {cidr!r}"
+            code, out = self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "ip",
+                    "saddr",
+                    cidr,
+                    "accept",
+                    "comment",
+                    f"sysspectogram:lockdown:allow:{cidr}",
+                ]
+            )
+            if code != 0:
+                return f"lockdown allow failed for {cidr}: {out.strip()}"
         code, out = self._run(
             [
                 "nft",
@@ -224,7 +264,72 @@ class NftBackend:
         )
         if code != 0:
             return f"lockdown failed: {out.strip()}"
-        return "lockdown nft rules applied (SYN drop; established allowed)"
+        return f"lockdown nft rules applied (SYN drop; allow={allows}; established kept)"
+
+    def apply_syn_rate_limit(
+        self,
+        *,
+        rate: str = "25/second",
+        burst: int = 50,
+        dry_run: bool = False,
+        allow_cidrs: list[str] | None = None,
+    ) -> str:
+        """Soft per-host SYN rate limit (nft). Not a DDoS scrubber."""
+        allows = [str(c).strip() for c in (allow_cidrs or self.never_ban_cidrs or []) if str(c).strip()]
+        if dry_run:
+            return f"dry-run syn_rate_limit rate={rate} burst={burst} allow={allows or '-'}"
+        if not shutil.which("nft"):
+            return "nft required for syn_rate_limit"
+        self._ensure_chain()
+        for cidr in allows:
+            try:
+                ip_network(cidr, strict=False)
+            except ValueError:
+                return f"syn_rate_limit refused: invalid cidr {cidr!r}"
+            self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "ip",
+                    "saddr",
+                    cidr,
+                    "accept",
+                    "comment",
+                    f"sysspectogram:synrl:allow:{cidr}",
+                ]
+            )
+        code, out = self._run(
+            [
+                "nft",
+                "add",
+                "rule",
+                "inet",
+                "sysspectogram",
+                "input",
+                "tcp",
+                "flags",
+                "syn",
+                "/",
+                "syn",
+                "limit",
+                "rate",
+                "over",
+                str(rate),
+                "burst",
+                str(int(burst)),
+                "packets",
+                "drop",
+                "comment",
+                "sysspectogram:synrl:drop",
+            ]
+        )
+        if code != 0:
+            return f"syn_rate_limit failed: {out.strip()}"
+        return f"syn_rate_limit active rate over {rate} burst={burst} allow={allows or '-'}"
 
     def shield_port(self, port: int, ttl_sec: float = 3600.0, dry_run: bool = False) -> str:
         if dry_run:

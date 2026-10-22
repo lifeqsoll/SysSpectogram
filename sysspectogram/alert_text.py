@@ -171,6 +171,30 @@ RULE_TEXT: dict[str, dict[Lang, AlertText]] = {
             "Часто это шум из интернета. Баньте настойчивых сканеров; закрывайте лишние порты.",
         ),
     },
+    "flow_syn_burst": {
+        "en": _e(
+            "SYN burst (host mitigation)",
+            "Many half-open / SYN-ish TCP states in a short window — scan or flood noise on this host.",
+            "Not anti-DDoS. In soft/full mode we may ban the top source IP. Set never-ban first. Under heavy volumetric flood use your provider/CDN.",
+        ),
+        "ru": _e(
+            "Всплеск SYN (защита хоста)",
+            "Много SYN / half-open TCP за короткое окно — скан или шум на этом хосте.",
+            "Это не anti-DDoS. В soft/full можно забанить top IP. Сначала never-ban. При объёмной атаке — провайдер/CDN.",
+        ),
+    },
+    "flow_port_scan": {
+        "en": _e(
+            "Outbound port scatter",
+            "One remote host touched many unique ports from this VPS view (or toward it via flow).",
+            "Often a scanner. Soft/full may auto-ban that IP if never-ban is set.",
+        ),
+        "ru": _e(
+            "Разброс по портам",
+            "Один удалённый хост затронул много разных портов.",
+            "Часто сканер. Soft/full может автобанить IP, если задан never-ban.",
+        ),
+    },
     "new_login_source": {
         "en": _e(
             "Login from a new address",
