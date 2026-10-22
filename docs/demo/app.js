@@ -1,4 +1,4 @@
-/* SysSpectogram fake demo — no backend, synthetic metrics only. */
+/* SysSpectogram fake demo — no backend, synthetic metrics only. v1.1.1 friend path. */
 (() => {
   "use strict";
 
@@ -6,6 +6,75 @@
   const WINDOW = 60;
   const TICK_MS = 280;
   const THRESHOLD = 0.75;
+
+  const I18N = {
+    en: {
+      simBadge: "SIMULATION — not connected to your machine",
+      tagline:
+        "Press a scenario. Watch metrics, fuse risk, and Telegram-style alerts — friend path v1.1.1 (AppImage / VPS menu), without touching your host.",
+      chip1: "AppImage / day-0",
+      chip2: "Background protect",
+      chip3: "Never-ban IP",
+      chip4: "CNN + IF fuse",
+      chip5: "TG unlock / SOAR",
+      ctaTry: "Try scenarios",
+      ctaRelease: "Download v1.1.1",
+      ctaFriend: "Friend path",
+      scenarios: "Scenarios",
+      asideNote:
+        "Synthetic load only. Real product: AppImage or <code>friend-day0.sh</code> on a VPS.",
+      trainTitle: "Train pipeline (fake)",
+      liveStage: "Live stage",
+      heatTitle: "Fake spectrogram window",
+      heatCaption:
+        "60×N synthetic window. Real product: your collect CSV + trained artifacts; preview with <code>build-dataset --png</code>.",
+      alertTitle: 'Alert feed <span class="like-tg">(as Telegram would)</span>',
+      footer:
+        "Ready for the real thing? AppImage / <code>friend-day0.sh</code> → onboarding → background protect. Buttons here are fake — real Ban / Kill need console <code>/unlock</code>.",
+      emptyAlert: "No alerts yet — pick a scenario.",
+    },
+    ru: {
+      simBadge: "СИМУЛЯЦИЯ — не подключено к вашей машине",
+      tagline:
+        "Выберите сценарий. Метрики, fuse risk и алерты как в Telegram — friend path v1.1.1 (AppImage / меню на VPS), без доступа к хосту.",
+      chip1: "AppImage / day-0",
+      chip2: "Фоновая защита",
+      chip3: "Never-ban IP",
+      chip4: "CNN + IF",
+      chip5: "TG unlock / SOAR",
+      ctaTry: "Сценарии",
+      ctaRelease: "Скачать v1.1.1",
+      ctaFriend: "Friend path",
+      scenarios: "Сценарии",
+      asideNote:
+        "Только синтетика. Реальный продукт: AppImage или <code>friend-day0.sh</code> на VPS.",
+      trainTitle: "Train pipeline (фейк)",
+      liveStage: "Live stage",
+      heatTitle: "Фейковое окно спектрограммы",
+      heatCaption:
+        "Синтетическое окно 60×N. В продукте — ваш CSV + артефакты; превью: <code>build-dataset --png</code>.",
+      alertTitle: 'Лента алертов <span class="like-tg">(как в Telegram)</span>',
+      footer:
+        "Готовы к реальному? AppImage / <code>friend-day0.sh</code> → онбординг → фоновая защита. Кнопки здесь фейк — Ban / Kill только после <code>/unlock</code>.",
+      emptyAlert: "Алертов пока нет — выберите сценарий.",
+    },
+  };
+
+  let lang = "en";
+
+  function applyI18n() {
+    const pack = I18N[lang] || I18N.en;
+    document.documentElement.lang = lang;
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+      const key = el.getAttribute("data-i18n");
+      const val = pack[key];
+      if (!val) return;
+      if (val.includes("<")) el.innerHTML = val;
+      else el.textContent = val;
+    });
+    const empty = document.querySelector("#alerts .alert.empty");
+    if (empty) empty.textContent = pack.emptyAlert;
+  }
 
   const SCENARIOS = {
     idle: {
@@ -171,6 +240,49 @@
       amplify: "cpu",
       alert: null,
     },
+    neverban: {
+      label: "never-ban skip (friend)",
+      cpu: [14, 4],
+      mem: [34, 2],
+      net: [95, 25],
+      score: [0.2, 0.05],
+      amplify: null,
+      pills: {
+        mode: "mode: shield",
+        never: "never-ban: 198.51.100.20/32",
+        protect: "protect: active",
+      },
+      alert: {
+        severity: "high",
+        kind: "perimeter",
+        title: "PERIMETER · bruteforce_ssh (skipped)",
+        body:
+          "Would ban 198.51.100.20 (your SSH) — skipped by response.never_ban_cidrs. Friend path: Detect my IP in onboarding.",
+        ip: "198.51.100.20",
+        actions: ["never_ban skip", "Show unlock"],
+      },
+    },
+    protect: {
+      label: "background protect ON",
+      cpu: [10, 3],
+      mem: [33, 2],
+      net: [45, 15],
+      score: [0.14, 0.04],
+      amplify: null,
+      pills: {
+        mode: "mode: shield",
+        protect: "protect: systemd --user",
+        never: "never-ban: set",
+      },
+      alert: {
+        severity: "medium",
+        kind: "system",
+        title: "PROTECT · unit active",
+        body:
+          "sysspectogram-protect.service running (no --dry-run). Closing Control Center keeps the guard. Tip: loginctl enable-linger $USER.",
+        actions: ["Status", "Disable"],
+      },
+    },
   };
 
   const PILL_DEFAULTS = {
@@ -179,6 +291,8 @@
     root: "root_watch: learn",
     sess: "sessions: learn",
     mode: "mode: observe",
+    protect: "protect: off",
+    never: "never-ban: —",
   };
 
   function randn() {
@@ -322,6 +436,8 @@
       root: "pill-root",
       sess: "pill-sess",
       mode: "pill-mode",
+      protect: "pill-protect",
+      never: "pill-never",
     };
     Object.keys(ids).forEach((k) => {
       const el = document.getElementById(ids[k]);
@@ -331,8 +447,15 @@
       el.classList.remove("ok", "warn", "crit", "muted");
       const low = t.toLowerCase();
       if (low.includes("alert") || low.includes("critical")) el.classList.add("crit");
-      else if (low.includes("shield") || low.includes("ebpf")) el.classList.add("warn");
-      else if (low.includes("learn") || low.includes("observe")) el.classList.add("muted");
+      else if (low.includes("shield") || low.includes("ebpf") || low.includes("skip"))
+        el.classList.add("warn");
+      else if (
+        low.includes("learn") ||
+        low.includes("observe") ||
+        low.includes("off") ||
+        low.includes("—")
+      )
+        el.classList.add("muted");
       else el.classList.add("ok");
     });
   }
@@ -454,7 +577,7 @@
     if (!box.children.length) {
       const el = document.createElement("div");
       el.className = "alert empty";
-      el.textContent = "No alerts yet — pick a scenario.";
+      el.textContent = (I18N[lang] || I18N.en).emptyAlert;
       box.appendChild(el);
     }
   }
@@ -515,10 +638,20 @@
     document.querySelectorAll(".scenario").forEach((btn) => {
       btn.addEventListener("click", () => setScenario(btn.dataset.scenario));
     });
+    document.querySelectorAll(".lang-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        lang = btn.dataset.lang === "ru" ? "ru" : "en";
+        document.querySelectorAll(".lang-btn").forEach((b) => {
+          b.classList.toggle("active", b.dataset.lang === lang);
+        });
+        applyI18n();
+      });
+    });
   }
 
   function boot() {
     bindUi();
+    applyI18n();
     ensureEmptyAlert();
     initCharts();
     drawHeatmap();
