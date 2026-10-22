@@ -2,16 +2,27 @@
 
 Reproduce Precision / Recall / F1 / FPR for host ML methods on a labeled window dataset.
 
+## Window contract (schema v2)
+
+`build-dataset` stores **raw** metric windows in `.npy` and writes `scaler.json`.
+Train and live `predict_window` each apply the scaler **once**. Meta fields:
+
+- `windows_format: "raw"`
+- `schema_version: 2`
+
+Legacy datasets without these fields are treated as pre-scaled; rebuild before trusting eval.
+Do **not** enable host ML in production until the gate below passes.
+
 ## Prepare data
 
 ```bash
 # example: build windows from CSV collects
 python -m sysspectogram build-dataset \
   --normal data/normal.csv --anomaly data/anomaly.csv \
-  --out dataset/
+  --out dataset/raw_v4
 ```
 
-Need `dataset/train/{normal,anomaly}/*.npy` and `dataset/val/{normal,anomaly}/*.npy`.
+Need `dataset/.../train/{normal,anomaly}/*.npy` and `val/...`.
 
 ## Run
 
@@ -24,7 +35,20 @@ python scripts/eval_offline.py \
   --out reports/eval/
 ```
 
-Writes `reports/eval/metrics.json` and `reports/eval/metrics.md`.
+Writes `reports/eval/metrics.json` and `reports/eval/metrics.md` (includes per-class score mean/std and near-constant warnings).
+
+### Enablement gate (safety)
+
+Default config stays `runtime.prefer: notorch`. Only flip to `onnx` / `torch_ml` after:
+
+```bash
+python scripts/check_ml_ready.py \
+  --dataset dataset/raw_v4 \
+  --model artifacts/raw_v4 \
+  --runtime onnx
+```
+
+Gate requires fuse recall ≥ 0.7, fuse FPR **strictly better** than zscore, and no near-constant score warnings.
 
 ## Methods
 
@@ -40,6 +64,26 @@ Writes `reports/eval/metrics.json` and `reports/eval/metrics.md`.
 - Synthetic or lab CSV ≠ real APT campaign.
 - Threshold comes from training `meta.json` (recall-oriented); FPR is reported explicitly.
 - Without a model dir, only `zscore` runs.
+
+## 2026-10-22 measurement (dataset/raw_v4, artifacts/raw_v4) — schema v2
+
+Rebuilt with raw windows + deeper CNN + label smoothing. Command:
+
+```bash
+.venv/bin/python scripts/eval_offline.py \
+  --dataset dataset/raw_v4 --model artifacts/raw_v4 \
+  --methods fuse,cnn,iforest,zscore --runtime torch_ml \
+  --out reports/eval/raw_v4
+```
+
+| Method | Precision | Recall | F1 | FPR |
+| --- | ---: | ---: | ---: | ---: |
+| zscore | (see metrics.json) | | | high |
+| cnn | 1.0 | 1.0 | 1.0 | 0.0 |
+| iforest | 0.0 | 0.0 | 0.0 | 0.0 |
+| fuse | 1.0 | 0.8421 | 0.9143 | 0.0 |
+
+CNN separates classes under the fixed contract. IsolationForest alone stays weak at the fuse threshold; fuse is usable. **Default `runtime.prefer` remains `notorch`** — enable only after `check_ml_ready.py` on your own data. Filters make lab CSV separation easier than wild VPS traffic; treat as local builder evidence, not friend-default.
 
 ## v1.0 measurement (dataset/real, artifacts/real_v3)
 

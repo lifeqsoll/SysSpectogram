@@ -3,7 +3,7 @@
 Single forward plan. Goal: credible, honest, installable Linux VPS / host defense —
 not a “rootkit killer” marketing claim.
 
-**Status:** **v1.0** — Control Center, incident engine, event-level scoring, read-only VMI cross-view ([RELEASE_v1.0.0.md](RELEASE_v1.0.0.md)). Earlier: [RELEASE_v0.9.0.md](RELEASE_v0.9.0.md).
+**Status:** **v1.1.1** friend path shipped; host ML contract fix (schema v2 raw windows) + local retrain evidence in [EVAL.md](EVAL.md) — default runtime still `notorch` until enablement gate. Earlier: [RELEASE_v1.1.1.md](RELEASE_v1.1.1.md) · [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md).
 
 ---
 

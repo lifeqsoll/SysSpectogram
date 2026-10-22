@@ -53,10 +53,38 @@ def train_models(
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     window_size = int(meta.get("window_size", 60))
     n_features = int(meta.get("n_features", 30))
+    # schema v2: raw .npy + scale on load; legacy datasets omit the field (= scaled).
+    windows_format = str(meta.get("windows_format") or "scaled").strip().lower()
+    ds_scaler: WindowScaler | None = None
+    scaler_src = dataset_dir / "scaler.json"
+    if not scaler_src.exists():
+        scaler_src = dataset_dir / "scaler.joblib"
+    if windows_format == "raw":
+        if not scaler_src.exists():
+            raise RuntimeError(
+                f"dataset {dataset_dir} has windows_format=raw but no scaler.json"
+            )
+        if scaler_src.suffix == ".joblib":
+            import os
 
-    train_ds = NpyWindowDataset(dataset_dir / "train")
+            os.environ.setdefault("SYSSPECTOGRAM_ALLOW_JOBLIB", "1")
+        ds_scaler = WindowScaler.load(scaler_src)
+    elif windows_format == "scaled":
+        print(
+            "warning: windows_format=scaled (legacy); prefer rebuild with "
+            "build-dataset (raw schema v2) for train/infer parity",
+            flush=True,
+        )
+
+    train_ds = NpyWindowDataset(
+        dataset_dir / "train", scaler=ds_scaler, windows_format=windows_format
+    )
     val_root = dataset_dir / "val"
-    val_ds = NpyWindowDataset(val_root) if val_root.exists() and any(val_root.rglob("*.npy")) else None
+    val_ds = (
+        NpyWindowDataset(val_root, scaler=ds_scaler, windows_format=windows_format)
+        if val_root.exists() and any(val_root.rglob("*.npy"))
+        else None
+    )
 
     labels = [int(train_ds[i][2]) for i in range(len(train_ds))]
     class_count = np.bincount(labels, minlength=2).astype(np.float64)
@@ -70,10 +98,14 @@ def train_models(
 
     sample_x, _, _ = train_ds[0]
     height, width = int(sample_x.shape[1]), int(sample_x.shape[2])
-    model = AnomalyCNN(height=height, width=width, dropout=0.3).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    model = AnomalyCNN(height=height, width=width, dropout=0.35).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=2e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(epochs, 1))
-    criterion = nn.CrossEntropyLoss(weight=torch.tensor(class_weights, device=device))
+    # Label smoothing reduces overconfident collapse on small / noisy sets.
+    criterion = nn.CrossEntropyLoss(
+        weight=torch.tensor(class_weights, device=device),
+        label_smoothing=0.05,
+    )
 
     best_state = None
     best_val_f1 = -1.0
@@ -175,16 +207,15 @@ def train_models(
     )
     forest.save(out_dir / "iforest.ssf.npz")
 
-    scaler_src = dataset_dir / "scaler.json"
-    if not scaler_src.exists():
-        scaler_src = dataset_dir / "scaler.joblib"
     if scaler_src.exists():
-        # migrate path may still be joblib from older datasets
-        import os
+        if ds_scaler is not None:
+            ds_scaler.save(out_dir / "scaler.json")
+        else:
+            if scaler_src.suffix == ".joblib":
+                import os
 
-        if scaler_src.suffix == ".joblib":
-            os.environ.setdefault("SYSSPECTOGRAM_ALLOW_JOBLIB", "1")
-        WindowScaler.load(scaler_src).save(out_dir / "scaler.json")
+                os.environ.setdefault("SYSSPECTOGRAM_ALLOW_JOBLIB", "1")
+            WindowScaler.load(scaler_src).save(out_dir / "scaler.json")
 
     artifact_meta = {
         "columns": meta.get("columns", []),
@@ -199,6 +230,8 @@ def train_models(
         "best_val_cnn_f1": best_val_f1,
         "class_weights": class_weights.tolist(),
         "device_trained": device,
+        "windows_format": windows_format,
+        "dataset_schema_version": meta.get("schema_version"),
     }
     (out_dir / "meta.json").write_text(json.dumps(artifact_meta, indent=2), encoding="utf-8")
     import hashlib

@@ -55,7 +55,13 @@ Debounced after enough baseline+anomaly samples when enabled in guard.
 Do **not** expect full CNN retrain on a 1 GB VPS.
 
 ```bash
-python -m sysspectogram feedback retrain --feedback-dir artifacts/feedback --out artifacts/from_feedback
+python -m sysspectogram feedback retrain \
+  --feedback-dir artifacts/feedback \
+  --out artifacts/from_feedback \
+  --min-per-class 8 \
+  --base-dataset dataset/raw_v4
+
+Feedback `.npy` must be **raw** windows (same as live). Prefer merging into a schema-v2 base dataset; minimum 8 samples per class.
 ```
 
 Then push artifacts ([TRAIN_BRIDGE.md](TRAIN_BRIDGE.md)).

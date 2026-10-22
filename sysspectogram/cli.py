@@ -362,6 +362,10 @@ def _cmd_feedback(args: argparse.Namespace) -> int:
             _resolve(args.feedback_dir),
             out_artifacts=_resolve(args.out),
             epochs=int(args.epochs),
+            min_per_class=int(getattr(args, "min_per_class", 8)),
+            base_dataset=(
+                _resolve(args.base_dataset) if getattr(args, "base_dataset", None) else None
+            ),
         )
         console.print(f"[green]feedback retrain[/] {info}")
         return 0
@@ -1853,6 +1857,17 @@ def build_parser() -> argparse.ArgumentParser:
     fb_tr.add_argument("--feedback-dir", default="artifacts/feedback")
     fb_tr.add_argument("--out", required=True, help="artifacts output dir")
     fb_tr.add_argument("--epochs", type=int, default=8)
+    fb_tr.add_argument(
+        "--min-per-class",
+        type=int,
+        default=8,
+        help="minimum feedback .npy per class (default 8; was 2)",
+    )
+    fb_tr.add_argument(
+        "--base-dataset",
+        default=None,
+        help="optional schema-v2 raw dataset dir to merge before feedback windows",
+    )
     fb_tr.set_defaults(func=_cmd_feedback)
     fb_if = fb_sub.add_parser(
         "retrain-if",

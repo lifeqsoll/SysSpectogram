@@ -166,18 +166,20 @@ def build_dataset(
 
     for i, (label, window) in enumerate(samples):
         split = "val" if i in val_idx else "train"
-        scaled = scaler.transform(window)
+        # Store RAW windows; scale only at train consume + live infer (schema v2).
         dest = out_dir / split / label
         dest.mkdir(parents=True, exist_ok=True)
         name = f"{label}_{i:06d}"
-        save_npy(dest / f"{name}.npy", scaled)
+        save_npy(dest / f"{name}.npy", window.astype(np.float32))
         if write_png:
-            save_png(dest / f"{name}.png", scaled)
+            save_png(dest / f"{name}.png", scaler.transform(window))
         counts[split][label] += 1
 
     scaler_path = out_dir / "scaler.json"
     scaler.save(scaler_path)
     meta = {
+        "schema_version": 2,
+        "windows_format": "raw",
         "columns": columns,
         "window_size": window_size,
         "stride": stride,
