@@ -40,6 +40,18 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _verify_minisign(pub: Path, data: Path, sig: Path) -> None:
+    r = subprocess.run(
+        ["minisign", "-Vm", str(data), "-p", str(pub), "-x", str(sig)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "minisign failed").strip()
+        raise RuntimeError(err)
+
+
 def update_stack(tag: str) -> dict[str, Any]:
     tag = tag.strip()
     if not tag.startswith("v"):
@@ -58,33 +70,70 @@ def update_stack(tag: str) -> dict[str, Any]:
     wheel_name = next((n for n in assets if n.endswith(".whl")), None)
     if not wheel_name:
         return {"ok": False, "error": "no .whl on release", "assets": list(assets)}
+    if "SHA256SUMS" not in assets:
+        return {"ok": False, "error": "release missing SHA256SUMS (required)", "steps": steps}
     wheel_path = cache / wheel_name
     _download(assets[wheel_name], wheel_path)
     steps.append({"step": "download_wheel", "ok": True, "file": wheel_name})
 
-    if "SHA256SUMS" in assets:
-        sums = _get(assets["SHA256SUMS"]).decode()
-        for line in sums.splitlines():
-            if wheel_name in line:
-                exp = line.split()[0].lower()
-                got = _sha256(wheel_path)
-                if got != exp:
-                    return {"ok": False, "error": f"sha256 wheel mismatch {got} != {exp}"}
-                steps.append({"step": "sha256_wheel", "ok": True})
-                break
+    sums = _get(assets["SHA256SUMS"]).decode()
+    wheel_ok = False
+    for line in sums.splitlines():
+        if wheel_name in line:
+            exp = line.split()[0].lower()
+            got = _sha256(wheel_path)
+            if got != exp:
+                return {"ok": False, "error": f"sha256 wheel mismatch {got} != {exp}"}
+            steps.append({"step": "sha256_wheel", "ok": True})
+            wheel_ok = True
+            break
+    if not wheel_ok:
+        return {"ok": False, "error": f"SHA256SUMS has no entry for {wheel_name}", "steps": steps}
 
     agent_key = "sysspectogram-agent-x86_64-linux-musl"
     if agent_key not in assets:
         return {"ok": False, "error": "no musl agent on release", "steps": steps}
+    if f"{agent_key}.sha256" not in assets:
+        return {"ok": False, "error": "release missing agent .sha256 (required)", "steps": steps}
     agent_path = cache / agent_key
     _download(assets[agent_key], agent_path)
     steps.append({"step": "download_agent", "ok": True})
-    if f"{agent_key}.sha256" in assets:
-        line = _get(assets[f"{agent_key}.sha256"]).decode().strip()
-        exp = line.split()[0].lower()
-        if _sha256(agent_path) != exp:
-            return {"ok": False, "error": "sha256 agent mismatch", "steps": steps}
-        steps.append({"step": "sha256_agent", "ok": True})
+    line = _get(assets[f"{agent_key}.sha256"]).decode().strip()
+    exp = line.split()[0].lower()
+    if _sha256(agent_path) != exp:
+        return {"ok": False, "error": "sha256 agent mismatch", "steps": steps}
+    steps.append({"step": "sha256_agent", "ok": True})
+
+    # Embedded pubkey path: prefer CC key if present in tree, else skip minisign when no .minisig
+    pub_candidates = [
+        Path(__file__).resolve().parents[1] / "control-center" / "src-tauri" / "keys" / "SysSpectogram.minisign.pub",
+        home / "SysSpectogram.minisign.pub",
+        cache / "SysSpectogram.minisign.pub",
+    ]
+    pub = next((p for p in pub_candidates if p.is_file()), None)
+    if f"{agent_key}.minisig" in assets:
+        if pub is None:
+            # fetch pubkey asset if published
+            if "SysSpectogram.minisign.pub" in assets:
+                pub = cache / "SysSpectogram.minisign.pub"
+                _download(assets["SysSpectogram.minisign.pub"], pub)
+            else:
+                return {"ok": False, "error": "agent.minisig present but no pubkey", "steps": steps}
+        sig = cache / "agent.minisig"
+        _download(assets[f"{agent_key}.minisig"], sig)
+        try:
+            _verify_minisign(pub, agent_path, sig)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"minisign agent: {exc}", "steps": steps}
+        steps.append({"step": "minisign_agent", "ok": True})
+    if f"{wheel_name}.minisig" in assets and pub is not None:
+        sig = cache / "wheel.minisig"
+        _download(assets[f"{wheel_name}.minisig"], sig)
+        try:
+            _verify_minisign(pub, wheel_path, sig)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"minisign wheel: {exc}", "steps": steps}
+        steps.append({"step": "minisign_wheel", "ok": True})
 
     venv = home / ".venv"
     py = venv / "bin" / "python"
@@ -111,13 +160,13 @@ def update_stack(tag: str) -> dict[str, Any]:
 
     cfg = home / "configs"
     cfg.mkdir(parents=True, exist_ok=True)
-    for name in ("default.yaml", "schema.yaml"):
-        if not (cfg / name).is_file():
-            url = f"https://raw.githubusercontent.com/{DEFAULT_REPO}/{tag}/configs/{name}"
-            try:
-                _download(url, cfg / name)
-                steps.append({"step": f"config_{name}", "ok": True})
-            except Exception as exc:  # noqa: BLE001
-                steps.append({"step": f"config_{name}", "ok": False, "detail": str(exc)})
+    if not (cfg / "default.yaml").is_file():
+        steps.append(
+            {
+                "step": "config_default.yaml",
+                "ok": False,
+                "detail": "unsigned raw GitHub config fetch disabled; unpack configs from release tarball",
+            }
+        )
 
     return {"ok": True, "tag": tag, "home": str(home), "steps": steps}

@@ -1,4 +1,6 @@
-# Cold install checklist (Track F)
+# Cold install checklist (Track F, geek / air-gap)
+
+> **Friends:** prefer **[FRIEND.md](FRIEND.md)**. This checklist is for clone/cargo/signed-artifact operators.
 
 Operator-run on a **clean** Linux VPS. Target: first useful alert under 30 minutes.
 

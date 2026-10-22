@@ -1,6 +1,8 @@
-# Configure (Day-0 TUI)
+# Configure (Day-0 TUI, geek)
 
-Unified terminal setup for SysSpectogram v0.8.
+> **Friends:** [FRIEND.md](FRIEND.md) / Control Center onboarding. This TUI is for SSH operators with a checkout or home venv.
+
+Unified terminal setup for SysSpectogram.
 
 ```bash
 # Interactive (recommended first run)

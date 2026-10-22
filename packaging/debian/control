@@ -1,7 +1,7 @@
 Source: sysspectogram
 Section: admin
 Priority: optional
-Maintainer: Salfetka <salfetka@users.noreply.github.com>
+Maintainer: lifeqsoll <lifeqsoll@users.noreply.github.com>
 Build-Depends: debhelper (>= 13), dh-python, python3-all, python3-build, python3-installer, python3-wheel, cargo
 Standards-Version: 4.6.2
 Homepage: https://github.com/lifeqsoll/SysSpectogram

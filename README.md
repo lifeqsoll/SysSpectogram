@@ -4,66 +4,30 @@
 
 Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS).
 
-**For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect. Geek tools stay behind **Advanced**. Start here: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**. Release notes: **[v1.1.1](docs/RELEASE_v1.1.1.md)** · [v1.1.0](docs/RELEASE_v1.1.0.md).
+[![CI](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml/badge.svg)](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/lifeqsoll/SysSpectogram)](https://github.com/lifeqsoll/SysSpectogram/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
+[Install](#install) · [How it works](#how-it-works) · [CLI](#cli-reference) · [Telegram](#telegram-bot) · [Docker](#docker) · [FAQ](#troubleshooting)
 
 <p align="center">
   <img src="docs/assets/v1.1/home.png" alt="Home — Start protection" width="720" />
 </p>
 
-### Headless VPS (SSH, no git)
+---
 
-```bash
-# python3 + python3-venv + curl; replace tag if needed
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/friend-day0.sh | bash -s -- v1.1.1
-loginctl enable-linger $USER   # else protect stops on logout
-```
+## Start here
 
-Optional privileged helper (polkit; no local checkout):
+Three ways in. Geek tools stay behind **Advanced**. Release notes: **[v1.1.1](docs/RELEASE_v1.1.1.md)** · [v1.1.0](docs/RELEASE_v1.1.0.md).
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
-```
+### 1. Desktop (AppImage / `.deb`)
 
-Full friend story: [docs/FRIEND.md](docs/FRIEND.md).
+**For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect.
 
-### Never-ban your own IP (important)
+Friend story: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)**.
 
-Before soft/full auto-ban, whitelist yourself so the guard cannot lock you out:
-
-```bash
-curl -4 ifconfig.me   # e.g. 203.0.113.10
-```
-
-Then in **Settings → Never-ban IPs** enter one or more (comma or new lines; bare IP → `/32`), e.g. `203.0.113.10` and `198.51.100.20/32` → Apply → restart guard.  
-Same key: `response.never_ban_cidrs`. Details: [RELEASE_v1.1.0](docs/RELEASE_v1.1.0.md) · [HOME.md](docs/HOME.md).
-
-### Docs (by topic)
-
-**Start here:** [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.1.1](docs/RELEASE_v1.1.1.md) · [Day-0 CLI](docs/DAY0_VPS.md) · [Configure](docs/CONFIGURE.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md)
-
-**Defense:** [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md)
-
-**Control:** [Control Center](docs/CONTROL_CENTER.md) · [Telegram](docs/TELEGRAM.md) · [Live web / Mini App](docs/WEBAPP.md) · [Feedback](docs/FEEDBACK.md)
-
-**ML / data:** [Recipes](docs/RECIPES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Eval](docs/EVAL.md) · [Simulations](simulations/README.md)
-
-**Product:** [Product description](docs/PRODUCT_v1.0.md) · [Roadmap](docs/ROADMAP_QUALITY.md) · [ADRs](docs/adr/)
-
-### What you get
-
-| Piece | Notes |
-| --- | --- |
-| Control Center (simple + Advanced) | Home, Charts, Alerts, Settings; light/dark; EN/RU; first-run wizard |
-| Telegram + optional web | Clear alerts; Ban/Kill after console unlock; web off by default |
-| Guard + Rust agent | Perimeter (SSH brute, …), FIM/process signals, timeseries charts |
-| Privileged helper | polkit allowlist for settings / service / signed bundles |
-| Optional host ML | Train on a builder PC; import ONNX weights on the VPS ([HOME.md](docs/HOME.md)) |
-
-### Limitations (honest)
-
-Same-host root can still stop services and wipe local logs. Remote alert sinks and signed manifests reduce silence/subversion; they do **not** make the tool unkillable. Optional kernel helper is off by default and often unavailable on locked-down cloud kernels. See [SECURITY.md](SECURITY.md).
-
-### Quick start (app)
+From a source checkout (dev):
 
 ```bash
 # helper once (polkit + systemd)
@@ -73,7 +37,26 @@ cd control-center && npm install && npm run tauri dev
 # complete onboarding → Home → Start protection
 ```
 
-CLI Day-0 path (no GUI): [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX on the VPS after training elsewhere: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md), [CONFIG.md](docs/CONFIG.md).
+### 2. Headless VPS (SSH, no git)
+
+```bash
+# python3 + python3-venv + curl; replace tag if needed
+# prefer the tagged script (not floating main); or download friend-day0.sh from the release
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/friend-day0.sh | bash -s -- v1.1.1
+loginctl enable-linger $USER   # else protect stops on logout
+```
+
+Optional privileged helper (polkit; no local checkout):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
+```
+
+Full friend story: [docs/FRIEND.md](docs/FRIEND.md). Geek git Day-0: [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX after training elsewhere: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
+
+### 3. Source install
+
+Clone, venv, editable install — see **[Install](#install)**.
 
 ```bash
 source .venv/bin/activate
@@ -88,16 +71,51 @@ python -m sysspectogram supply-chain verify artifacts/real_v3
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ```
 
+### Never-ban your own IP
+
+> [!WARNING]
+> Before soft/full auto-ban, whitelist yourself so the guard cannot lock you out.
+>
+> ```bash
+> curl -4 ifconfig.me   # e.g. 203.0.113.10
+> ```
+>
+> Then in **Settings → Never-ban IPs** enter one or more (comma or new lines; bare IP → `/32`), e.g. `203.0.113.10` and `198.51.100.20/32` → Apply → restart guard.
+> Same key: `response.never_ban_cidrs`. Details: [FRIEND.md](docs/FRIEND.md) · [HOME.md](docs/HOME.md).
+
+### What you get
+
+- **Control Center (simple + Advanced)** — Home, Charts, Alerts, Settings; light/dark; EN/RU; first-run wizard
+- **Telegram + optional web** — Clear alerts; Ban/Kill after console unlock; web off by default
+- **Guard + Rust agent** — Perimeter (SSH brute, …), FIM/process signals, timeseries charts
+- **Privileged helper** — polkit allowlist for settings / service / signed bundles
+- **Optional host ML** — Train on a builder PC; import ONNX weights on the VPS ([HOME.md](docs/HOME.md))
+
+### Limitations
+
+Same-host root can still stop services and wipe local logs. Remote alert sinks and signed manifests reduce silence/subversion; they do **not** make the tool unkillable. Optional kernel helper is off by default and often unavailable on locked-down cloud kernels.
+
+Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md](SECURITY.md).
+
+### Docs by topic
+
+| Topic | Links |
+| --- | --- |
+| Friends | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.1.1](docs/RELEASE_v1.1.1.md) |
+| Geek / advanced | [Configure](docs/CONFIGURE.md) · [Day-0 CLI (git)](docs/DAY0_VPS.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Control Center](docs/CONTROL_CENTER.md) |
+| Defense | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |
+| More | [Telegram](docs/TELEGRAM.md) · [Live web](docs/WEBAPP.md) · [Recipes](docs/RECIPES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Product](docs/PRODUCT_v1.0.md) · [ADRs](docs/adr/) |
+
 ---
 
 ## Table of contents
 
-1. [What it does](#what-it-does)
+1. [How it works](#how-it-works)
 2. [Requirements](#requirements)
 3. [Install](#install)
-4. [Concepts](#concepts)
-5. [End-to-end workflow](#end-to-end-workflow)
-6. [Best recipes](#best-recipes)
+4. [End-to-end workflow](#end-to-end-workflow)
+5. [Best recipes](#best-recipes)
+6. [Control Center](#control-center)
 7. [CLI reference](#cli-reference)
 8. [Telegram bot](#telegram-bot)
 9. [Outputs and artifacts](#outputs-and-artifacts)
@@ -105,10 +123,13 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 11. [systemd](#systemd)
 12. [Limitations and safety](#limitations-and-safety)
 13. [Troubleshooting](#troubleshooting)
+14. [License](#license)
+15. [Roadmap](#roadmap-note)
+16. [Contributing](#contributing)
 
 ---
 
-## What it does
+## How it works
 
 ### Metrics → spectrogram → CNN (the DL core)
 
@@ -149,6 +170,31 @@ Typical fused score:
 
 Threshold is chosen on validation to favor high recall (see `configs/default.yaml`).
 
+### Metrics (rates, not raw counters)
+
+Each CSV row is one second. Network/disk/context-switch fields are **per-second deltas**. Absolute counters are not used for training, so uptime does not dominate the model.
+
+Columns include CPU (total and up to `max_cores` cores), memory/swap, page faults, network byte/packet rates, socket counts (ESTABLISHED/LISTEN sampled every N seconds), and disk I/O rates.
+
+### Windows → “image” for the CNN
+
+- Default window: **60 seconds** × N feature columns → shape **`(1, 60, N)`** after `window_to_tensor`
+- Default stride when building a dataset: **5 seconds** (overlapping windows)
+- Scaler (`MinMax`) is fit on **train** windows only and stored for inference
+- Optional PNG previews: `build-dataset --png` (human view; model trains on `.npy`)
+
+The CNN does not watch raw processes. It watches **how the whole host looks over a minute** — the same idea recruiters know from spectrograms / heatmaps in CV and audio DL.
+
+### Ensemble
+
+- **CNN:** small ConvNet on a single-channel 60×N heatmap tensor
+- **Isolation Forest:** tabular stats over the same window (mean/std/max/p95 per feature)
+- Artifacts live in one directory (`cnn.onnx` or `cnn.pt`, `iforest.ssf.npz`, `scaler.json`, `meta.json`)
+
+### Labels for training data
+
+You must collect **normal** and **anomaly** CSVs yourself. The tool does not invent ground truth. Use quiet desktop/server time for normal; use `simulate` / `simulations/` (or real incidents) for anomaly.
+
 ---
 
 ## Requirements
@@ -187,35 +233,6 @@ python -m sysspectogram configure
 ```
 
 Editable install exposes the `sysspectogram` console script and `python -m sysspectogram`.
-
----
-
-## Concepts
-
-### Metrics (rates, not raw counters)
-
-Each CSV row is one second. Network/disk/context-switch fields are **per-second deltas**. Absolute counters are not used for training, so uptime does not dominate the model.
-
-Columns include CPU (total and up to `max_cores` cores), memory/swap, page faults, network byte/packet rates, socket counts (ESTABLISHED/LISTEN sampled every N seconds), and disk I/O rates.
-
-### Windows → “image” for the CNN
-
-- Default window: **60 seconds** × N feature columns → shape **`(1, 60, N)`** after `window_to_tensor`
-- Default stride when building a dataset: **5 seconds** (overlapping windows)
-- Scaler (`MinMax`) is fit on **train** windows only and stored for inference
-- Optional PNG previews: `build-dataset --png` (human view; model trains on `.npy`)
-
-The CNN does not watch raw processes. It watches **how the whole host looks over a minute** — the same idea recruiters know from spectrograms / heatmaps in CV and audio DL.
-
-### Ensemble
-
-- **CNN:** small ConvNet on a single-channel 60×N heatmap tensor
-- **Isolation Forest:** tabular stats over the same window (mean/std/max/p95 per feature)
-- Artifacts live in one directory (`cnn.onnx` or `cnn.pt`, `iforest.ssf.npz`, `scaler.json`, `meta.json`)
-
-### Labels for training data
-
-You must collect **normal** and **anomaly** CSVs yourself. The tool does not invent ground truth. Use quiet desktop/server time for normal; use `simulate` / `simulations/` (or real incidents) for anomaly.
 
 ---
 
@@ -260,6 +277,9 @@ python -m sysspectogram build-dataset \
   --stride 5
 ```
 
+<details>
+<summary>Optional <code>--png</code> heatmap previews</summary>
+
 Optional `--png` writes inferno heatmap previews next to each `.npy` (human view only; training uses tensors). Example:
 
 ```bash
@@ -271,6 +291,8 @@ python -m sysspectogram build-dataset \
   --png
 # → dataset/real/train/anomaly/*.png  (+ .npy)
 ```
+
+</details>
 
 ### 4. Train
 
@@ -311,8 +333,6 @@ python -m sysspectogram audit report --out reports/audit.json
 
 Full copy-paste sets: **[docs/RECIPES.md](docs/RECIPES.md)** (RU: [RECIPES_RU.md](docs/RECIPES_RU.md)).
 
-Quick path:
-
 ```bash
 python -m sysspectogram collect --out data/normal.csv --duration 1800
 python -m sysspectogram simulate cpu --duration 900 --workers 8 &
@@ -342,9 +362,10 @@ cd control-center && npm run tauri build
 cd helper && cargo build --release
 ```
 
-Tagged releases also publish AppImage + deb via CI (`.github/workflows/release-assets.yml`). Friends: open the package → **Install stack v1.1.0** downloads the signed wheel/agent into `~/.local/share/sysspectogram` (no git clone).
+Tagged releases publish AppImage + deb via CI. Friends: open the package → **Install stack** downloads the signed wheel/agent for the **same tag** into `~/.local/share/sysspectogram` (no git clone). See [FRIEND.md](docs/FRIEND.md).
 
-### Build the Control Center from source
+<details>
+<summary>Build the Control Center from source (developers)</summary>
 
 Requirements: Node 20+, Rust stable, and the Tauri 2 Linux libraries (on Arch: `sudo pacman -S webkit2gtk-4.1 librsvg patchelf base-devel`; see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)).
 
@@ -367,9 +388,13 @@ Run it:
 
 The app icons are already in `control-center/src-tauri/icons/`. To replace them, put a square 1024×1024 PNG anywhere and run `npm run tauri icon path/to/icon.png`.
 
+</details>
+
 Root resolution: `$SYSSPECTOGRAM_HOME`, else a source checkout, else `~/.local/share/sysspectogram` (AppImage/deb), else `/var/lib/sysspectogram`. Python: `$SYSSPECTOGRAM_PYTHON`, else home `.venv`, else `/opt/sysspectogram/venv/bin/python`, else `python3`. Packaged first-run without a stack shows **Install stack**.
 
 The UI never runs privileged commands itself. Settings changes, service control and bundle installs go through `sysspectogram-helper`, which checks each action with polkit. Dashboards read `state/timeseries.sqlite` read-only. Details: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
+
+---
 
 ## CLI reference
 
@@ -385,9 +410,48 @@ python -m sysspectogram [--config PATH] [--version] <command> ...
 | `--version` | no | — | Print package version and exit |
 | `-h` / `--help` | no | — | Help for the program or a subcommand |
 
----
+### Commands at a glance
 
-### `configure` (Day-0 killer feature)
+| Command | Purpose |
+| --- | --- |
+| `configure` | Day-0 TUI: probe + profile + agent + Telegram + labels |
+| `collect` | Collect system metrics to CSV |
+| `build-dataset` | Cut CSV logs into train/val windows |
+| `train` | Train CNN + Isolation Forest ensemble |
+| `export-onnx` | Export `cnn.pt` → `cnn.onnx` (needs `.[ml]`) |
+| `monitor` | Realtime anomaly monitoring |
+| `analyze` | Offline CSV analysis |
+| `audit` | Defensive host snapshot |
+| `simulate` | Generate local anomalous load |
+| `watch-perimeter` | Perimeter / egress / DNS watcher |
+| `recon` | OSINT + optional nmap on an IP |
+| `guard` | Perimeter + host ML + Telegram control plane |
+| `supply-chain` | Manifest and minisign artifact trust |
+| `kirk` | Kernel integrity trust probe (IMA/SB/TPM) |
+| `incidents` | Correlate alerts into incidents (`incident.v1`) |
+| `lab` | Localhost-only lab runs with expected alert |
+| `lab-nmap` | nmap allowlisted lab targets only |
+| `scenario` | Protection scenario presets |
+| `settings` | Settings schema checks / UI export |
+| `timeseries` | Dashboard history store (SQLite rollups) |
+| `labels` | Process label rules store |
+| `feedback` | Operator feedback samples / retrain |
+| `profiles` | Shareable baseline packs for Releases |
+| `data` | VPS↔PC train bridge (bundle CSV / unpack) |
+| `artifacts` | Push model artifacts to VPS over SSH |
+| `train-agent-if` | Train Isolation Forest on agent JSONL windows |
+| `role-lab` | Simulate VPS roles on PC and train baseline packs |
+| `spectro` | Render a metrics spectrogram for an incident or a time |
+| `web` | Live local / Telegram Mini App dashboard |
+| `control` | SOAR via local guard control socket |
+| `home` | Simple-home helpers (onboarding, model import, `.env`) |
+| `protect` | User systemd protect service |
+| `menu` | Friend interactive menu for VPS/SSH |
+| `setup` | Interactive `.env` / Telegram setup (legacy) |
+| `update` | Download signed wheel+agent from GitHub Releases |
+
+<details>
+<summary><code>configure</code></summary>
 
 Interactive **terminal** setup (Rich tables + prompts). Not a web page and not a separate GUI window — open a terminal in the repo and run:
 
@@ -407,9 +471,10 @@ See [docs/CONFIGURE.md](docs/CONFIGURE.md) and [docs/COLD_INSTALL.md](docs/COLD_
 
 Related: `labels list|seed|del`, `feedback retrain-if`, `feedback status`.
 
----
+</details>
 
-### `collect`
+<details>
+<summary><code>collect</code></summary>
 
 Write metric samples to a CSV file (append-safe; writes header if the file is new/empty).
 
@@ -424,9 +489,12 @@ python -m sysspectogram collect --out data/normal.csv --duration 3600
 
 Uses `collector.*` from config: `interval_sec`, `max_cores`, `socket_sample_every`.
 
----
+</details>
 
-### `build-dataset`
+<details>
+<summary><code>build-dataset</code></summary>
+
+<a id="build-dataset"></a>
 
 Split labeled CSVs into `train/` and `val/` windows as `.npy` tensors.
 
@@ -451,9 +519,10 @@ python -m sysspectogram build-dataset \
 
 Writes `dataset/meta.json` and `dataset/scaler.json`.
 
----
+</details>
 
-### `train`
+<details>
+<summary><code>train</code></summary>
 
 Train the ensemble and write an artifacts directory.
 
@@ -469,9 +538,10 @@ python -m sysspectogram train --dataset dataset/ --out artifacts/ --epochs 15
 
 Other hyperparameters (`batch_size`, `lr`, fusion weights, `recall_target`, `seed`) come from config.
 
----
+</details>
 
-### `monitor`
+<details>
+<summary><code>monitor</code></summary>
 
 Realtime loop: sample every 1s into a deque of length `window_size`, infer every `--interval` seconds.
 
@@ -492,9 +562,10 @@ python -m sysspectogram monitor \
 
 Stop with Ctrl+C (SIGINT/SIGTERM).
 
----
+</details>
 
-### `analyze`
+<details>
+<summary><code>analyze</code></summary>
 
 Slide windows over a CSV and report anomaly windows.
 
@@ -513,9 +584,10 @@ python -m sysspectogram analyze \
 
 Stride for sliding windows comes from config `window.stride`.
 
----
+</details>
 
-### `audit`
+<details>
+<summary><code>audit</code></summary>
 
 Defensive snapshot. Subcommand positional argument selects mode.
 
@@ -534,9 +606,19 @@ python -m sysspectogram audit report --out reports/audit.json
 - `ports` — LISTEN / ESTABLISHED from `/proc/net/tcp{,6}` (process names when permitted)  
 - `report` — combined JSON  
 
----
+Extras:
 
-### `simulate`
+```bash
+python -m sysspectogram audit rootkit
+python -m sysspectogram audit report --out reports/audit.json
+```
+
+`what`: `processes` \| `ports` \| `report` \| `rootkit`.
+
+</details>
+
+<details>
+<summary><code>simulate</code></summary>
 
 Local load generators for anomaly labeling. Affects **this host only**. Network mode uses `127.0.0.1` only.
 
@@ -560,9 +642,10 @@ python -m sysspectogram simulate gpu --duration 60 --gpu-size 4096
 
 Also: `simulations/` and `simulations/intrusion/` (lab).
 
----
+</details>
 
-### `watch-perimeter`
+<details>
+<summary><code>watch-perimeter</code></summary>
 
 ```bash
 python -m sysspectogram watch-perimeter --duration 3600 --jsonl-out reports/perimeter.jsonl
@@ -570,14 +653,20 @@ python -m sysspectogram watch-perimeter --duration 3600 --jsonl-out reports/peri
 
 Flags: `--poll`, `--denylist`, `--no-recon`.
 
-### `recon`
+</details>
+
+<details>
+<summary><code>recon</code></summary>
 
 ```bash
 python -m sysspectogram recon 198.51.100.20
 python -m sysspectogram recon 198.51.100.20 --no-nmap --no-ct
 ```
 
-### `guard`
+</details>
+
+<details>
+<summary><code>guard</code></summary>
 
 ```bash
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run \
@@ -592,7 +681,10 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run \
 | `--duration` | Optional finite run |
 | `--jsonl-out` | Alert stream |
 
-### `incidents`
+</details>
+
+<details>
+<summary><code>incidents</code></summary>
 
 ```bash
 python -m sysspectogram incidents list --window 300
@@ -602,7 +694,10 @@ python -m sysspectogram incidents report <id> --format html --out reports/incide
 
 Correlates `reports/alerts.jsonl`, `agent.jsonl` and `perimeter.jsonl` into `incident.v1` records in `reports/incidents.jsonl`.
 
-### `lab`
+</details>
+
+<details>
+<summary><code>lab</code></summary>
 
 ```bash
 python -m sysspectogram lab list --json
@@ -611,7 +706,10 @@ python -m sysspectogram lab run sim-cpu
 
 Registered localhost-only lab runs. Each one states the alert it should produce, and the Control Center checks the reports for it. Runs that use intrusion scripts ask for consent first.
 
-### `scenario`
+</details>
+
+<details>
+<summary><code>scenario</code></summary>
 
 ```bash
 python -m sysspectogram scenario list
@@ -620,14 +718,20 @@ python -m sysspectogram scenario show hardened-observe --lang en
 
 Protection presets from `configs/scenarios/`. `show` prints each change with its explanation. Applying a preset is done in the Control Center.
 
-### `settings`
+</details>
+
+<details>
+<summary><code>settings</code></summary>
 
 ```bash
 python -m sysspectogram settings export    # JSON for the UI: schema, values, scenarios
 python -m sysspectogram settings check     # CI: schema, i18n, defaults, scenarios
 ```
 
-### `timeseries`
+</details>
+
+<details>
+<summary><code>timeseries</code></summary>
 
 ```bash
 python -m sysspectogram timeseries query host_risk --range 6h
@@ -635,7 +739,10 @@ python -m sysspectogram timeseries query host_risk --range 6h
 
 Points from `state/timeseries.sqlite`. Ranges: `1h`, `6h`, `12h`, `24h`, `7d`, `30d`.
 
-### `lab-nmap`
+</details>
+
+<details>
+<summary><code>lab-nmap</code></summary>
 
 ```bash
 python -m sysspectogram lab-nmap 127.0.0.1 --lab
@@ -643,20 +750,16 @@ python -m sysspectogram lab-nmap 127.0.0.1 --lab
 
 Targets must be in `lab.nmap_targets` (config) or localhost.
 
-### `audit` extras
-
-```bash
-python -m sysspectogram audit rootkit
-python -m sysspectogram audit report --out reports/audit.json
-```
-
-`what`: `processes` \| `ports` \| `report` \| `rootkit`.
+</details>
 
 ---
 
 ## Telegram bot
 
 Full reference: **[docs/TELEGRAM.md](docs/TELEGRAM.md)**.
+
+<details>
+<summary>Telegram <code>.env</code> and <code>guard --telegram</code></summary>
 
 ```bash
 # .env
@@ -665,6 +768,8 @@ TELEGRAM_CHAT_ID=...
 
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ```
+
+</details>
 
 Phone commands mirror CLI ops: `/audit` `/panel` `/score` `/simulate` `/collect` `/analyze` `/recon` `/ban` `/ports` `/processes` `/rootkit` `/recipes` …  
 Long jobs (`train`, `build-dataset`, `monitor`, `guard`) stay on the host; `/recipes` prints best flags.
@@ -696,6 +801,9 @@ Alerts send a **dual heatmap** (metrics + top-PID CPU% over time) plus pattern l
 
 **Warning:** Docker is for **train** / **analyze** only with mounted volumes. Do **not** run `monitor` / `guard` in a plain container expecting host IDS fidelity — you see cgroup metrics and the container network namespace, not the bare-metal host, unless you deliberately pass `--pid=host --net=host` (and accept the security trade-offs). Prefer a native systemd install for live detection.
 
+<details>
+<summary>Docker build and train example</summary>
+
 ```bash
 docker build -t sysspectogram .
 docker run --rm \
@@ -703,6 +811,8 @@ docker run --rm \
   -v "$PWD/artifacts:/artifacts" \
   sysspectogram train --dataset /dataset --out /artifacts
 ```
+
+</details>
 
 The image installs CPU PyTorch by default.
 
@@ -714,11 +824,18 @@ The image installs CPU PyTorch by default.
 - Guard + Telegram: [scripts/systemd/sysspectogram-guard.service](scripts/systemd/sysspectogram-guard.service)
 - Agent: [scripts/systemd/sysspectogram-agent.service](scripts/systemd/sysspectogram-agent.service) (for eBPF, run as root / see [EBPF_SETUP.md](docs/EBPF_SETUP.md))
 
+<details>
+<summary>Secrets, enable, hardening notes</summary>
+
 Put secrets in `/opt/sysspectogram/.env` (or `/etc/sysspectogram.env`); units use `EnvironmentFile=-…`. Point `--model` at artifacts, then `systemctl enable --now …`. Helper: `scripts/install.sh`. Units ship with basic hardening (`ProtectSystem`, `PrivateTmp`, …); relax if you need live nft without `--dry-run`.
+
+</details>
 
 ---
 
 ## Limitations and safety
+
+Same section linked from [Start here → Limitations](#limitations).
 
 - Model quality depends on **your** labeled CSVs. A model trained on a laptop will not match a busy database VPS.  
 - Does not detect kernel rootkits or signed malware by name. Userspace `/proc` can be lied to by advanced LKMs; eBPF `execve`/`openat` reduces the blind spot but is not complete coverage.  
@@ -732,7 +849,7 @@ Put secrets in `/opt/sysspectogram/.env` (or `/etc/sysspectogram.env`); units us
 
 ## Troubleshooting
 
-| Symptom | What to check |
+| Problem | Solution |
 | --- | --- |
 | `build-dataset` fails with no windows | CSV shorter than `--window`; collect longer or reduce window |
 | Poor F1 after train | Class imbalance, too little normal/anomaly time, or identical loads in both CSVs |
@@ -755,4 +872,8 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v1.1** focuses on simple-home UX (wizard, plain alerts, Telegram/web toggles, Advanced for geeks). See [docs/RELEASE_v1.1.0.md](docs/RELEASE_v1.1.0.md), [docs/HOME.md](docs/HOME.md), [docs/PRODUCT_v1.0.md](docs/PRODUCT_v1.0.md) and [docs/ROADMAP_QUALITY.md](docs/ROADMAP_QUALITY.md).
+**v1.1.x** focuses on friend install + simple-home UX. See [docs/RELEASE_v1.1.1.md](docs/RELEASE_v1.1.1.md), [docs/FRIEND.md](docs/FRIEND.md), [docs/HOME.md](docs/HOME.md).
+
+## Contributing
+
+PRs welcome. For security issues, follow [SECURITY.md](SECURITY.md).

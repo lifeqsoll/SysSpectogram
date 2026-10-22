@@ -3,14 +3,14 @@ sysspectogram (1.1.1-1) unstable; urgency=medium
   * Friend protect path: systemd unit, day-0/helper scripts, detect IP,
     role FP seed, linger UI, never-ban harden.
 
- -- Salfetka <salfetka@users.noreply.github.com>  Tue, 20 Oct 2026 01:35:00 +0300
+ -- lifeqsoll <lifeqsoll@users.noreply.github.com>  Tue, 20 Oct 2026 01:35:00 +0300
 
 sysspectogram (1.1.0-1) unstable; urgency=medium
 
   * Simple home UX, AppImage/deb Control Center, signed stack bootstrap,
     never-ban multi-IP, Telegram RU unlock, agent_down backoff.
 
- -- Salfetka <salfetka@users.noreply.github.com>  Mon, 19 Oct 2026 01:00:00 +0300
+ -- lifeqsoll <lifeqsoll@users.noreply.github.com>  Mon, 19 Oct 2026 01:00:00 +0300
 
 sysspectogram (1.0.0-1) unstable; urgency=medium
 
@@ -25,17 +25,17 @@ sysspectogram (1.0.0-1) unstable; urgency=medium
   * Read-only VMI cross-view (mock backend; libvmi backend behind config).
   * Timeseries store with rollups for dashboards.
 
- -- Salfetka <salfetka@users.noreply.github.com>  Sat, 10 Oct 2026 12:00:00 +0300
+ -- lifeqsoll <lifeqsoll@users.noreply.github.com>  Sat, 10 Oct 2026 12:00:00 +0300
 
 sysspectogram (0.9.0-1) unstable; urgency=medium
 
   * Hardening: pickle-free artifacts, remote alert sinks, FIM baselines,
     hybrid watchdog, Day-0/eval/threat docs.
 
- -- Salfetka <salfetka@users.noreply.github.com>  Wed, 30 Sep 2026 16:40:00 +0300
+ -- lifeqsoll <lifeqsoll@users.noreply.github.com>  Wed, 30 Sep 2026 16:40:00 +0300
 
 sysspectogram (0.8.0-1) unstable; urgency=medium
 
   * Add signed artifact verification, SPDX SBOM, and distro packaging.
 
- -- Salfetka <salfetka@users.noreply.github.com>  Tue, 29 Sep 2026 22:00:00 +0300
+ -- lifeqsoll <lifeqsoll@users.noreply.github.com>  Tue, 29 Sep 2026 22:00:00 +0300

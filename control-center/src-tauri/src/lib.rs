@@ -138,10 +138,13 @@ fn detect_public_ip() -> Result<Value, String> {
     Err(format!("detect public IP failed: {last}"))
 }
 
-/// Download + run `scripts/install-helper-from-release.sh` via pkexec (no git checkout).
+/// Download release asset `install-helper-from-release.sh`, verify against
+/// `friend-scripts.sha256`, then run via pkexec (no unsigned raw.githubusercontent).
 #[tauri::command]
 fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
+    use sha2::{Digest, Sha256};
     use std::fs;
+    use std::io::Read;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
@@ -153,19 +156,74 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
     };
     let repo = std::env::var("SYSSPECTOGRAM_GITHUB_REPO")
         .unwrap_or_else(|_| "lifeqsoll/SysSpectogram".into());
-    let url = format!(
-        "https://raw.githubusercontent.com/{repo}/{t}/scripts/install-helper-from-release.sh"
-    );
+    let api = format!("https://api.github.com/repos/{repo}/releases/tags/{t}");
+    let release_text = ureq::get(&api)
+        .set("User-Agent", "SysSpectogram-CC/1.1")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| format!("GitHub release {t}: {e}"))?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    let release: Value =
+        serde_json::from_str(&release_text).map_err(|e| format!("GitHub JSON: {e}"))?;
+    let assets = release
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| "release has no assets".to_string())?;
+    let mut script_url: Option<String> = None;
+    let mut sums_url: Option<String> = None;
+    for a in assets {
+        let name = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        let url = a
+            .get("browser_download_url")
+            .and_then(|x| x.as_str())
+            .map(str::to_string);
+        if name == "install-helper-from-release.sh" {
+            script_url = url.clone();
+        }
+        if name == "friend-scripts.sha256" {
+            sums_url = url;
+        }
+    }
+    let script_url = script_url
+        .ok_or_else(|| "release missing install-helper-from-release.sh".to_string())?;
+    let sums_url =
+        sums_url.ok_or_else(|| "release missing friend-scripts.sha256".to_string())?;
+
     let cache = paths::user_data_root().join("state").join("bootstrap-cache");
     fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     let script = cache.join("install-helper-from-release.sh");
-    let body = ureq::get(&url)
-        .set("User-Agent", "SysSpectogram-CC/1.1")
-        .call()
-        .map_err(|e| format!("download helper install script: {e}"))?
-        .into_string()
-        .map_err(|e| e.to_string())?;
-    fs::write(&script, body).map_err(|e| e.to_string())?;
+    let sums_path = cache.join("friend-scripts.sha256");
+    for (url, dest) in [(&script_url, &script), (&sums_url, &sums_path)] {
+        let mut reader = ureq::get(url)
+            .set("User-Agent", "SysSpectogram-CC/1.1")
+            .call()
+            .map_err(|e| format!("download {url}: {e}"))?
+            .into_reader();
+        let mut buf = Vec::new();
+        reader
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        fs::write(dest, buf).map_err(|e| e.to_string())?;
+    }
+    let sums = fs::read_to_string(&sums_path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    hasher.update(fs::read(&script).map_err(|e| e.to_string())?);
+    let got = format!("{:x}", hasher.finalize());
+    let mut ok = false;
+    for line in sums.lines() {
+        if line.contains("install-helper-from-release.sh") {
+            let exp = line.split_whitespace().next().unwrap_or("").to_lowercase();
+            if exp != got {
+                return Err(format!("script sha256 mismatch {got} != {exp}"));
+            }
+            ok = true;
+            break;
+        }
+    }
+    if !ok {
+        return Err("friend-scripts.sha256 has no install-helper-from-release.sh line".into());
+    }
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).ok();
 
     let runner = ["/usr/bin/pkexec", "/usr/bin/sudo"]
@@ -181,11 +239,7 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
-        return Err(format!(
-            "helper install failed: {}\n{}",
-            stderr,
-            stdout
-        ));
+        return Err(format!("helper install failed: {stderr}\n{stdout}"));
     }
     Ok(json!({
         "ok": true,

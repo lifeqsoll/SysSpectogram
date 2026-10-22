@@ -1,0 +1,1 @@
+Self-hosted Linux VPS / host guard: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS).

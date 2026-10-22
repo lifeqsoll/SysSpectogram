@@ -132,9 +132,21 @@ def _make_handler(app: WebAppState):
             data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
             self._send(code, data, "application/json; charset=utf-8", extra)
 
+        def _cors_origin(self) -> str | None:
+            """Only echo Origin when it matches configured public_url (no *)."""
+            if not app.public_url:
+                return None
+            origin = (self.headers.get("Origin") or "").rstrip("/")
+            if origin and origin == app.public_url.rstrip("/"):
+                return origin
+            return None
+
         def do_OPTIONS(self) -> None:  # noqa: N802
             self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            allow = self._cors_origin()
+            if allow:
+                self.send_header("Access-Control-Allow-Origin", allow)
+                self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Telegram-Init-Data")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.end_headers()
@@ -184,18 +196,27 @@ def _make_handler(app: WebAppState):
                     return self._json(403, {"ok": False, "error": "invalid initData"})
                 user = parsed.get("user") or {}
                 uid = str(user.get("id") or "")
-                allowed = app.allowed_chat_id
+                allowed = (app.allowed_chat_id or "").strip()
+                # Public Mini App must pin chat/user; empty allowlist was any valid initData.
+                if app.public_url and not allowed:
+                    return self._json(
+                        403,
+                        {"ok": False, "error": "allowed_chat_id required when public_url is set"},
+                    )
                 if allowed:
                     ok = uid == allowed or uid == allowed.lstrip("-")
                     if not ok:
                         return self._json(403, {"ok": False, "error": "chat not allowlisted"})
                 sess = app.issue_session()
-                secure = bool(app.public_url and str(app.public_url).startswith("https"))
-                cookie = (
-                    f"ss_session={sess}; Path=/; HttpOnly; "
-                    + ("SameSite=None; Secure" if secure else "SameSite=Lax")
-                )
-                return self._json(200, {"ok": True, "user": user}, extra={"Set-Cookie": cookie})
+                cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                if app.public_url and str(app.public_url).startswith("https"):
+                    cookie += "; Secure"
+                extra = {"Set-Cookie": cookie}
+                allow = self._cors_origin()
+                if allow:
+                    extra["Access-Control-Allow-Origin"] = allow
+                    extra["Vary"] = "Origin"
+                return self._json(200, {"ok": True, "user": user}, extra=extra)
 
             # Console unlock via Mini App / local UI (code never in .env)
             if path == "/api/unlock":
@@ -225,6 +246,11 @@ def _make_handler(app: WebAppState):
             if path == "/api/action":
                 if app.controllers is None:
                     return self._json(503, {"ok": False, "error": "actions not configured"})
+                # CSRF-ish: when public_url is set, Origin must match (or be absent for same-origin).
+                if app.public_url:
+                    origin = (self.headers.get("Origin") or "").rstrip("/")
+                    if origin and origin != app.public_url.rstrip("/"):
+                        return self._json(403, {"ok": False, "error": "bad origin"})
                 action = str(payload.get("action") or "")
                 data = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
                 # strip action key from payload copy

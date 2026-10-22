@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sysspectogram"
 version = "1.1.1"
-description = "Linux hybrid ML host IDS + perimeter + Rust agent + signed supply-chain runtime (v0.8)"
+description = "Self-hosted Linux VPS / host guard: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Salfetka" }]
+authors = [{ name = "lifeqsoll" }]
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",

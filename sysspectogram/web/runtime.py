@@ -66,7 +66,10 @@ def run_web_dashboard(
 
     bus.set_host(host_id, threshold, model_loaded=infer is not None)
 
-    nft = NftBackend()
+    resp_cfg = dict(config.get("response") or {})
+    nft = NftBackend(
+        never_ban_cidrs=[str(x) for x in (resp_cfg.get("never_ban_cidrs") or [])]
+    )
     # attach a perimeter watcher so allow/mute/lockdown work in standalone web mode
     from sysspectogram.config import ROOT
     from sysspectogram.perimeter.watcher import PerimeterWatcher

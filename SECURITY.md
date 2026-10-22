@@ -84,10 +84,10 @@ Defaults are intentionally cautious.
 
 ### Packaged install (AppImage / deb)
 
-- First-run **Install stack** downloads the **same-version** GitHub Release assets (wheel + musl agent), verifies **SHA-256** and **minisign** against a public key **embedded in the GUI**.
+- First-run **Install stack** downloads the **same-version** GitHub Release assets (wheel + musl agent). **SHA-256 is required** (`SHA256SUMS` + agent `.sha256`). If a `.minisig` is published for an asset, **minisign must succeed** (install `minisign`; soft-fail is not accepted).
 - No runtime `git clone` / `git pull` as the friend install path ([ADR 0005](docs/adr/0005-signed-bundle-not-git.md)).
 - Runtime data lives under `~/.local/share/sysspectogram` unless `SYSSPECTOGRAM_HOME` is set.
-- Details: [RELEASE_v1.1.0.md](docs/RELEASE_v1.1.0.md), [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).
+- Details: [RELEASE_v1.1.1.md](docs/RELEASE_v1.1.1.md), [FRIEND.md](docs/FRIEND.md), [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).
 
 ### Models and packs
 
@@ -144,4 +144,5 @@ Full write-up: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 | [ROOT_WATCH.md](docs/ROOT_WATCH.md) | Unexpected root |
 | [KIRK.md](docs/KIRK.md) | Integrity / isolate |
 | [CONTROL_CENTER.md](docs/CONTROL_CENTER.md) | Helper + polkit surface |
-| [RELEASE_v1.1.0.md](docs/RELEASE_v1.1.0.md) | Current release notes |
+| [RELEASE_v1.1.1.md](docs/RELEASE_v1.1.1.md) | Current release notes |
+| [FRIEND.md](docs/FRIEND.md) | Friend install path |

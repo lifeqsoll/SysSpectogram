@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 
 
@@ -21,12 +22,32 @@ class BanRecord:
 class NftBackend:
     """nft/iptables ban manager with handle-based unban and TTL."""
 
-    def __init__(self, table: str = "inet", chain: str = "sysspectogram") -> None:
+    def __init__(
+        self,
+        table: str = "inet",
+        chain: str = "sysspectogram",
+        *,
+        never_ban_cidrs: list[str] | None = None,
+    ) -> None:
         self.table = table
         self.chain = chain
         self.bans: dict[str, BanRecord] = {}
+        self.never_ban_cidrs: list[str] = list(never_ban_cidrs or [])
         self._kirk_expires: float | None = None
         self._ensure_chain()
+
+    def is_never_ban(self, ip: str) -> bool:
+        try:
+            addr = ip_address(str(ip).strip())
+        except ValueError:
+            return False
+        for cidr in self.never_ban_cidrs:
+            try:
+                if addr in ip_network(str(cidr).strip(), strict=False):
+                    return True
+            except ValueError:
+                continue
+        return False
 
     def _run(self, cmd: list[str]) -> tuple[int, str]:
         try:
@@ -69,6 +90,8 @@ class NftBackend:
         return None
 
     def ban_ip(self, ip: str, ttl_sec: float | None = 3600.0, dry_run: bool = False) -> str:
+        if self.is_never_ban(ip):
+            return f"never_ban skip {ip}"
         # replace existing
         if ip in self.bans and not dry_run:
             self.unban_ip(ip, dry_run=False)

@@ -6,6 +6,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -16,10 +17,20 @@ def post_webhook(
     timeout: float = 8.0,
     *,
     secret: str | None = None,
+    allow_private: bool = False,
 ) -> tuple[bool, str]:
     """Generic SIEM/webhook POST (JSON). Soft-fail. Optional HMAC-SHA256 signature."""
     if not url:
         return False, "no url"
+    if not allow_private:
+        try:
+            from sysspectogram.alerts.fanout import _sink_host_blocked
+
+            host = urllib.parse.urlparse(url).hostname or ""
+            if _sink_host_blocked(host):
+                return False, f"webhook host blocked (private/link-local): {host}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"webhook host check failed: {exc}"
     body = dict(payload)
     body.setdefault("ts", time.time())
     data = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")

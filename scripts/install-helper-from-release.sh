@@ -44,38 +44,56 @@ else:
     sys.exit("no helper binary on release " + os.environ.get("TAG", ""))
 ')"
 SUM_URL="$(REL_JSON="${JSON}" python3 -c '
-import json, os
+import json, os, sys
 rel = json.loads(os.environ["REL_JSON"])
 want = "sysspectogram-helper-x86_64-linux.sha256"
 for a in rel.get("assets") or []:
     if a.get("name") == want:
         print(a["browser_download_url"]); break
-' || true)"
+else:
+    sys.exit("no helper .sha256 on release")
+')"
+PACK_URL="$(REL_JSON="${JSON}" python3 -c '
+import json, os, sys
+rel = json.loads(os.environ["REL_JSON"])
+want = "sysspectogram-helper-packaging.tgz"
+for a in rel.get("assets") or []:
+    if a.get("name") == want:
+        print(a["browser_download_url"]); break
+else:
+    sys.exit("no helper-packaging.tgz on release (required; unsigned raw packaging refused)")
+')"
 
 BIN="${WORKDIR}/sysspectogram-helper"
-echo "==> download helper"
+echo "==> download helper + sha256 + packaging.tgz"
 curl -fsSL -H "User-Agent: ${UA}" -o "${BIN}" "${BIN_URL}"
 chmod +x "${BIN}"
-
-if [[ -n "${SUM_URL:-}" ]]; then
-  SUM_FILE="${WORKDIR}/helper.sha256"
-  curl -fsSL -H "User-Agent: ${UA}" -o "${SUM_FILE}" "${SUM_URL}"
-  EXP="$(awk '{print tolower($1)}' "${SUM_FILE}" | head -1)"
-  GOT="$(sha256sum "${BIN}" | awk '{print $1}')"
-  if [[ -n "${EXP}" && "${EXP}" != "${GOT}" ]]; then
-    echo "sha256 mismatch: ${GOT} != ${EXP}" >&2
-    exit 1
-  fi
-  echo "==> sha256 ok"
+SUM_FILE="${WORKDIR}/helper.sha256"
+curl -fsSL -H "User-Agent: ${UA}" -o "${SUM_FILE}" "${SUM_URL}"
+EXP="$(awk '{print tolower($1)}' "${SUM_FILE}" | head -1)"
+GOT="$(sha256sum "${BIN}" | awk '{print $1}')"
+if [[ -z "${EXP}" || "${EXP}" != "${GOT}" ]]; then
+  echo "sha256 mismatch: ${GOT} != ${EXP}" >&2
+  exit 1
 fi
+echo "==> sha256 ok"
 
-UNIT="${WORKDIR}/sysspectogram-helper.service"
-POLICY="${WORKDIR}/org.sysspectogram.helper.policy"
-SYSUSERS="${WORKDIR}/sysusers.conf"
-echo "==> packaging from ${RAW}"
-curl -fsSL -H "User-Agent: ${UA}" -o "${UNIT}" "${RAW}/packaging/helper/sysspectogram-helper.service"
-curl -fsSL -H "User-Agent: ${UA}" -o "${POLICY}" "${RAW}/packaging/polkit/org.sysspectogram.helper.policy"
-curl -fsSL -H "User-Agent: ${UA}" -o "${SYSUSERS}" "${RAW}/packaging/helper/sysusers.conf"
+PACK_TGZ="${WORKDIR}/sysspectogram-helper-packaging.tgz"
+curl -fsSL -H "User-Agent: ${UA}" -o "${PACK_TGZ}" "${PACK_URL}"
+tar -xzf "${PACK_TGZ}" -C "${WORKDIR}"
+UNIT="${WORKDIR}/packaging/helper/sysspectogram-helper.service"
+POLICY="${WORKDIR}/packaging/polkit/org.sysspectogram.helper.policy"
+SYSUSERS="${WORKDIR}/packaging/helper/sysusers.conf"
+# tarball may be flat or nested; fall back to extracted names
+[[ -f "${UNIT}" ]] || UNIT="$(find "${WORKDIR}" -name 'sysspectogram-helper.service' | head -1)"
+[[ -f "${POLICY}" ]] || POLICY="$(find "${WORKDIR}" -name 'org.sysspectogram.helper.policy' | head -1)"
+[[ -f "${SYSUSERS}" ]] || SYSUSERS="$(find "${WORKDIR}" -name 'sysusers.conf' | head -1)"
+if [[ ! -f "${UNIT}" || ! -f "${POLICY}" || ! -f "${SYSUSERS}" ]]; then
+  echo "packaging.tgz missing unit/policy/sysusers" >&2
+  exit 1
+fi
+# silence unused RAW when packaging comes from release asset
+: "${RAW}"
 
 install -d -m 0755 /etc/sysspectogram /opt/sysspectogram /var/lib/sysspectogram /usr/lib/sysspectogram
 install -Dm755 "${BIN}" /usr/lib/sysspectogram/sysspectogram-helper

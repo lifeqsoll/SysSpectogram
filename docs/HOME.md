@@ -6,14 +6,13 @@ The geek surface (schema settings, lab, scenarios, agent knobs) stays behind **A
 
 ## Day-0 (desktop app)
 
-**Friend path (recommended):** download AppImage or `.deb` from the matching [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → open → **Install stack v1.1.0** (signed wheel + agent into `~/.local/share/sysspectogram`) → onboarding → **Start protection**. Details: [RELEASE_v1.1.0.md](RELEASE_v1.1.0.md).
+**Friend path (recommended):** see **[FRIEND.md](FRIEND.md)** — AppImage/deb or headless one-liner for [v1.1.1](RELEASE_v1.1.1.md). Short version: download package → **Install stack** → onboarding (never-ban + Detect my IP) → finish enables **background protect**.
 
-**From a git checkout:**
+**From a git checkout (dev):**
 
-1. Optional helper: `sudo scripts/install-helper.sh` (polkit + systemd unit).
+1. Optional helper: `sudo scripts/install-helper.sh` or `install-helper-from-release.sh`.
 2. Open Control Center (`cd control-center && npm run tauri dev` or a release build).
-3. Complete the onboarding wizard (language, theme, role, protect mode, Telegram, ML skip).
-4. Use **Home → Start protection**. Guard runs in dry-run until you switch modes / unlock.
+3. Complete onboarding → **background protect** (systemd --user). Session “Start” also enables that unit.
 
 Defaults:
 
@@ -41,7 +40,7 @@ Also available under Advanced → Response (`response.never_ban_cidrs`), or:
 python -m sysspectogram home settings --changes '{"response.never_ban_cidrs":"203.0.113.10, 198.51.100.20/32"}'
 ```
 
-Screenshots and full 1.1.0 notes: [RELEASE_v1.1.0.md](RELEASE_v1.1.0.md).
+Screenshots: [RELEASE_v1.1.0.md](RELEASE_v1.1.0.md). Current notes: [RELEASE_v1.1.1.md](RELEASE_v1.1.1.md).
 
 ## Telegram
 
@@ -84,7 +83,7 @@ python -m sysspectogram home import-model /path/to/artifacts/real
 
 Restart the guard so it picks up `artifacts/live` (or `state/model.path`). Prefer ONNX (`runtime.prefer: onnx` / `pip install -e '.[onnx]'`).
 
-More detail: [TRAIN_BRIDGE.md](TRAIN_BRIDGE.md), [DAY0_VPS.md](DAY0_VPS.md).
+More detail: [FRIEND.md](FRIEND.md), [TRAIN_BRIDGE.md](TRAIN_BRIDGE.md). Geek git path: [DAY0_VPS.md](DAY0_VPS.md).
 
 ## Control socket
 

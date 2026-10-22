@@ -1,4 +1,6 @@
-# Day-0 — first VPS install
+# Day-0 — first VPS install (git / geek)
+
+> **Friends:** use **[FRIEND.md](FRIEND.md)** (AppImage or `friend-day0.sh`). This page is the **git clone** path for developers.
 
 Goal: useful observe-mode defense on a small Linux VPS in about **15 minutes**, without PyTorch.
 

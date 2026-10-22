@@ -1,7 +1,7 @@
 """Local Unix-socket control plane for SOAR actions (Control Center + tooling).
 
 Same WebControllers path as the web dashboard; unlock gate matches Telegram.
-Socket path: state/control.sock (mode 0660 when possible).
+Socket path: state/control.sock (mode 0600 when possible).
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class ControlSocketServer:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(str(self.path))
         try:
-            os.chmod(self.path, 0o660)
+            os.chmod(self.path, 0o600)
         except OSError:
             pass
         sock.listen(8)

@@ -169,8 +169,10 @@ class WebControllers:
             self.bus.lockdown = True
             return msg
         if action == "set_dry_run":
-            self.dry_run = bool(payload.get("dry_run", True))
-            return f"dry_run={self.dry_run}"
+            # Disallow flipping dry_run over the network after unlock (audit).
+            raise PermissionError(
+                "set_dry_run disabled remotely; restart guard with/without --dry-run"
+            )
         if action == "recon":
             ip = str(payload.get("ip") or "")
             if not ip:

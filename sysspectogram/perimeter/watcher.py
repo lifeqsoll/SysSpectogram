@@ -103,6 +103,7 @@ class PerimeterWatcher:
         nft: Any | None = None,
         auto_ban_rules: set[str] | None = None,
         auto_ban_ttl_sec: float | None = 3600.0,
+        dry_run: bool = False,
     ) -> None:
         self.host_id = host_id or socket.gethostname()
         self.state_path = state_path or Path("state/perimeter.json")
@@ -120,6 +121,7 @@ class PerimeterWatcher:
         self.nft = nft
         self.auto_ban_rules = set(auto_ban_rules or set())
         self.auto_ban_ttl_sec = auto_ban_ttl_sec
+        self.dry_run = bool(dry_run)
         self.suspicious_domains = {d.lower() for d in (suspicious_domains or set())}
         self._recon_last: dict[str, float] = {}
         self._lockdown_seen: dict[str, float] = {}
@@ -301,7 +303,11 @@ class PerimeterWatcher:
                     emitted.append(a)
                     if self.nft is not None and r.remote_ip:
                         try:
-                            self.nft.ban_ip(r.remote_ip, ttl_sec=self.auto_ban_ttl_sec)
+                            self.nft.ban_ip(
+                                r.remote_ip,
+                                ttl_sec=self.auto_ban_ttl_sec,
+                                dry_run=self.dry_run,
+                            )
                         except Exception as exc:
                             console.print(f"[yellow]lockdown ban[/] {exc}")
                 continue

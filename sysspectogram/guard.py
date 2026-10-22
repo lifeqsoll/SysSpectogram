@@ -286,7 +286,10 @@ def run_guard(
             "ephemeral HMAC secret for this process only"
         )
     tokens = TokenStore(secret=tg_cfg.get("token_secret"))
-    nft = NftBackend()
+    resp_cfg_early = dict(config.get("response") or {})
+    nft = NftBackend(
+        never_ban_cidrs=[str(x) for x in (resp_cfg_early.get("never_ban_cidrs") or [])]
+    )
 
     kirk_cfg = dict(config.get("kirk") or {})
     kirk_enabled = bool(kirk_cfg.get("enabled", False))
@@ -513,6 +516,7 @@ def run_guard(
         nft=nft,
         auto_ban_rules=auto_ban_rules,
         auto_ban_ttl_sec=auto_ban_ttl,
+        dry_run=bool(dry_run_actions),
     )
 
     bot = None

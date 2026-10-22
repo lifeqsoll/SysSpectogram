@@ -152,19 +152,23 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
     download(&wheel_url, &wheel_path)?;
     log.push(json!({"step": "download_wheel", "ok": true, "file": wheel_name}));
 
-    // Optional sha256sums file
-    if let Ok(sums_url) = asset_url(&release, "SHA256SUMS") {
-        let sums_path = cache.join("SHA256SUMS");
-        download(&sums_url, &sums_path)?;
-        if let Ok(text) = fs::read_to_string(&sums_path) {
-            for line in text.lines() {
-                if line.contains(&wheel_name) {
-                    verify_sha256(&wheel_path, line)?;
-                    log.push(json!({"step": "sha256_wheel", "ok": true}));
-                    break;
-                }
-            }
+    // Require SHA256SUMS + matching wheel line (hard-fail).
+    let sums_url = asset_url(&release, "SHA256SUMS")
+        .map_err(|_| "release missing SHA256SUMS (required)".to_string())?;
+    let sums_path = cache.join("SHA256SUMS");
+    download(&sums_url, &sums_path)?;
+    let sums_text = fs::read_to_string(&sums_path).map_err(|e| e.to_string())?;
+    let mut wheel_hashed = false;
+    for line in sums_text.lines() {
+        if line.contains(&wheel_name) {
+            verify_sha256(&wheel_path, line)?;
+            log.push(json!({"step": "sha256_wheel", "ok": true}));
+            wheel_hashed = true;
+            break;
         }
+    }
+    if !wheel_hashed {
+        return Err(format!("SHA256SUMS has no entry for {wheel_name}"));
     }
 
     // Agent musl binary
@@ -173,13 +177,13 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
     download(&agent_url, &agent_path)?;
     log.push(json!({"step": "download_agent", "ok": true}));
 
-    if let Ok(sum_url) = asset_url(&release, "sysspectogram-agent-x86_64-linux-musl.sha256") {
-        let sum_path = cache.join("agent.sha256");
-        download(&sum_url, &sum_path)?;
-        let line = fs::read_to_string(&sum_path).unwrap_or_default();
-        verify_sha256(&agent_path, &line)?;
-        log.push(json!({"step": "sha256_agent", "ok": true}));
-    }
+    let sum_url = asset_url(&release, "sysspectogram-agent-x86_64-linux-musl.sha256")
+        .map_err(|_| "release missing agent .sha256 (required)".to_string())?;
+    let sum_path = cache.join("agent.sha256");
+    download(&sum_url, &sum_path)?;
+    let line = fs::read_to_string(&sum_path).unwrap_or_default();
+    verify_sha256(&agent_path, &line)?;
+    log.push(json!({"step": "sha256_agent", "ok": true}));
 
     // Embedded minisign pubkey (ADR 0005); never trust a key from the release alone.
     let pub_path = cache.join("SysSpectogram.minisign.pub");
@@ -188,26 +192,19 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
         include_str!("../keys/SysSpectogram.minisign.pub"),
     )
     .map_err(|e| e.to_string())?;
+    // If .minisig is published, verification is mandatory (install minisign if needed).
     if let Ok(sig_url) = asset_url(&release, "sysspectogram-agent-x86_64-linux-musl.minisig") {
         let sig_path = cache.join("agent.minisig");
         download(&sig_url, &sig_path)?;
-        match try_minisign(&pub_path, &agent_path, &sig_path) {
-            Ok(()) => log.push(json!({"step": "minisign_agent", "ok": true})),
-            Err(e) => {
-                // sha256 already checked when present; missing minisign binary must not block friends
-                log.push(json!({"step": "minisign_agent", "ok": false, "detail": e}));
-            }
-        }
+        try_minisign(&pub_path, &agent_path, &sig_path)?;
+        log.push(json!({"step": "minisign_agent", "ok": true}));
     }
-    // Wheel signature when published
     let wheel_sig_name = format!("{wheel_name}.minisig");
     if let Ok(sig_url) = asset_url(&release, &wheel_sig_name) {
         let sig_path = cache.join("wheel.minisig");
         download(&sig_url, &sig_path)?;
-        match try_minisign(&pub_path, &wheel_path, &sig_path) {
-            Ok(()) => log.push(json!({"step": "minisign_wheel", "ok": true})),
-            Err(e) => log.push(json!({"step": "minisign_wheel", "ok": false, "detail": e})),
-        }
+        try_minisign(&pub_path, &wheel_path, &sig_path)?;
+        log.push(json!({"step": "minisign_wheel", "ok": true}));
     }
 
     // venv + pip install wheel (no heavy torch)
@@ -238,20 +235,16 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
     }
     log.push(json!({"step": "pip_install", "ok": true}));
 
-    // Seed configs from the GitHub tag tree when missing (wheel has no configs/).
+    // Do not pull unsigned configs from raw.githubusercontent (supply-chain).
+    // Wheel / package data must ship defaults; friend can copy from the release tarball.
     let cfg = root.join("configs");
     fs::create_dir_all(&cfg).ok();
     if !cfg.join("default.yaml").is_file() {
-        let repo = github_repo();
-        let base = format!("https://raw.githubusercontent.com/{repo}/{tag}/configs");
-        for name in ["default.yaml", "schema.yaml"] {
-            let url = format!("{base}/{name}");
-            let dest = cfg.join(name);
-            match download(&url, &dest) {
-                Ok(()) => log.push(json!({"step": format!("config_{name}"), "ok": true})),
-                Err(e) => log.push(json!({"step": format!("config_{name}"), "ok": false, "detail": e})),
-            }
-        }
+        log.push(json!({
+            "step": "config_default.yaml",
+            "ok": false,
+            "detail": "missing configs/default.yaml after wheel install; unpack from release .tar.gz"
+        }));
     }
 
     // Install agent binary into home bin/
