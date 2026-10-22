@@ -29,14 +29,11 @@ def test_https_sink_posts():
         (0, 0, 0, "", ("93.184.216.34", 0)),
     ]
     with patch("sysspectogram.alerts.fanout.socket.getaddrinfo", return_value=public):
-        with patch("urllib.request.urlopen") as urlopen:
-            resp = MagicMock()
-            resp.read.return_value = b"ok"
-            resp.__enter__.return_value = resp
-            resp.__exit__.return_value = False
-            urlopen.return_value = resp
+        with patch(
+            "sysspectogram.net_safe.post_json_pinned", return_value=(200, b"ok")
+        ) as post:
             fan.emit({"type": "probe"})
-            assert urlopen.called
+            assert post.called
 
 
 def test_https_ssrf_blocked():
@@ -58,9 +55,9 @@ def test_https_ssrf_hostname_dns_blocked():
         (0, 0, 0, "", ("169.254.169.254", 0)),
     ]
     with patch("sysspectogram.alerts.fanout.socket.getaddrinfo", return_value=link_local):
-        with patch("urllib.request.urlopen") as urlopen:
+        with patch("sysspectogram.net_safe.post_json_pinned") as post:
             fan.emit({"type": "probe"})
-            assert not urlopen.called
+            assert not post.called
 
 
 def test_https_inline_token_strict():
