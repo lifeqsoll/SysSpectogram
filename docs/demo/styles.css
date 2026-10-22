@@ -69,40 +69,9 @@ body {
   text-align: left;
 }
 
-.hero-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem 1.25rem;
-  margin-bottom: 1.25rem;
-}
-
-.lang-toggle {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-  margin-left: auto;
-}
-
-.lang-btn {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  padding: 0.35rem 0.65rem;
-  border: 0;
-  background: transparent;
-  color: var(--ink-soft);
-  cursor: pointer;
-}
-
-.lang-btn.active {
-  background: var(--teal);
-  color: #f4f7f4;
-}
-
 .sim-badge {
   display: inline-block;
-  margin: 0;
+  margin: 0 0 1.25rem;
   padding: 0.35rem 0.7rem;
   border: 1px solid var(--amber);
   color: var(--amber);
