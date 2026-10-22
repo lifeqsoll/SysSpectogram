@@ -29,9 +29,70 @@
     });
   }
 
+  const I18N = {
+    en: {
+      liveBadge: "Host guard · live metrics",
+      settings: "Settings",
+      actionsTitle: "Actions (SOAR)",
+      cpu: "CPU %",
+      mem: "Mem %",
+      net: "Net packets/s",
+      heatTitle: "Spectrogram window (live)",
+      alertTitle: "Alert feed",
+      procs: "Top processes",
+      refresh: "Refresh",
+      bans: "Bans / allowlist",
+      unlockHint:
+        "SOAR actions need /unlock (TG) or this code when control is LOCKED. Stolen bot token alone is not enough.",
+      close: "Close",
+      unlock: "Unlock",
+      save: "Save",
+      confirm: "Confirm",
+      cancel: "Cancel",
+      yes: "Yes",
+      authNote: "Auth: local loopback allowed · Telegram Mini App uses initData (only TELEGRAM_CHAT_ID)",
+    },
+    ru: {
+      liveBadge: "Защита хоста · живые метрики",
+      settings: "Настройки",
+      actionsTitle: "Действия (SOAR)",
+      cpu: "CPU %",
+      mem: "Mem %",
+      net: "Сеть pkt/s",
+      heatTitle: "Окно спектрограммы (live)",
+      alertTitle: "Лента алертов",
+      procs: "Топ процессов",
+      refresh: "Обновить",
+      bans: "Баны / allowlist",
+      unlockHint:
+        "SOAR нужен /unlock (TG) или код, когда control LOCKED. Одного bot token недостаточно.",
+      close: "Закрыть",
+      unlock: "Unlock",
+      save: "Сохранить",
+      confirm: "Подтвердить",
+      cancel: "Отмена",
+      yes: "Да",
+      authNote: "Auth: localhost · Mini App — initData (только TELEGRAM_CHAT_ID)",
+    },
+  };
+  let lang = localStorage.getItem("ss_lang") === "ru" ? "ru" : "en";
+
+  function applyI18n() {
+    const pack = I18N[lang] || I18N.en;
+    document.documentElement.lang = lang;
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+      const key = el.getAttribute("data-i18n");
+      if (pack[key]) el.textContent = pack[key];
+    });
+    document.querySelectorAll(".lang-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.lang === lang);
+    });
+  }
+
   function themeInit() {
     const saved = localStorage.getItem("ss_theme");
-    const theme = saved || "dark";
+    // Telegram WebView → dark; desktop browser → light (matches Pages demo).
+    const theme = saved || (tg ? "dark" : "light");
     document.documentElement.setAttribute("data-theme", theme);
     applyTgChrome(theme);
     const btn = document.getElementById("theme-toggle");
@@ -44,6 +105,14 @@
       applyTgChrome(next);
       refreshChartTheme();
     });
+    document.querySelectorAll(".lang-btn").forEach((btnLang) => {
+      btnLang.addEventListener("click", () => {
+        lang = btnLang.dataset.lang === "ru" ? "ru" : "en";
+        localStorage.setItem("ss_lang", lang);
+        applyI18n();
+      });
+    });
+    applyI18n();
   }
 
   function chartColor(varName, fallback) {
@@ -281,6 +350,29 @@
     const anom = !!snap.is_anomaly;
     document.getElementById("score-val").style.color = anom ? "var(--crit)" : "inherit";
     document.getElementById("status-dot").classList.toggle("warn", anom);
+    const pillMode = document.getElementById("pill-mode");
+    const pillLock = document.getElementById("pill-lock");
+    const pillNever = document.getElementById("pill-never");
+    const pillProtect = document.getElementById("pill-protect");
+    if (pillMode) {
+      pillMode.textContent = `mode: ${snap.response_mode || snap.mode || "—"}`;
+      pillMode.className = "pill " + (snap.response_mode === "observe" ? "muted" : "ok");
+    }
+    if (pillLock) {
+      const locked = snap.control_unlocked === false;
+      pillLock.textContent = locked ? "control: LOCKED" : "control: unlocked";
+      pillLock.className = "pill " + (locked ? "crit" : "ok");
+    }
+    if (pillNever) {
+      const n = (snap.allowlist || []).length;
+      pillNever.textContent = n ? `allowlist: ${n}` : "never-ban / allow: —";
+      pillNever.className = "pill " + (n ? "ok" : "muted");
+    }
+    if (pillProtect) {
+      const ld = !!snap.lockdown;
+      pillProtect.textContent = ld ? "lockdown: on" : "lockdown: off";
+      pillProtect.className = "pill " + (ld ? "warn" : "muted");
+    }
     updateCharts(snap);
     drawHeatmap(snap);
     renderAlerts(snap.alerts || []);

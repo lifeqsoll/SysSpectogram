@@ -5,10 +5,9 @@ import hmac
 import json
 import os
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
+
+from sysspectogram.net_safe import post_json_pinned, resolve_public_host
 
 
 def post_webhook(
@@ -19,16 +18,18 @@ def post_webhook(
     secret: str | None = None,
     allow_private: bool = False,
 ) -> tuple[bool, str]:
-    """Generic SIEM/webhook POST (JSON). Soft-fail. Optional HMAC-SHA256 signature."""
+    """Generic SIEM/webhook POST (JSON). Soft-fail. Optional HMAC-SHA256 signature.
+
+    Resolves host once and connects to the pinned IP (SSRF TOCTOU mitigation).
+    """
     if not url:
         return False, "no url"
     if not allow_private:
         try:
-            from sysspectogram.alerts.fanout import _sink_host_blocked
+            import urllib.parse
 
             host = urllib.parse.urlparse(url).hostname or ""
-            if _sink_host_blocked(host):
-                return False, f"webhook host blocked (private/link-local): {host}"
+            resolve_public_host(host, allow_private=False)
         except Exception as exc:  # noqa: BLE001
             return False, f"webhook host check failed: {exc}"
     body = dict(payload)
@@ -42,9 +43,16 @@ def post_webhook(
     if sec:
         sig = hmac.new(sec.encode("utf-8"), data, hashlib.sha256).hexdigest()
         headers["X-SysSpectogram-Signature"] = f"sha256={sig}"
-    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return True, f"status={resp.status}"
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        status, _ = post_json_pinned(
+            url,
+            data,
+            headers,
+            timeout=timeout,
+            allow_private=allow_private,
+        )
+        if 200 <= status < 300:
+            return True, f"status={status}"
+        return False, f"status={status}"
+    except Exception as exc:  # noqa: BLE001
         return False, str(exc)

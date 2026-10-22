@@ -1117,8 +1117,12 @@ class TelegramBot:
             return "report sent"
         if action == "lockdown":
             if self.watcher:
-                return self.watcher.apply_lockdown(dry_run=self.dry_run)
-            return self.nft.apply_lockdown(dry_run=self.dry_run)
+                allows = list(getattr(self.nft, "never_ban_cidrs", None) or [])
+                return self.watcher.apply_lockdown(
+                    dry_run=self.dry_run, allow_cidrs=allows
+                )
+            allows = list(getattr(self.nft, "never_ban_cidrs", None) or [])
+            return self.nft.apply_lockdown(dry_run=self.dry_run, allow_cidrs=allows)
         if action == "kirk_release":
             msg = self.nft.kirk_release(dry_run=self.dry_run)
             if self.kirk_status is not None:

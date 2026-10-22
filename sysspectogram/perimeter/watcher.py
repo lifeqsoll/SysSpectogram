@@ -257,11 +257,24 @@ class PerimeterWatcher:
     ) -> str:
         self.state.lockdown = True
         self.state.quiet = False
+        # Sync never-ban / allow_cidrs into perimeter allowlist so inbound alerts skip admins.
+        allows = list(allow_cidrs or [])
+        if self.nft is not None and not allows:
+            allows = list(getattr(self.nft, "never_ban_cidrs", None) or [])
+        for cidr in allows:
+            s = str(cidr).strip()
+            if not s:
+                continue
+            # Exact IPs and /32 → allowlist host; broader CIDRs kept on nft only.
+            if "/" not in s or s.endswith("/32"):
+                ip = s.split("/", 1)[0]
+                self.engine.allowlist.add(ip)
+                self.state.allowlist.add(ip)
         self.persist()
         if self.nft is not None:
             try:
                 return str(
-                    self.nft.apply_lockdown(dry_run=dry_run, allow_cidrs=allow_cidrs)
+                    self.nft.apply_lockdown(dry_run=dry_run, allow_cidrs=allows or None)
                 )
             except Exception as exc:
                 return f"lockdown flag set; nft failed: {exc}"
@@ -294,7 +307,13 @@ class PerimeterWatcher:
             if key in inbound_seen_tick:
                 continue
             inbound_seen_tick.add(key)
-            if self.state.lockdown and r.remote_ip not in self.engine.allowlist:
+            never_ok = False
+            if self.nft is not None and r.remote_ip:
+                try:
+                    never_ok = bool(self.nft.is_never_ban(r.remote_ip))
+                except Exception:
+                    never_ok = False
+            if self.state.lockdown and r.remote_ip not in self.engine.allowlist and not never_ok:
                 now = time.time()
                 last = self._lockdown_seen.get(r.remote_ip, 0.0)
                 if now - last >= 60.0:

@@ -65,7 +65,7 @@ telegram:
   token_secret: null
   allow_destructive_sims: false
   require_console_unlock: true
-  unlock_ttl_sec: 7200
+  unlock_ttl_sec: 900
   health_ping_hours: 0
 web:
   enabled: false
@@ -177,6 +177,8 @@ role: generic-linux
 model:
   path: artifacts
 supply_chain:
+  # false = unsigned lab OK; if artifacts.manifest.json.minisig exists, verify is still mandatory.
+  # Friend day0 / CC bootstrap always require minisign on release assets.
   enforce: false
   public_key: null
   manifest_name: artifacts.manifest.json

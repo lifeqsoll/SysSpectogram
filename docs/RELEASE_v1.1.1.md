@@ -27,14 +27,14 @@ Same-version rule (ADR 0005): GUI, wheel, and agent must match this tag.
 ## Headless VPS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/friend-day0.sh | bash -s -- v1.1.1
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/friend-day0.sh | bash -s -- v1.1.1
 loginctl enable-linger $USER
 ```
 
 Optional helper:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
 ```
 
 Then: `python -m sysspectogram menu`. Details: [FRIEND.md](FRIEND.md).

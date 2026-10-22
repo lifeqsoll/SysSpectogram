@@ -133,24 +133,14 @@ def test_temporal_val_split(tmp_path: Path):
 def test_webhook_hmac_header(monkeypatch):
     captured = {}
 
-    class FakeResp:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def fake_urlopen(req, timeout=8.0):
-        captured["headers"] = dict(req.headers)
-        captured["data"] = req.data
-        return FakeResp()
+    def fake_post(url, data, headers, *, timeout=8.0, allow_private=False):
+        captured["headers"] = dict(headers)
+        captured["data"] = data
+        return 200, b"ok"
 
     monkeypatch.setattr(
-        "sysspectogram.integrations.webhook.urllib.request.urlopen", fake_urlopen
+        "sysspectogram.integrations.webhook.post_json_pinned", fake_post
     )
-    # allow_private: skip DNS/SSRF host check — this test only asserts HMAC header shape.
     ok, err = post_webhook(
         "http://example.test/hook",
         {"a": 1},

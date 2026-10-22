@@ -185,10 +185,15 @@ class AlertFanout:
                 )
             headers["Authorization"] = f"Bearer {sink['token']}"
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         timeout = float(sink.get("timeout", 5))
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp.read(64)
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"https sink HTTP {exc.code}") from exc
+        from sysspectogram.net_safe import post_json_pinned
+
+        status, _ = post_json_pinned(
+            url,
+            data,
+            headers,
+            timeout=timeout,
+            allow_private=bool(self.allow_private_sinks),
+        )
+        if status >= 400:
+            raise RuntimeError(f"https sink HTTP {status}")

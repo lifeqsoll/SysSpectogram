@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Install privileged helper from a GitHub Release (no local git / cargo).
 #
-# Friend one-liner:
-#   curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.0
+# Friend one-liner (pinned tag — never main):
+#   curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
 #
 # Or after download:
-#   sudo bash install-helper-from-release.sh v1.1.0
+#   sudo bash install-helper-from-release.sh v1.1.1
 #
 # Env: SYSSPECTOGRAM_GITHUB_REPO (default lifeqsoll/SysSpectogram)
 set -euo pipefail
 
-TAG="${1:-v1.1.0}"
+TAG="${1:-v1.1.1}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
 REPO="${SYSSPECTOGRAM_GITHUB_REPO:-lifeqsoll/SysSpectogram}"
 UA="SysSpectogram-HelperInstall/1.1"

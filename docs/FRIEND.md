@@ -17,12 +17,14 @@ Update later: Settings → **Update stack from GitHub**, or re-run Install stack
 ## Headless VPS (SSH) — day-0 one-liner
 
 ```bash
-# python3 + python3-venv + curl
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/friend-day0.sh | bash -s -- v1.1.1
+# python3 + python3-venv + curl + minisign  (use the *tag*, never main)
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/friend-day0.sh | bash -s -- v1.1.1
 
 # once per user (otherwise user systemd dies on logout):
 loginctl enable-linger $USER
 ```
+
+Day-0 verifies **SHA-256 and minisign** (embedded pubkey, same as Control Center). Missing `.minisig` on the release → install refuses.
 
 This downloads the release wheel into `~/.local/share/sysspectogram`, creates a venv, installs, then opens `python -m sysspectogram menu`.
 
@@ -50,7 +52,7 @@ python -m sysspectogram home update --tag v1.1.1
 ## Privileged helper (optional, no git)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/main/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
 ```
 
 Or from Control Center Settings (pkexec). Downloads `sysspectogram-helper-x86_64-linux` + unit/polkit from the tag.

@@ -562,6 +562,98 @@ dialog::backdrop {
   color: var(--ink-soft);
 }
 
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.lang-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.lang-btn {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.4rem 0.55rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.lang-btn.active {
+  background: var(--teal);
+  color: #f4f7f4;
+}
+
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0 0 1rem;
+}
+
+.pill {
+  font-size: 0.72rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink-soft);
+}
+
+.pill.ok {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.pill.warn {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.pill.crit {
+  border-color: var(--crit);
+  color: var(--crit);
+}
+
+.pill.muted {
+  opacity: 0.85;
+}
+
+.controls-wrap {
+  margin: 0 0 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  padding: 0.35rem 0.75rem 0.75rem;
+}
+
+.controls-wrap > summary {
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 600;
+  padding: 0.55rem 0.15rem;
+  list-style: none;
+}
+
+.controls-wrap > summary::-webkit-details-marker {
+  display: none;
+}
+
+.controls-wrap .controls {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+}
+
 @media (max-width: 700px) {
   body {
     font-size: 15px;

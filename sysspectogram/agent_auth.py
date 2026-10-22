@@ -69,7 +69,12 @@ def sign(secret: str, obj: dict[str, Any]) -> str:
     return dig
 
 
-def verify(secret: str, obj: dict[str, Any], *, max_skew_sec: float = 120.0) -> bool:
+# Recent nonces for critical alerts (optional field). Process-local anti-replay.
+_SEEN_NONCES: dict[str, float] = {}
+_NONCE_MAX = 4096
+
+
+def verify(secret: str, obj: dict[str, Any], *, max_skew_sec: float = 60.0) -> bool:
     got = str(obj.get("hmac") or "").strip().lower()
     if not got or len(got) != 64:
         return False
@@ -79,8 +84,20 @@ def verify(secret: str, obj: dict[str, Any], *, max_skew_sec: float = 120.0) -> 
         return False
     import time
 
-    if abs(time.time() - ts) > max_skew_sec:
+    now = time.time()
+    if abs(now - ts) > max_skew_sec:
         return False
+    nonce = str(obj.get("nonce") or "").strip()
+    if nonce:
+        # Drop expired entries occasionally
+        if len(_SEEN_NONCES) > _NONCE_MAX:
+            cutoff = now - max_skew_sec * 2
+            for k, t in list(_SEEN_NONCES.items()):
+                if t < cutoff:
+                    _SEEN_NONCES.pop(k, None)
+        if nonce in _SEEN_NONCES:
+            return False
+        _SEEN_NONCES[nonce] = now
     expect = sign(secret, obj)
     return hmac.compare_digest(expect, got)
 

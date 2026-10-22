@@ -163,9 +163,12 @@ class WebControllers:
             self.bus.quiet = on
             return f"quiet={'on' if on else 'off'}"
         if action == "lockdown":
+            allows = list(getattr(self.nft, "never_ban_cidrs", None) or [])
             if self.watcher:
-                return self.watcher.apply_lockdown(dry_run=self.dry_run)
-            msg = self.nft.apply_lockdown(dry_run=self.dry_run)
+                return self.watcher.apply_lockdown(
+                    dry_run=self.dry_run, allow_cidrs=allows
+                )
+            msg = self.nft.apply_lockdown(dry_run=self.dry_run, allow_cidrs=allows)
             self.bus.lockdown = True
             return msg
         if action == "set_dry_run":

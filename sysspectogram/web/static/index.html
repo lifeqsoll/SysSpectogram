@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#0e1613" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f4f7f4" />
   <title>SysSpectogram Live</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -21,11 +21,15 @@
   <header class="topbar">
     <div>
       <h1 class="brand">SysSpectogram</h1>
-      <p class="live-badge" id="live-badge">Host guard · live metrics</p>
+      <p class="live-badge" id="live-badge" data-i18n="liveBadge">Host guard · live metrics</p>
     </div>
     <div class="topbar-actions">
-      <button type="button" class="theme-btn" id="btn-settings">Settings</button>
-      <button type="button" class="theme-btn" id="theme-toggle" aria-label="Toggle theme">Light</button>
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" class="lang-btn active" data-lang="en">EN</button>
+        <button type="button" class="lang-btn" data-lang="ru">RU</button>
+      </div>
+      <button type="button" class="theme-btn" id="btn-settings" data-i18n="settings">Settings</button>
+      <button type="button" class="theme-btn" id="theme-toggle" aria-label="Toggle theme">Dark</button>
     </div>
   </header>
 
@@ -39,90 +43,99 @@
       <p class="pattern" id="pattern-label">—</p>
     </div>
 
-    <section class="controls" aria-label="Response actions">
-      <h3>Actions (same as Telegram)</h3>
-      <div class="ctrl-row">
-        <input id="ip-input" type="text" placeholder="IP e.g. 203.0.113.10" />
-        <button type="button" data-act="ban" data-ttl="3600">Ban 1h</button>
-        <button type="button" data-act="ban" data-ttl="86400">Ban 24h</button>
-        <button type="button" data-act="ban" data-ttl="perm">Ban perm</button>
-        <button type="button" data-act="unban">Unban</button>
-        <button type="button" data-act="allow">Allow</button>
-        <button type="button" data-act="mute" data-ttl="3600">Mute 1h</button>
-        <button type="button" data-act="recon">OSINT recon</button>
-      </div>
-      <div class="ctrl-row">
-        <button type="button" data-act="quiet" data-on="true">Quiet on</button>
-        <button type="button" data-act="quiet" data-on="false">Quiet off</button>
-        <button type="button" data-act="lockdown" class="danger">Lockdown</button>
-        <input id="port-input" type="number" placeholder="port" min="1" max="65535" />
-        <button type="button" data-act="shield">Shield port</button>
-        <input id="pid-input" type="number" placeholder="pid" min="1" />
-        <button type="button" data-act="kill" class="danger">Kill PID</button>
-      </div>
-      <p class="action-msg" id="action-msg"></p>
-    </section>
+    <div class="status-strip" id="status-strip" aria-label="Status">
+      <span class="pill muted" id="pill-mode">mode: —</span>
+      <span class="pill muted" id="pill-protect">protect: —</span>
+      <span class="pill muted" id="pill-never">never-ban: —</span>
+      <span class="pill muted" id="pill-lock">control: —</span>
+    </div>
+
+    <details class="controls-wrap" id="actions-wrap">
+      <summary data-i18n="actionsTitle">Actions (SOAR)</summary>
+      <section class="controls" aria-label="Response actions">
+        <div class="ctrl-row">
+          <input id="ip-input" type="text" placeholder="IP e.g. 203.0.113.10" />
+          <button type="button" data-act="ban" data-ttl="3600">Ban 1h</button>
+          <button type="button" data-act="ban" data-ttl="86400">Ban 24h</button>
+          <button type="button" data-act="ban" data-ttl="perm">Ban perm</button>
+          <button type="button" data-act="unban">Unban</button>
+          <button type="button" data-act="allow">Allow</button>
+          <button type="button" data-act="mute" data-ttl="3600">Mute 1h</button>
+          <button type="button" data-act="recon">OSINT recon</button>
+        </div>
+        <div class="ctrl-row">
+          <button type="button" data-act="quiet" data-on="true">Quiet on</button>
+          <button type="button" data-act="quiet" data-on="false">Quiet off</button>
+          <button type="button" data-act="lockdown" class="danger">Lockdown</button>
+          <input id="port-input" type="number" placeholder="port" min="1" max="65535" />
+          <button type="button" data-act="shield">Shield port</button>
+          <input id="pid-input" type="number" placeholder="pid" min="1" />
+          <button type="button" data-act="kill" class="danger">Kill PID</button>
+        </div>
+        <p class="action-msg" id="action-msg"></p>
+      </section>
+    </details>
 
     <div class="charts">
-      <div class="chart-block"><h3>CPU %</h3><canvas id="chart-cpu" height="120"></canvas></div>
-      <div class="chart-block"><h3>Mem %</h3><canvas id="chart-mem" height="120"></canvas></div>
-      <div class="chart-block"><h3>Net packets/s</h3><canvas id="chart-net" height="120"></canvas></div>
+      <div class="chart-block"><h3 data-i18n="cpu">CPU %</h3><canvas id="chart-cpu" height="120"></canvas></div>
+      <div class="chart-block"><h3 data-i18n="mem">Mem %</h3><canvas id="chart-mem" height="120"></canvas></div>
+      <div class="chart-block"><h3 data-i18n="net">Net packets/s</h3><canvas id="chart-net" height="120"></canvas></div>
     </div>
 
     <div class="viz-row">
       <div class="heatmap-wrap">
-        <h3>Spectrogram window (live)</h3>
+        <h3 data-i18n="heatTitle">Spectrogram window (live)</h3>
         <canvas id="heatmap" width="640" height="200"></canvas>
       </div>
       <div class="alerts-wrap">
-        <h3>Alert feed</h3>
+        <h3 data-i18n="alertTitle">Alert feed</h3>
         <div class="alerts" id="alerts"></div>
       </div>
     </div>
 
     <section class="status-panel">
       <div class="panel-head">
-        <h3>Top processes</h3>
-        <button type="button" class="theme-btn" id="btn-refresh-procs">Refresh</button>
+        <h3 data-i18n="procs">Top processes</h3>
+        <button type="button" class="theme-btn" id="btn-refresh-procs" data-i18n="refresh">Refresh</button>
       </div>
       <div id="procs-box" class="procs-box"></div>
     </section>
 
     <section class="status-panel">
-      <h3>Bans / allowlist</h3>
+      <h3 data-i18n="bans">Bans / allowlist</h3>
       <pre id="bans-box" class="code-box">—</pre>
     </section>
   </main>
 
   <dialog id="settings-dlg">
     <form method="dialog" class="settings-form">
-      <h3>Settings</h3>
+      <h3 data-i18n="settings">Settings</h3>
       <label class="check"><input type="checkbox" id="set-dry" /> dry_run (no real nft/kill)</label>
-      <label>Unlock code (from host console)
+      <label data-i18n-label="unlockLabel">Unlock code (from host console)
         <input type="text" id="set-unlock" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="off" />
       </label>
-      <p class="hint">SOAR actions need /unlock (TG) or this code when control is LOCKED. Stolen bot token alone is not enough.</p>
+      <p class="hint" data-i18n="unlockHint">SOAR actions need /unlock (TG) or this code when control is LOCKED. Stolen bot token alone is not enough.</p>
       <div class="dlg-actions">
-        <button type="submit" value="cancel" class="theme-btn">Close</button>
-        <button type="button" id="set-unlock-btn" class="theme-btn">Unlock</button>
-        <button type="button" id="set-save" class="theme-btn primary">Save</button>
+        <button type="submit" value="cancel" class="theme-btn" data-i18n="close">Close</button>
+        <button type="button" id="set-unlock-btn" class="theme-btn" data-i18n="unlock">Unlock</button>
+        <button type="button" id="set-save" class="theme-btn primary" data-i18n="save">Save</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="confirm-dlg">
     <form method="dialog" class="settings-form">
-      <h3>Confirm</h3>
+      <h3 data-i18n="confirm">Confirm</h3>
       <p id="confirm-text"></p>
       <div class="dlg-actions">
-        <button type="submit" value="cancel" class="theme-btn">Cancel</button>
-        <button type="button" id="confirm-ok" class="theme-btn danger">Yes</button>
+        <button type="submit" value="cancel" class="theme-btn" data-i18n="cancel">Cancel</button>
+        <button type="button" id="confirm-ok" class="theme-btn danger" data-i18n="yes">Yes</button>
       </div>
     </form>
   </dialog>
 
   <footer class="footer">
-    <p id="auth-note">Auth: local loopback allowed · Telegram Mini App uses initData (only TELEGRAM_CHAT_ID)</p>
+    <p id="auth-note" data-i18n="authNote">Auth: local loopback allowed · Telegram Mini App uses initData (only TELEGRAM_CHAT_ID)</p>
   </footer>
 </body>
 </html>

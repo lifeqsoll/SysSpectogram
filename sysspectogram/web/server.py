@@ -246,11 +246,12 @@ def _make_handler(app: WebAppState):
             if path == "/api/action":
                 if app.controllers is None:
                     return self._json(503, {"ok": False, "error": "actions not configured"})
-                # CSRF-ish: when public_url is set, Origin must match (or be absent for same-origin).
+                # CSRF: when public_url is set, Origin is required and must match.
                 if app.public_url:
                     origin = (self.headers.get("Origin") or "").rstrip("/")
-                    if origin and origin != app.public_url.rstrip("/"):
-                        return self._json(403, {"ok": False, "error": "bad origin"})
+                    expect = app.public_url.rstrip("/")
+                    if not origin or origin != expect:
+                        return self._json(403, {"ok": False, "error": "origin required"})
                 action = str(payload.get("action") or "")
                 data = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
                 # strip action key from payload copy
