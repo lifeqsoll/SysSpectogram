@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SysSpectogram — interactive demo</title>
-  <meta name="description" content="Fake interactive demo of SysSpectogram: host ML alerts and perimeter scenarios. Simulation only." />
+  <meta name="description" content="Fake interactive demo of SysSpectogram v1.1.1: host ML, perimeter, background protect, never-ban. Simulation only — not connected to your machine." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -17,32 +17,41 @@
   <div class="bg-glow" aria-hidden="true"></div>
 
   <header class="hero" id="top">
-    <p class="sim-badge">SIMULATION — not connected to your machine</p>
+    <div class="hero-top">
+      <p class="sim-badge" data-i18n="simBadge">SIMULATION — not connected to your machine</p>
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" class="lang-btn active" data-lang="en">EN</button>
+        <button type="button" class="lang-btn" data-lang="ru">RU</button>
+      </div>
+    </div>
     <h1 class="brand">SysSpectogram</h1>
-    <p class="tagline">Press a scenario. Watch metrics, fuse risk, and Telegram-style alerts — host ML + perimeter + Rust agent (v0.6), without touching your host.</p>
-    <ul class="hero-chips" aria-label="v0.6 highlights">
-      <li>CNN + Isolation Forest</li>
-      <li>Rust agent / eBPF</li>
-      <li>HMAC + root watch</li>
-      <li>SSH kick / TG SOAR</li>
-      <li>notorch / ONNX on VPS</li>
+    <p class="tagline" data-i18n="tagline">Press a scenario. Watch metrics, fuse risk, and Telegram-style alerts — friend path v1.1.1 (AppImage / VPS menu), without touching your host.</p>
+    <ul class="hero-chips" aria-label="v1.1 highlights">
+      <li data-i18n="chip1">AppImage / day-0</li>
+      <li data-i18n="chip2">Background protect</li>
+      <li data-i18n="chip3">Never-ban IP</li>
+      <li data-i18n="chip4">CNN + IF fuse</li>
+      <li data-i18n="chip5">TG unlock / SOAR</li>
     </ul>
     <div class="hero-ctas">
-      <a class="btn btn-primary" href="#workbench">Try scenarios</a>
-      <a class="btn btn-ghost" href="https://github.com/lifeqsoll/SysSpectogram" rel="noopener">Clone on GitHub</a>
+      <a class="btn btn-primary" href="#workbench" data-i18n="ctaTry">Try scenarios</a>
+      <a class="btn btn-ghost" href="https://github.com/lifeqsoll/SysSpectogram/releases/tag/v1.1.1" rel="noopener" data-i18n="ctaRelease">Download v1.1.1</a>
+      <a class="btn btn-ghost" href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/FRIEND.md" rel="noopener" data-i18n="ctaFriend">Friend path</a>
     </div>
   </header>
 
   <main class="workbench" id="workbench">
     <aside class="scenarios" aria-label="Scenarios">
-      <h2>Scenarios</h2>
-      <p class="aside-note">Synthetic load only. Real product runs on your Linux box + Telegram.</p>
+      <h2 data-i18n="scenarios">Scenarios</h2>
+      <p class="aside-note" data-i18n="asideNote">Synthetic load only. Real product: AppImage or <code>friend-day0.sh</code> on a VPS.</p>
       <div class="scenario-grid" role="group">
         <button type="button" class="scenario active" data-scenario="idle">Idle / Reset</button>
         <button type="button" class="scenario" data-scenario="cpu">CPU miner</button>
         <button type="button" class="scenario" data-scenario="mem">Mem pressure</button>
         <button type="button" class="scenario" data-scenario="net">Net flood</button>
         <button type="button" class="scenario" data-scenario="brute">SSH brute</button>
+        <button type="button" class="scenario" data-scenario="neverban">Never-ban skip</button>
+        <button type="button" class="scenario" data-scenario="protect">Background protect</button>
         <button type="button" class="scenario" data-scenario="egress">Egress denylist</button>
         <button type="button" class="scenario" data-scenario="root">Unexpected root</button>
         <button type="button" class="scenario" data-scenario="ssh">Unexpected SSH</button>
@@ -52,7 +61,7 @@
       </div>
 
       <section class="train-panel" id="train-panel" hidden>
-        <h3>Train pipeline (fake)</h3>
+        <h3 data-i18n="trainTitle">Train pipeline (fake)</h3>
         <ol class="train-steps" id="train-steps">
           <li data-step="collect">collect metrics CSV</li>
           <li data-step="build">build-dataset windows</li>
@@ -67,7 +76,7 @@
     <section class="stage" aria-label="Live stage">
       <div class="stage-head">
         <div>
-          <h2>Live stage</h2>
+          <h2 data-i18n="liveStage">Live stage</h2>
           <p class="host-line"><span class="dot"></span> host <strong>demo-vps</strong> · fuse risk <strong id="score-val">0.12</strong> · thr 0.75</p>
         </div>
         <p class="pattern" id="pattern-label">pattern: idle baseline</p>
@@ -79,6 +88,8 @@
         <span class="pill muted" id="pill-root">root_watch: learn</span>
         <span class="pill muted" id="pill-sess">sessions: learn</span>
         <span class="pill muted" id="pill-mode">mode: observe</span>
+        <span class="pill muted" id="pill-protect">protect: off</span>
+        <span class="pill muted" id="pill-never">never-ban: —</span>
       </div>
 
       <div class="charts">
@@ -98,12 +109,12 @@
 
       <div class="viz-row">
         <div class="heatmap-wrap">
-          <h3>Fake spectrogram window</h3>
+          <h3 data-i18n="heatTitle">Fake spectrogram window</h3>
           <canvas id="heatmap" width="640" height="200" aria-label="Synthetic metric heatmap"></canvas>
-          <p class="heatmap-caption">60×N synthetic window (metrics + process heat). Real product: your collect CSV + trained artifacts; preview with <code>build-dataset --png</code>.</p>
+          <p class="heatmap-caption" data-i18n="heatCaption">60×N synthetic window. Real product: your collect CSV + trained artifacts; preview with <code>build-dataset --png</code>.</p>
         </div>
         <div class="alerts-wrap">
-          <h3>Alert feed <span class="like-tg">(as Telegram would)</span></h3>
+          <h3 data-i18n="alertTitle">Alert feed <span class="like-tg">(as Telegram would)</span></h3>
           <div class="alerts" id="alerts" aria-live="polite"></div>
         </div>
       </div>
@@ -111,11 +122,11 @@
   </main>
 
   <footer class="footer">
-    <p>Ready for the real thing? Day-0 on a small VPS with <code>notorch</code>, then <code>guard --telegram</code> + Rust agent. Buttons here are fake — real Kill / Kick need console <code>/unlock</code>.</p>
+    <p data-i18n="footer">Ready for the real thing? AppImage / <code>friend-day0.sh</code> → onboarding → background protect. Buttons here are fake — real Ban / Kill need console <code>/unlock</code>.</p>
     <div class="footer-links">
       <a href="https://github.com/lifeqsoll/SysSpectogram">GitHub</a>
-      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/DAY0_VPS.md">Day-0</a>
-      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/RELEASE_v0.6.0.md">v0.6 notes</a>
+      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/FRIEND.md">Friend path</a>
+      <a href="https://github.com/lifeqsoll/SysSpectogram/blob/main/docs/RELEASE_v1.1.1.md">v1.1.1 notes</a>
       <a href="https://github.com/lifeqsoll/SysSpectogram/releases">Releases</a>
     </div>
   </footer>
