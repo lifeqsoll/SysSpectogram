@@ -1,5 +1,7 @@
 # SysSpectogram v1.2.0 — Fleet (many VPS) + lasting unlock + TG charts
 
+> **Broken for install.** Tag **v1.2.0** shipped without a usable stack `SHA256SUMS` (desktop checksums collided / overwrite). Friend day-0 / Install stack **fail** on this tag. Use **[v1.2.1](RELEASE_v1.2.1.md)** instead. Feature notes below remain the changelog for the Fleet work.
+
 Follow-up to [v1.1.1](RELEASE_v1.1.1.md). This release is for people who run **more than one** Linux VPS and want one admin laptop (Control Center + CLI) and optional hub Telegram — without a public HTTPS control API.
 
 Companion guide: **[FLEET.md](FLEET.md)** · Friend path still: [FRIEND.md](FRIEND.md) · [HOME.md](HOME.md).
@@ -8,7 +10,7 @@ Companion guide: **[FLEET.md](FLEET.md)** · Friend path still: [FRIEND.md](FRIE
 
 ## Download
 
-From the [v1.2.0 GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases/tag/v1.2.0):
+**Do not install from v1.2.0.** Use [v1.2.1](https://github.com/lifeqsoll/SysSpectogram/releases/tag/v1.2.1). Historical assets under [v1.2.0](https://github.com/lifeqsoll/SysSpectogram/releases/tag/v1.2.0):
 
 | Asset | Use |
 | --- | --- |
@@ -40,22 +42,22 @@ Security model for remote control: **SSH + short pair code + device token**. No 
 
 ### Friend desktop
 
-1. Download AppImage/`.deb` for **v1.2.0**.
-2. **Install stack** (same tag) if prompted.
+1. Download AppImage/`.deb` for **v1.2.1** (not v1.2.0).
+2. **Install stack** for the **same** tag if prompted.
 3. Onboarding → Start protection (or upgrade stack from Settings if you already run v1.1.x).
 4. Optional: open **Fleet** after pairing hosts (see below).
 
 ### Headless VPS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.0/scripts/friend-day0.sh | bash -s -- v1.2.0
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.1/scripts/friend-day0.sh | bash -s -- v1.2.1
 loginctl enable-linger $USER
 ```
 
 Optional helper:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.2.0
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.1/scripts/install-helper-from-release.sh | sudo bash -s -- v1.2.1
 ```
 
 ---

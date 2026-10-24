@@ -19,7 +19,7 @@ Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts 
 
 ## Start here
 
-Three ways in. Geek tools stay behind **Advanced**. Release notes: **[v1.2.0](docs/RELEASE_v1.2.0.md)** · [v1.1.1](docs/RELEASE_v1.1.1.md) · [v1.1.0](docs/RELEASE_v1.1.0.md).
+Three ways in. Geek tools stay behind **Advanced**. Release notes: **[v1.2.1](docs/RELEASE_v1.2.1.md)** · [v1.2.0 (broken install)](docs/RELEASE_v1.2.0.md) · [v1.1.1](docs/RELEASE_v1.1.1.md).
 
 ### 1. Desktop (AppImage / `.deb`)
 
@@ -42,14 +42,14 @@ cd control-center && npm install && npm run tauri dev
 ```bash
 # python3 + python3-venv + curl; replace tag if needed
 # prefer the tagged script (not floating main); or download friend-day0.sh from the release
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.0/scripts/friend-day0.sh | bash -s -- v1.2.0
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.1/scripts/friend-day0.sh | bash -s -- v1.2.1
 loginctl enable-linger $USER   # else protect stops on logout
 ```
 
 Optional privileged helper (polkit; no local checkout):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.2.0
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.1/scripts/install-helper-from-release.sh | sudo bash -s -- v1.2.1
 ```
 
 Full friend story: [docs/FRIEND.md](docs/FRIEND.md). Geek git Day-0: [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX after training elsewhere: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
@@ -102,7 +102,7 @@ Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md
 
 | Topic | Links |
 | --- | --- |
-| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.2.0](docs/RELEASE_v1.2.0.md) |
+| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.2.1](docs/RELEASE_v1.2.1.md) |
 | Many VPS | [Fleet](docs/FLEET.md) · Control Center Fleet tab · `fleet` / `home pair-*` CLI |
 | Geek / advanced | [Configure](docs/CONFIGURE.md) · [Day-0 CLI (git)](docs/DAY0_VPS.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Defense | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |
@@ -877,7 +877,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v1.2.0** adds multi-VPS **Fleet**, lasting unlock, TG `/charts`, Attack L2/L3. See [docs/RELEASE_v1.2.0.md](docs/RELEASE_v1.2.0.md), [docs/FLEET.md](docs/FLEET.md). Friend install remains [docs/FRIEND.md](docs/FRIEND.md) · [docs/HOME.md](docs/HOME.md).
+**v1.2.1** is the installable release (wheel config, `SHA256SUMS`, sock path). Fleet / unlock / TG charts landed in v1.2.0 but that tag’s install is **broken** — use **v1.2.1**. See [RELEASE_v1.2.1.md](docs/RELEASE_v1.2.1.md), [FLEET.md](docs/FLEET.md), [FRIEND.md](docs/FRIEND.md).
 
 ## Contributing
 

@@ -23,3 +23,26 @@ def test_control_sock_follows_state_root(tmp_path: Path, monkeypatch):
     assert state_root() == tmp_path
     sock = _resolve("state/control.sock")
     assert sock == (tmp_path / "state" / "control.sock").resolve()
+
+
+def test_bundled_configs_match_tree():
+    """Wheel copy under resources/ must stay identical to repo configs/."""
+    root = Path(__file__).resolve().parents[1]
+    tree = root / "configs"
+    bundled = root / "sysspectogram" / "resources" / "configs"
+    for rel in (
+        "default.yaml",
+        "schema.yaml",
+        "denylist.txt",
+        "demo_interactive.yaml",
+    ):
+        a = (tree / rel).read_bytes()
+        b = (bundled / rel).read_bytes()
+        assert a == b, f"mismatch {rel}: update sysspectogram/resources/configs from configs/"
+    tree_sc = sorted(p.name for p in (tree / "scenarios").glob("*.yaml"))
+    bund_sc = sorted(p.name for p in (bundled / "scenarios").glob("*.yaml"))
+    assert tree_sc == bund_sc
+    for name in tree_sc:
+        assert (tree / "scenarios" / name).read_bytes() == (
+            bundled / "scenarios" / name
+        ).read_bytes(), name

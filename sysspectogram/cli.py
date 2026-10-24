@@ -494,7 +494,6 @@ def _load_jsonl(path: Path) -> list[dict]:
 
 
 def _cmd_spectro(args: argparse.Namespace) -> int:
-    from sysspectogram.config import state_root
     from sysspectogram.incident.store import find_incident
     from sysspectogram.viz.snapshot import render_to_file
 
@@ -650,7 +649,6 @@ def _cmd_control(args: argparse.Namespace) -> int:
     from pathlib import Path
 
     from sysspectogram.control_socket import request
-    from sysspectogram.config import state_root
 
     sock = Path(args.socket) if getattr(args, "socket", None) else state_root() / "state" / "control.sock"
     payload: dict = {"op": args.control_op}
@@ -765,7 +763,6 @@ def _cmd_home_onboarding(args: argparse.Namespace) -> int:
     import json
     from pathlib import Path
 
-    from sysspectogram.config import state_root
 
     marker = state_root() / "state" / "onboarding.done"
     if args.onboarding_action == "status":
@@ -784,7 +781,6 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
     import time
     from pathlib import Path
 
-    from sysspectogram.config import state_root
 
     root = state_root()
     checks: list[dict] = []
@@ -894,7 +890,6 @@ def _cmd_home_digest(args: argparse.Namespace) -> int:
     from collections import Counter
     from pathlib import Path
 
-    from sysspectogram.config import state_root
 
     root = state_root()
     hours = float(getattr(args, "hours", 24) or 24)
@@ -1035,7 +1030,6 @@ def _cmd_home_mute_rule(args: argparse.Namespace) -> int:
     import json
     import time
 
-    from sysspectogram.config import state_root
     from sysspectogram.process_labels import ProcessLabelStore
 
     rule_id = str(getattr(args, "rule_id", "") or "").strip()
@@ -1071,7 +1065,6 @@ def _cmd_home_checklist(args: argparse.Namespace) -> int:
     import sqlite3
     import time
 
-    from sysspectogram.config import state_root
 
     cfg = load_config()
     items: list[dict] = []
@@ -1182,7 +1175,6 @@ def _cmd_home_seed_role(args: argparse.Namespace) -> int:
     """Seed role FP process labels (JSON for Control Center onboarding)."""
     import json
 
-    from sysspectogram.config import state_root
     from sysspectogram.process_labels import ProcessLabelStore
     from sysspectogram.role_fp import list_seed_roles, seed_role_labels
 
@@ -1730,7 +1722,6 @@ def _cmd_timeseries(args: argparse.Namespace) -> int:
 
     from sysspectogram.timeseries.store import TimeseriesStore
 
-    from sysspectogram.config import state_root
 
     path = Path(args.path) if args.path else state_root() / "state" / "timeseries.sqlite"
     store = TimeseriesStore(path)

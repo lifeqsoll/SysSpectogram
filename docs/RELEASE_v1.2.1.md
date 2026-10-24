@@ -11,4 +11,8 @@ Patch release: install/CI blockers after v1.2.0.
 
 ## Upgrade
 
-Same friend path as v1.2.0 — Install stack / `friend-day0` for tag **v1.2.1**.
+```bash
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.1/scripts/friend-day0.sh | bash -s -- v1.2.1
+```
+
+Do **not** use tag **v1.2.0** (missing stack `SHA256SUMS`). Docs/scripts default to **v1.2.1**.
