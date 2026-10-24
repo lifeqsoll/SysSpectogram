@@ -165,13 +165,69 @@ def request(path: Path | str, payload: dict[str, Any], *, timeout: float = 30.0)
     return json.loads(line.decode("utf-8") or "{}")
 
 
-def make_handler(controllers: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Adapt WebControllers into a control-socket request handler."""
+def make_handler(
+    controllers: Any,
+    unlock_gate: Any | None = None,
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Adapt WebControllers into a control-socket request handler.
+
+    When remote devices are paired, mutating ops require a valid device_token
+    (SSH forward looks like same-UID PEERCRED, so token is the real gate).
+    """
 
     def handle(req: dict[str, Any]) -> dict[str, Any]:
+        from sysspectogram.remote_devices import devices_configured, verify_token
+
         op = str(req.get("op") or req.get("action") or "").strip().lower()
         if op in ("", "ping", "status"):
             return {"ok": True, "status": controllers.status()}
+        if op == "pair_begin":
+            from sysspectogram.remote_devices import begin_pair
+
+            return begin_pair(label=str(req.get("label") or ""))
+        if op == "pair_complete":
+            from sysspectogram.remote_devices import complete_pair
+
+            return complete_pair(str(req.get("code") or ""), label=req.get("label"))
+        if op in ("list_devices", "devices"):
+            from sysspectogram.remote_devices import list_devices
+
+            return {
+                "ok": True,
+                "devices": [
+                    {"device_id": d.device_id, "label": d.label, "created_at": d.created_at}
+                    for d in list_devices()
+                ],
+            }
+
+        need_token = devices_configured() and op not in (
+            "pair_begin",
+            "pair_complete",
+            "list_devices",
+            "devices",
+        )
+        if need_token:
+            token = req.get("device_token") or req.get("token")
+            if verify_token(str(token) if token else None) is None:
+                return {
+                    "ok": False,
+                    "error": "device_token required (pair with home pair-remote / fleet pair)",
+                }
+
+        if op == "unlock":
+            from sysspectogram.unlock_help import locked_playbook
+
+            if unlock_gate is None:
+                return {"ok": True, "unlocked": True, "note": "gate off"}
+            code = str(req.get("code") or "")
+            if unlock_gate.try_unlock(code):
+                return {"ok": True, "unlocked": True}
+            return {
+                "ok": False,
+                "error": "bad or expired unlock code",
+                "help": locked_playbook(),
+            }
+
         if op == "action":
             action = str(req.get("name") or req.get("action_name") or "")
             payload = req.get("payload") if isinstance(req.get("payload"), dict) else {}
@@ -179,10 +235,22 @@ def make_handler(controllers: Any) -> Callable[[dict[str, Any]], dict[str, Any]]
                 payload = {
                     k: v
                     for k, v in req.items()
-                    if k not in ("op", "action", "name", "action_name")
+                    if k
+                    not in (
+                        "op",
+                        "action",
+                        "name",
+                        "action_name",
+                        "device_token",
+                        "token",
+                    )
                 }
             return controllers.run(action, payload)
-        payload = {k: v for k, v in req.items() if k not in ("op", "action")}
+        payload = {
+            k: v
+            for k, v in req.items()
+            if k not in ("op", "action", "device_token", "token")
+        }
         return controllers.run(op, payload)
 
     return handle

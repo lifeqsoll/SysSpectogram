@@ -37,7 +37,7 @@ Zapret-like numbered menu:
 - **Under-scan** — host soft-mitigation (lockdown + optional SYN rate-limit; **not** anti-DDoS)  
 - Update stack from GitHub tag  
 
-More: [HOST_MITIGATION.md](HOST_MITIGATION.md) · [KIRK.md](KIRK.md). Set never-ban before soft/full or Under-scan.
+More: [HOST_MITIGATION.md](HOST_MITIGATION.md) · [KIRK.md](KIRK.md) · [FLEET.md](FLEET.md) (many VPS). Set never-ban before soft/full or Under-scan.
 
 Non-interactive:
 

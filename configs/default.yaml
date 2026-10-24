@@ -65,7 +65,11 @@ telegram:
   token_secret: null
   allow_destructive_sims: false
   require_console_unlock: true
-  unlock_ttl_sec: 900
+  # 0 = session never expires after unlock (until /lock or guard restart)
+  unlock_ttl_sec: 0
+  # pairing code lifetime on the host (Steam Guard–like); unused codes rotate
+  unlock_code_ttl_sec: 300
+  unlock_code_len: 10
   health_ping_hours: 0
 web:
   enabled: false

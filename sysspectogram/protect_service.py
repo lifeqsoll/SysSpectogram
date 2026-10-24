@@ -18,9 +18,11 @@ def _home() -> Path:
 
 
 def _python() -> Path:
+    """Prefer project/user venv python without resolving the symlink to /usr/bin."""
     venv = _home() / ".venv" / "bin" / "python"
     if venv.is_file():
-        return venv
+        # absolute() keeps .../.venv/bin/python; resolve() would follow to system python3.x
+        return venv.absolute()
     return Path(shutil.which("python3") or "python3")
 
 
@@ -36,7 +38,30 @@ def unit_path() -> Path:
 
 def _unit_body() -> str:
     home = _home().resolve()
-    py = _python().resolve()
+    # Keep the .venv/bin/python path (do not resolve the symlink to /usr/bin/python*).
+    # Python only loads the venv site-packages when argv[0] is under .venv/bin/.
+    py = _python().absolute()
+    # Prefer promoted live model (home import-model); fall back to artifacts/live if present.
+    model_arg = ""
+    marker = home / "state" / "model.path"
+    live = home / "artifacts" / "live"
+    model_dir: Path | None = None
+    if marker.is_file():
+        try:
+            raw = marker.read_text(encoding="utf-8").strip()
+            if raw:
+                p = Path(raw)
+                model_dir = p if p.is_absolute() else (home / p)
+        except OSError:
+            model_dir = None
+    if model_dir is None and live.is_dir() and (live / "cnn.onnx").is_file():
+        model_dir = live
+    if model_dir is not None and model_dir.is_dir():
+        model_arg = f" --model {model_dir}"
+    # Host ML: set SYSSPECTOGRAM_RUNTIME=onnx|torch_ml in the unit when a model is wired.
+    runtime_env = ""
+    if model_arg:
+        runtime_env = "Environment=SYSSPECTOGRAM_RUNTIME=onnx\n"
     # No --dry-run: response.mode from overlay controls auto-ban; friends expect real protect.
     return f"""[Unit]
 Description=SysSpectogram protect (user)
@@ -47,7 +72,7 @@ ConditionPathExists={home}
 Type=simple
 WorkingDirectory={home}
 Environment=SYSSPECTOGRAM_HOME={home}
-ExecStart={py} -m sysspectogram guard --telegram
+{runtime_env}ExecStart={py} -m sysspectogram guard --telegram{model_arg}
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:{home}/state/guard-service.log

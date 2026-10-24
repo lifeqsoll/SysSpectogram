@@ -447,6 +447,20 @@ def run_guard(
         bot = bot_holder["bot"]
         if bot is not None:
             bot.send_perimeter_alert(alert, recon)
+        try:
+            from sysspectogram.response.auto_kill import auto_kill_from_alert
+
+            kill_msg = auto_kill_from_alert(
+                alert,
+                auto_ban_enabled=bool(auto_ban_cfg.get("enabled")),
+                dry_run=bool(dry_run_actions),
+            )
+            if kill_msg:
+                console.print(f"[red]{kill_msg}[/]")
+                if bot is not None:
+                    bot.client.send_message(bot.prefix(kill_msg))
+        except Exception as exc:
+            console.print(f"[yellow]perimeter auto_kill failed[/] {exc}")
         webhook = siem_cfg.get("webhook_url")
         if webhook:
             post_webhook(
@@ -566,8 +580,13 @@ def run_guard(
     )
     unlock_gate = ConsoleUnlock(
         enabled=unlock_enabled,
-        ttl_sec=float(tg_cfg.get("unlock_ttl_sec", 7200)),
+        ttl_sec=float(tg_cfg.get("unlock_ttl_sec", 0)),
+        code_ttl_sec=float(tg_cfg.get("unlock_code_ttl_sec", 300)),
+        code_len=int(tg_cfg.get("unlock_code_len", 10)),
         on_code=_print_unlock,
+        persist_path=_resolve("state/control.unlocked")
+        if float(tg_cfg.get("unlock_ttl_sec", 0)) <= 0
+        else None,
     )
     if unlock_gate.enabled and unlock_gate.pending_code:
         _print_unlock(unlock_gate.pending_code)
@@ -654,7 +673,13 @@ def run_guard(
     )
     control_path = _resolve("state/control.sock")
     try:
-        control_srv = ControlSocketServer(control_path, handler=make_handler(controllers))
+        control_srv = ControlSocketServer(
+            control_path,
+            handler=make_handler(
+                controllers,
+                unlock_gate=unlock_gate if unlock_gate.enabled else None,
+            ),
+        )
         control_srv.start()
         console.print(f"[bold]control socket[/] {control_path}")
     except Exception as exc:
@@ -1135,6 +1160,26 @@ def run_guard(
                     caption_override=caption,
                     pattern=pattern,
                 )
+                # Auto-kill top PID only when malware-like, or shield+miner pattern
+                try:
+                    from sysspectogram.response.auto_kill import looks_malware, try_auto_kill
+
+                    if tops and bool(auto_ban_cfg.get("enabled")):
+                        top0 = tops[0]
+                        name = str(top0.get("name") or "")
+                        minerish = "miner" in str(pattern).lower()
+                        if looks_malware(name, None) or minerish:
+                            km = try_auto_kill(
+                                int(top0.get("pid") or 0),
+                                expect_comm=name or None,
+                                dry_run=bool(dry_run_actions),
+                                reason="host_anomaly",
+                            )
+                            if km:
+                                console.print(f"[red]{km}[/]")
+                                bot.client.send_message(bot.prefix(km))
+                except Exception as exc:
+                    console.print(f"[yellow]host auto_kill failed[/] {exc}")
 
         try:
             if duration_sec is not None:
@@ -1599,6 +1644,24 @@ def run_guard(
                             )
                 except Exception:
                     pass
+            try:
+                from sysspectogram.response.auto_kill import auto_kill_from_alert
+
+                kill_msg = auto_kill_from_alert(
+                    alert,
+                    auto_ban_enabled=bool(auto_ban_cfg.get("enabled")),
+                    dry_run=bool(dry_run_actions),
+                )
+                if kill_msg:
+                    console.print(f"[red]{kill_msg}[/]")
+                    bot = bot_holder["bot"]
+                    if bot is not None:
+                        try:
+                            bot.client.send_message(bot.prefix(kill_msg))
+                        except Exception:
+                            pass
+            except Exception as exc:
+                console.print(f"[yellow]auto_kill failed[/] {exc}")
             webhook = siem_cfg.get("webhook_url")
             if webhook:
                 post_webhook(

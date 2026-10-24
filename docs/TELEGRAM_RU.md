@@ -4,24 +4,22 @@
 
 `guard --telegram` — пульт с телефона. Только `TELEGRAM_CHAT_ID`.
 
-## Console unlock (v0.4)
+## Console unlock
 
-Если утёк `.env` (token + chat_id), злоумышленник всё равно не должен жать kill/ban без доступа к консоли хоста.
+Если утёк `.env`, kill/ban без консоли хоста всё равно нельзя.
 
-1. При старте `guard --telegram` в **консоли** печатается 6-значный код (в текст TG-сообщения код не кладётся).
-2. В TG: контроль **LOCKED** → `/unlock 123456`.
-3. Сессия на `unlock_ttl_sec` (по умолчанию **2ч**). `/lock` — новый код в консоли.
-
-**Также:** действия live web / Mini App (`/api/action`) сидят на той же сессии unlock. Unlock: TG `/unlock` **или** Settings в Mini App / `POST /api/unlock`. В LOCKED скрываются процессы и детали bans.
-
-**Антибрут:** после 5 неверных кодов консоль печатает новый; после 8 за 5 минут — отказ до паузы / рестарта.
+1. Код (~10 букв/цифр) в `state/unlock.code` (~5 мин на ввод; в TG не кладётся).
+2. **LOCKED** → `/unlock КОД`. При попытке действий придёт подробная инструкция.
+3. Сессия до `/lock` при `unlock_ttl_sec: 0` (по умолчанию); файл `state/control.unlocked` переживает рестарт guard — **не нужно** анлочить каждое утро.
 
 ```yaml
 telegram:
   require_console_unlock: true
-  unlock_ttl_sec: 7200
+  unlock_ttl_sec: 0
+  unlock_code_ttl_sec: 300
 ```
 
+Флот (много VPS + главный бот): [FLEET.md](FLEET.md).
 ## Настройка
 
 ```bash

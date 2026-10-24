@@ -114,10 +114,14 @@ class TelegramClient:
         except Exception as exc:
             return {"ok": False, "description": str(exc)}
 
-    def send_photo_bytes(
+    def _send_multipart(
         self,
-        png_bytes: bytes,
+        method: str,
         *,
+        field: str,
+        filename: str,
+        content_type: str,
+        payload: bytes,
         caption: str = "",
         chat_id: str | None = None,
         reply_markup: dict | None = None,
@@ -142,15 +146,15 @@ class TelegramClient:
             )
         parts.append(
             (
-                f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; "
-                f'filename="heatmap.png"\r\nContent-Type: image/png\r\n\r\n'
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; "
+                f'filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'
             ).encode()
-            + png_bytes
+            + payload
             + b"\r\n"
         )
         parts.append(f"--{boundary}--\r\n".encode())
         req = urllib.request.Request(
-            f"{self.base}/sendPhoto",
+            f"{self.base}/{method}",
             data=b"".join(parts),
             method="POST",
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
@@ -160,6 +164,44 @@ class TelegramClient:
                 return json.loads(resp.read().decode("utf-8", errors="replace"))
         except Exception as exc:
             return {"ok": False, "description": str(exc)}
+
+    def send_photo_bytes(
+        self,
+        png_bytes: bytes,
+        *,
+        caption: str = "",
+        chat_id: str | None = None,
+        reply_markup: dict | None = None,
+    ) -> dict:
+        return self._send_multipart(
+            "sendPhoto",
+            field="photo",
+            filename="chart.png",
+            content_type="image/png",
+            payload=png_bytes,
+            caption=caption,
+            chat_id=chat_id,
+            reply_markup=reply_markup,
+        )
+
+    def send_animation_bytes(
+        self,
+        gif_bytes: bytes,
+        *,
+        caption: str = "",
+        chat_id: str | None = None,
+        reply_markup: dict | None = None,
+    ) -> dict:
+        return self._send_multipart(
+            "sendAnimation",
+            field="animation",
+            filename="charts.gif",
+            content_type="image/gif",
+            payload=gif_bytes,
+            caption=caption,
+            chat_id=chat_id,
+            reply_markup=reply_markup,
+        )
 
     def answer_callback(self, callback_query_id: str, text: str = "") -> dict:
         return self._post(

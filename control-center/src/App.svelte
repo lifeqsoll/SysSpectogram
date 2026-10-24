@@ -17,6 +17,7 @@
   import Icon from './lib/Icon.svelte';
   import brandMark from './assets/brand-mark.svg?raw';
   import Home from './views/Home.svelte';
+  import Fleet from './views/Fleet.svelte';
   import Charts from './views/Charts.svelte';
   import Alerts from './views/Alerts.svelte';
   import BasicSettings from './views/BasicSettings.svelte';
@@ -38,6 +39,7 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const VIEWS: Record<string, any> = {
     home: Home,
+    fleet: Fleet,
     charts: Charts,
     alerts: Alerts,
     settings: BasicSettings,
@@ -59,6 +61,7 @@
 
   const iconFor = (s: string): string => {
     if (s === 'home') return 'overview';
+    if (s === 'fleet') return 'perimeter';
     if (s === 'charts') return 'dashboards';
     if (s === 'alerts') return 'incidents';
     if (s === 'settingsAdvanced') return 'settings';

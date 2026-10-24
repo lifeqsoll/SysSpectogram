@@ -494,6 +494,77 @@ fn control_status() -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn fleet_list() -> Result<Value, String> {
+    cli::run_json(&["fleet", "list"])
+}
+
+#[tauri::command]
+fn fleet_graph() -> Result<Value, String> {
+    cli::run_json(&["fleet", "graph"])
+}
+
+#[tauri::command]
+fn fleet_warmup(scope: Option<String>) -> Result<Value, String> {
+    let s = scope.unwrap_or_else(|| "local".into());
+    cli::run_json(&["fleet", "warmup", "--scope", s.as_str()])
+}
+
+#[tauri::command]
+fn fleet_profile_apply(id: String, scope: Option<String>) -> Result<Value, String> {
+    let s = scope.unwrap_or_else(|| "all".into());
+    cli::run_json(&[
+        "fleet",
+        "profile-apply",
+        "--id",
+        id.as_str(),
+        "--scope",
+        s.as_str(),
+    ])
+}
+
+#[tauri::command]
+fn fleet_status(scope: Option<String>) -> Result<Value, String> {
+    let s = scope.unwrap_or_else(|| "all".into());
+    cli::run_json(&["fleet", "status", "--scope", s.as_str()])
+}
+
+#[tauri::command]
+fn fleet_unlock_locked(scope: Option<String>) -> Result<Value, String> {
+    let s = scope.unwrap_or_else(|| "all".into());
+    cli::run_json(&["fleet", "unlock-locked", "--scope", s.as_str()])
+}
+
+#[tauri::command]
+fn fleet_attack(scope: String, level: Option<String>, deps: Option<bool>) -> Result<Value, String> {
+    let lv = level.unwrap_or_else(|| "L2".into());
+    if deps.unwrap_or(false) {
+        return cli::run_json(&[
+            "fleet",
+            "attack",
+            "--scope",
+            scope.as_str(),
+            "--level",
+            lv.as_str(),
+            "--deps",
+        ]);
+    }
+    cli::run_json(&[
+        "fleet",
+        "attack",
+        "--scope",
+        scope.as_str(),
+        "--level",
+        lv.as_str(),
+    ])
+}
+
+#[tauri::command]
+fn fleet_release(scope: Option<String>) -> Result<Value, String> {
+    let s = scope.unwrap_or_else(|| "all".into());
+    cli::run_json(&["fleet", "release", "--scope", s.as_str()])
+}
+
+#[tauri::command]
 fn control_action(name: String, payload: Value) -> Result<Value, String> {
     let safe = name
         .chars()
@@ -643,6 +714,14 @@ pub fn run() {
             lab_run,
             control_status,
             control_action,
+            fleet_list,
+            fleet_graph,
+            fleet_warmup,
+            fleet_profile_apply,
+            fleet_status,
+            fleet_unlock_locked,
+            fleet_attack,
+            fleet_release,
             home_import_model,
             home_write_env,
             onboarding_status,

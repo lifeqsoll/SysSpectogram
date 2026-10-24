@@ -141,8 +141,13 @@ Every top-level subcommand of `python -m sysspectogram` has a row. `scripts/chec
 | `home` | Settings / Home | Onboarding, `.env`, model import, health/digest/checklist, user-settings overlay, `home update` |
 | `protect` | Home / Onboarding | User systemd unit (real mode); Start + finish enable it |
 | `menu` | cli-only | Friend interactive menu for VPS/SSH (zapret-like) |
+| `fleet` | Fleet | Multi-VPS: graph, profiles, warmup, SSH fan-out (`list` / `graph` / `status` / `unlock-locked` / `attack` / `release` / `profile-*` / `warmup` / `tg`) |
 | helper release install | Settings | `install-helper-from-release.sh` / `install_helper_release` (no git) |
 
-## Non-goals for v1.0
+## Fleet (multi-VPS)
 
-Multi-host management, remote control over the internet, mobile UI, Windows and macOS builds.
+Control Center **Fleet** tab + CLI manage many hosts over **SSH + device token** (no public control HTTPS). See [FLEET.md](FLEET.md).
+
+## Non-goals (still)
+
+Public internet control API without SSH, mobile native apps, Windows/macOS as guarded hosts, auto-built trust graph from netflow.

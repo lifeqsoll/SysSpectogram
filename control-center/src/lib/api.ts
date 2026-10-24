@@ -6,6 +6,20 @@ import type { SettingsExport } from './settings';
 export type Range = '1h' | '6h' | '12h' | '24h' | '7d' | '30d';
 export const RANGES: Range[] = ['1h', '6h', '12h', '24h', '7d', '30d'];
 
+export const fleet = {
+  list: () => invoke<Record<string, unknown>>('fleet_list'),
+  graph: () => invoke<Record<string, unknown>>('fleet_graph'),
+  warmup: (scope?: string) => invoke<Record<string, unknown>>('fleet_warmup', { scope }),
+  profileApply: (id: string, scope?: string) =>
+    invoke<Record<string, unknown>>('fleet_profile_apply', { id, scope }),
+  status: (scope?: string) => invoke<Record<string, unknown>>('fleet_status', { scope }),
+  unlockLocked: (scope?: string) =>
+    invoke<Record<string, unknown>>('fleet_unlock_locked', { scope }),
+  attack: (scope: string, level?: string, deps?: boolean) =>
+    invoke<Record<string, unknown>>('fleet_attack', { scope, level, deps }),
+  release: (scope?: string) => invoke<Record<string, unknown>>('fleet_release', { scope }),
+};
+
 export interface AppInfo {
   version: string;
   root: string;

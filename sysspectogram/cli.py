@@ -652,7 +652,7 @@ def _cmd_control(args: argparse.Namespace) -> int:
     from sysspectogram.control_socket import request
     from sysspectogram.config import state_root
 
-    sock = Path(args.socket) if getattr(args, "socket", None) else state_root() / "control.sock"
+    sock = Path(args.socket) if getattr(args, "socket", None) else state_root() / "state" / "control.sock"
     payload: dict = {"op": args.control_op}
     if args.control_op == "action":
         payload["name"] = args.name
@@ -1280,6 +1280,268 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
     except OSError:
         pass
     print(json.dumps({"ok": True, "path": str(path), "applied": applied, "rejected": rejected}))
+    return 0
+
+
+def _cmd_home_pair_remote(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.remote_devices import begin_pair
+
+    out = begin_pair(label=str(getattr(args, "label", "") or ""))
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0 if out.get("ok") else 2
+
+
+def _cmd_home_pair_complete(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.remote_devices import complete_pair
+
+    out = complete_pair(str(args.code), label=getattr(args, "label", None))
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0 if out.get("ok") else 2
+
+
+def _cmd_home_remote_list(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.remote_devices import list_devices
+
+    rows = [
+        {"device_id": d.device_id, "label": d.label, "created_at": d.created_at}
+        for d in list_devices()
+    ]
+    print(json.dumps({"ok": True, "devices": rows}, indent=2))
+    return 0
+
+
+def _cmd_home_remote_revoke(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.remote_devices import revoke_all, revoke_device
+
+    if getattr(args, "all", False):
+        out = revoke_all()
+    else:
+        out = revoke_device(str(args.device_id))
+    print(json.dumps(out, indent=2))
+    return 0 if out.get("ok") else 2
+
+
+def _cmd_fleet(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.fleet.ops import (
+        apply_profile,
+        attack,
+        release,
+        status_many,
+        unlock_locked,
+        warmup_remote,
+    )
+    from sysspectogram.fleet.store import (
+        FleetEdge,
+        FleetGroup,
+        FleetHost,
+        FleetProfile,
+        FleetStore,
+        default_fleet_path,
+    )
+
+    store = FleetStore(Path(args.path) if getattr(args, "path", None) else None)
+    action = getattr(args, "fleet_action", "list")
+    identity = getattr(args, "identity", None) or None
+    scope = getattr(args, "scope", None) or "all"
+    if action == "path":
+        print(json.dumps({"ok": True, "path": str(store.path)}))
+        return 0
+    if action == "list":
+        st = store.load()
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "path": str(store.path),
+                    "primary_host_id": st.primary_host_id,
+                    "hosts": [h.public_dict() for h in st.hosts],
+                    "groups": [asdict_group(g) for g in st.groups],
+                    "profiles": [asdict_profile(p) for p in st.profiles],
+                    "edges": [e.as_dict() for e in st.edges],
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return 0
+    if action == "add":
+        tags = [t.strip() for t in str(getattr(args, "tags", "") or "").split(",") if t.strip()]
+        host = FleetHost(
+            id=str(args.id),
+            label=str(args.label or args.id),
+            ssh=str(args.ssh or ""),
+            home_path=str(args.home or ""),
+            device_id=str(args.device_id or ""),
+            device_token=str(args.device_token or ""),
+            role=str(args.role or "worker"),
+            tags=tags,
+            profile_id=getattr(args, "profile_id", None) or None,
+        )
+        st = store.upsert_host(host)
+        print(json.dumps({"ok": True, "primary_host_id": st.primary_host_id, "n": len(st.hosts)}))
+        return 0
+    if action == "primary":
+        try:
+            st = store.set_primary(str(args.id))
+        except KeyError:
+            print(json.dumps({"ok": False, "error": "unknown host id"}))
+            return 2
+        print(json.dumps({"ok": True, "primary_host_id": st.primary_host_id}))
+        return 0
+    if action == "remove":
+        st = store.remove_host(str(args.id))
+        print(json.dumps({"ok": True, "n": len(st.hosts), "primary_host_id": st.primary_host_id}))
+        return 0
+    if action == "profile-set":
+        raw = getattr(args, "settings", None) or "{}"
+        try:
+            settings = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(json.dumps({"ok": False, "error": f"bad settings JSON: {exc}"}))
+            return 2
+        if not isinstance(settings, dict):
+            print(json.dumps({"ok": False, "error": "settings must be an object"}))
+            return 2
+        if str(settings.get("response.mode") or "").lower() == "isolate":
+            print(json.dumps({"ok": False, "error": "profiles must not set response.mode=isolate"}))
+            return 2
+        st = store.upsert_profile(
+            FleetProfile(
+                id=str(args.id),
+                label=str(args.label or args.id),
+                settings=settings,
+                ml_artifact=getattr(args, "ml_artifact", None) or None,
+            )
+        )
+        print(json.dumps({"ok": True, "n_profiles": len(st.profiles)}))
+        return 0
+    if action == "profile-apply":
+        print(
+            json.dumps(
+                apply_profile(
+                    store,
+                    str(args.id),
+                    scope,
+                    identity=identity,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if action == "group-set":
+        host_ids = [x.strip() for x in str(args.hosts or "").split(",") if x.strip()]
+        st = store.upsert_group(
+            FleetGroup(
+                id=str(args.id),
+                label=str(args.label or args.id),
+                host_ids=host_ids,
+                profile_id=getattr(args, "profile_id", None) or None,
+                primary_host_id=getattr(args, "primary_host_id", None) or None,
+            )
+        )
+        print(json.dumps({"ok": True, "n_groups": len(st.groups)}))
+        return 0
+    if action == "edge-add":
+        st = store.add_edge(
+            FleetEdge(
+                frm=str(args.frm),
+                to=str(args.to),
+                kind=str(args.kind or "depends_on"),
+                note=str(args.note or ""),
+            )
+        )
+        print(json.dumps({"ok": True, "n_edges": len(st.edges), "edges": [e.as_dict() for e in st.edges]}))
+        return 0
+    if action == "edge-rm":
+        st = store.remove_edge(str(args.frm), str(args.to), getattr(args, "kind", None) or None)
+        print(json.dumps({"ok": True, "n_edges": len(st.edges)}))
+        return 0
+    if action == "graph":
+        st = store.load()
+        deps = {}
+        for h in st.hosts:
+            deps[h.id] = store.dependents(h.id)
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "primary_host_id": st.primary_host_id,
+                    "hosts": [h.public_dict() for h in st.hosts],
+                    "groups": [asdict_group(g) for g in st.groups],
+                    "profiles": [asdict_profile(p) for p in st.profiles],
+                    "edges": [e.as_dict() for e in st.edges],
+                    "dependents": deps,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if action == "warmup":
+        # local checklist if scope is local/self; else remote fan-out
+        if scope in ("local", "self", "."):
+            from sysspectogram.fleet.warmup import warmup_checklist
+
+            print(json.dumps(warmup_checklist(), indent=2, ensure_ascii=False))
+            return 0
+        print(json.dumps(warmup_remote(store, scope, identity=identity), indent=2, ensure_ascii=False))
+        return 0
+    if action == "status":
+        print(json.dumps(status_many(store, scope, identity=identity), indent=2, ensure_ascii=False))
+        return 0
+    if action == "unlock-locked":
+        print(json.dumps(unlock_locked(store, scope, identity=identity), indent=2, ensure_ascii=False))
+        return 0
+    if action == "attack":
+        level = str(getattr(args, "level", "L2") or "L2")
+        deps = bool(getattr(args, "deps", False))
+        print(
+            json.dumps(
+                attack(store, scope, level=level, deps=deps, identity=identity),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if action == "release":
+        print(json.dumps(release(store, scope, identity=identity), indent=2, ensure_ascii=False))
+        return 0
+    if action == "tg":
+        from sysspectogram.fleet_tg import run_fleet_bot
+
+        return int(run_fleet_bot(store_path=store.path, identity=identity))
+    print(json.dumps({"ok": False, "error": f"unknown fleet action {action}", "default": str(default_fleet_path())}))
+    return 2
+
+
+def asdict_group(g: object) -> dict:
+    from dataclasses import asdict
+
+    return asdict(g)  # type: ignore[arg-type]
+
+
+def asdict_profile(p: object) -> dict:
+    from dataclasses import asdict
+
+    return asdict(p)  # type: ignore[arg-type]
+
+
+def _cmd_home_warmup(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.fleet.warmup import warmup_checklist
+
+    print(json.dumps(warmup_checklist(), indent=2, ensure_ascii=False))
     return 0
 
 
@@ -1926,6 +2188,8 @@ def build_parser() -> argparse.ArgumentParser:
     hm_set = hm_sub.add_parser("settings", help="write state/user-settings.json (home overlay)")
     hm_set.add_argument("--changes", required=True, help="JSON object of dotted keys")
     hm_set.set_defaults(func=_cmd_home_settings)
+    hm_warm = hm_sub.add_parser("warmup", help="shield readiness checklist (never_ban, labels, …)")
+    hm_warm.set_defaults(func=_cmd_home_warmup)
     hm_health = hm_sub.add_parser("health", help="quick health: helper, guard, metrics, telegram")
     hm_health.add_argument("--ping", action="store_true", help="send a Telegram test message")
     hm_health.set_defaults(func=_cmd_home_health)
@@ -1945,6 +2209,110 @@ def build_parser() -> argparse.ArgumentParser:
     hm_role = hm_sub.add_parser("seed-role", help="seed process-label FP pack for a host role")
     hm_role.add_argument("--role", required=True, help="ssh|nginx|docker|panel|python|wireguard")
     hm_role.set_defaults(func=_cmd_home_seed_role)
+    hm_pair = hm_sub.add_parser(
+        "pair-remote",
+        help="start remote CC pairing (prints 5‑min code; never send via Telegram)",
+    )
+    hm_pair.add_argument("--label", default="device", help="label for the pending pair")
+    hm_pair.set_defaults(func=_cmd_home_pair_remote)
+    hm_pair_c = hm_sub.add_parser(
+        "pair-complete",
+        help="finish pairing with the code; prints device_token once",
+    )
+    hm_pair_c.add_argument("code", help="pair code from pair-remote")
+    hm_pair_c.add_argument("--label", default=None)
+    hm_pair_c.set_defaults(func=_cmd_home_pair_complete)
+    hm_rlist = hm_sub.add_parser("remote-list", help="list paired remote devices")
+    hm_rlist.set_defaults(func=_cmd_home_remote_list)
+    hm_rrev = hm_sub.add_parser("remote-revoke", help="revoke a paired device token")
+    hm_rrev.add_argument("--device-id", default=None)
+    hm_rrev.add_argument("--all", action="store_true")
+    hm_rrev.set_defaults(func=_cmd_home_remote_revoke)
+
+    fleet_p = sub.add_parser("fleet", help="admin-PC multi-VPS registry (fleet.json)")
+    fleet_sub = fleet_p.add_subparsers(dest="fleet_action", required=True)
+    fl_list = fleet_sub.add_parser("list", help="list hosts (tokens redacted)")
+    fl_list.add_argument("--path", default=None, help="override fleet.json path")
+    fl_list.set_defaults(func=_cmd_fleet)
+    fl_path = fleet_sub.add_parser("path", help="print default fleet.json path")
+    fl_path.set_defaults(func=_cmd_fleet)
+    fl_add = fleet_sub.add_parser("add", help="upsert a host in fleet.json")
+    fl_add.add_argument("--id", required=True)
+    fl_add.add_argument("--label", default=None)
+    fl_add.add_argument("--ssh", default="")
+    fl_add.add_argument("--home", default="")
+    fl_add.add_argument("--device-id", default="")
+    fl_add.add_argument("--device-token", default="")
+    fl_add.add_argument("--role", default="worker")
+    fl_add.add_argument("--tags", default="", help="comma-separated tags")
+    fl_add.add_argument("--profile-id", default=None)
+    fl_add.add_argument("--path", default=None)
+    fl_add.set_defaults(func=_cmd_fleet)
+    fl_prim = fleet_sub.add_parser("primary", help="mark host as fleet primary")
+    fl_prim.add_argument("--id", required=True)
+    fl_prim.add_argument("--path", default=None)
+    fl_prim.set_defaults(func=_cmd_fleet)
+    fl_rm = fleet_sub.add_parser("remove", help="remove host from fleet.json")
+    fl_rm.add_argument("--id", required=True)
+    fl_rm.add_argument("--path", default=None)
+    fl_rm.set_defaults(func=_cmd_fleet)
+    fl_ps = fleet_sub.add_parser("profile-set", help="upsert a settings profile (no isolate mode)")
+    fl_ps.add_argument("--id", required=True)
+    fl_ps.add_argument("--label", default=None)
+    fl_ps.add_argument("--settings", required=True, help="JSON object of dotted overlay keys")
+    fl_ps.add_argument("--ml-artifact", default=None)
+    fl_ps.add_argument("--path", default=None)
+    fl_ps.set_defaults(func=_cmd_fleet)
+    fl_pa = fleet_sub.add_parser("profile-apply", help="push profile settings over SSH (home settings)")
+    fl_pa.add_argument("--id", required=True, help="profile id")
+    fl_pa.add_argument("--scope", default="all")
+    fl_pa.add_argument("--path", default=None)
+    fl_pa.add_argument("--identity", "-i", default=None)
+    fl_pa.set_defaults(func=_cmd_fleet)
+    fl_gs = fleet_sub.add_parser("group-set", help="upsert a host group")
+    fl_gs.add_argument("--id", required=True)
+    fl_gs.add_argument("--label", default=None)
+    fl_gs.add_argument("--hosts", default="", help="comma-separated host ids")
+    fl_gs.add_argument("--profile-id", default=None)
+    fl_gs.add_argument("--primary-host-id", default=None)
+    fl_gs.add_argument("--path", default=None)
+    fl_gs.set_defaults(func=_cmd_fleet)
+    fl_ea = fleet_sub.add_parser("edge-add", help="add graph edge (depends_on|serves|replica|bastion)")
+    fl_ea.add_argument("--from", dest="frm", required=True)
+    fl_ea.add_argument("--to", required=True)
+    fl_ea.add_argument("--kind", default="depends_on")
+    fl_ea.add_argument("--note", default="")
+    fl_ea.add_argument("--path", default=None)
+    fl_ea.set_defaults(func=_cmd_fleet)
+    fl_er = fleet_sub.add_parser("edge-rm", help="remove graph edge")
+    fl_er.add_argument("--from", dest="frm", required=True)
+    fl_er.add_argument("--to", required=True)
+    fl_er.add_argument("--kind", default=None)
+    fl_er.add_argument("--path", default=None)
+    fl_er.set_defaults(func=_cmd_fleet)
+    fl_graph = fleet_sub.add_parser("graph", help="show hosts/groups/profiles/edges + dependents")
+    fl_graph.add_argument("--path", default=None)
+    fl_graph.set_defaults(func=_cmd_fleet)
+    fl_warm = fleet_sub.add_parser("warmup", help="warmup checklist (local or remote fan-out)")
+    fl_warm.add_argument("--scope", default="local", help="local|self|all|host id|group:…")
+    fl_warm.add_argument("--path", default=None)
+    fl_warm.add_argument("--identity", "-i", default=None)
+    fl_warm.set_defaults(func=_cmd_fleet)
+    for fname, fhelp in (
+        ("status", "SSH status fan-out"),
+        ("unlock-locked", "mass-unlock LOCKED hosts via SSH (codes never leave admin PC)"),
+        ("attack", "Attack L2 quarantine / L3 lockdown on scope"),
+        ("release", "Release quarantine/lockdown/kirk on scope"),
+        ("tg", "run fleet Telegram bot (hub)"),
+    ):
+        fp = fleet_sub.add_parser(fname, help=fhelp)
+        fp.add_argument("--scope", default="all", help="host id | all | group:id")
+        fp.add_argument("--path", default=None)
+        fp.add_argument("--identity", "-i", default=None, help="SSH identity file")
+        if fname == "attack":
+            fp.add_argument("--level", default="L2", choices=["L2", "L3", "l2", "l3"])
+            fp.add_argument("--deps", action="store_true", help="also touch graph dependents (not bastion/dns)")
+        fp.set_defaults(func=_cmd_fleet)
 
     protect_p = sub.add_parser("protect", help="user systemd protect service (survives CC exit)")
     protect_sub = protect_p.add_subparsers(dest="protect_action", required=True)

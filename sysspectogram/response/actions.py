@@ -357,6 +357,113 @@ class NftBackend:
             return f"shielded port {port}"
         return "nft required for shield_port"
 
+    def quarantine_ports(
+        self,
+        ports: list[int] | None = None,
+        *,
+        dry_run: bool = False,
+        ttl_sec: float = 3600.0,
+    ) -> str:
+        """L2: drop new inbound TCP to app ports (default 80/443); SSH untouched.
+
+        Keeps established/related. Does not cut egress (unlike kirk isolate).
+        """
+        ports = [int(p) for p in (ports or [80, 443]) if int(p) > 0]
+        if not ports:
+            return "quarantine refused: no ports"
+        if dry_run:
+            return f"dry-run quarantine ports={ports} ttl={ttl_sec}"
+        if not shutil.which("nft"):
+            return "nft required for quarantine"
+        self._ensure_chain()
+        # established first (idempotent-ish — duplicate accepts are ok)
+        self._run(
+            [
+                "nft",
+                "add",
+                "rule",
+                "inet",
+                "sysspectogram",
+                "input",
+                "ct",
+                "state",
+                "established,related",
+                "accept",
+                "comment",
+                "sysspectogram:quarantine:est",
+            ]
+        )
+        applied: list[int] = []
+        exp = int(time.time() + float(ttl_sec))
+        for port in ports:
+            comment = f"sysspectogram:quarantine:{port}:{exp}"
+            code, out = self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "tcp",
+                    "dport",
+                    str(port),
+                    "drop",
+                    "comment",
+                    comment,
+                ]
+            )
+            if code != 0:
+                return f"quarantine failed on :{port}: {out.strip()}"
+            applied.append(port)
+        return f"quarantine active ports={applied} ttl={ttl_sec}s (SSH not blocked)"
+
+    def release_quarantine(self, dry_run: bool = False) -> str:
+        """Remove rules tagged sysspectogram:quarantine:*."""
+        if dry_run:
+            return "dry-run release_quarantine"
+        if not shutil.which("nft"):
+            return "nft required"
+        code, out = self._run(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
+        if code != 0:
+            return f"release_quarantine list failed: {out.strip()}"
+        removed = 0
+        for line in out.splitlines():
+            if "sysspectogram:quarantine:" not in line:
+                continue
+            m = re.search(r"handle\s+(\d+)", line)
+            if not m:
+                continue
+            hc, _ = self._run(
+                ["nft", "delete", "rule", "inet", "sysspectogram", "input", "handle", m.group(1)]
+            )
+            if hc == 0:
+                removed += 1
+        return f"release_quarantine removed={removed}"
+
+    def release_lockdown(self, dry_run: bool = False) -> str:
+        """Remove rules tagged sysspectogram:lockdown:*."""
+        if dry_run:
+            return "dry-run release_lockdown"
+        if not shutil.which("nft"):
+            return "nft required"
+        code, out = self._run(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
+        if code != 0:
+            return f"release_lockdown list failed: {out.strip()}"
+        removed = 0
+        for line in out.splitlines():
+            if "sysspectogram:lockdown:" not in line and "sysspectogram:synrl:" not in line:
+                continue
+            m = re.search(r"handle\s+(\d+)", line)
+            if not m:
+                continue
+            hc, _ = self._run(
+                ["nft", "delete", "rule", "inet", "sysspectogram", "input", "handle", m.group(1)]
+            )
+            if hc == 0:
+                removed += 1
+        return f"release_lockdown removed={removed}"
+
     def kirk_isolate(
         self,
         *,

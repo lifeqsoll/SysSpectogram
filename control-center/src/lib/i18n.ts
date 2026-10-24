@@ -5,6 +5,7 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   'app.name': { en: 'SysSpectogram', ru: 'SysSpectogram' },
   'app.subtitle': { en: 'Control Center', ru: 'Центр управления' },
   'nav.home': { en: 'Home', ru: 'Главная' },
+  'nav.fleet': { en: 'Fleet', ru: 'Флот' },
   'nav.charts': { en: 'Charts', ru: 'Графики' },
   'nav.alerts': { en: 'Alerts', ru: 'Алерты' },
   'nav.overview': { en: 'Overview', ru: 'Обзор' },

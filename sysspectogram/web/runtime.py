@@ -101,7 +101,9 @@ def run_web_dashboard(
     unlock_enabled = want_unlock and (bool(public_url) or has_bot_creds)
     unlock_gate = ConsoleUnlock(
         enabled=unlock_enabled,
-        ttl_sec=float(tg_cfg.get("unlock_ttl_sec", 7200)),
+        ttl_sec=float(tg_cfg.get("unlock_ttl_sec", 0)),
+        code_ttl_sec=float(tg_cfg.get("unlock_code_ttl_sec", 300)),
+        code_len=int(tg_cfg.get("unlock_code_len", 10)),
         on_code=_print_unlock,
     )
     if unlock_gate.enabled and unlock_gate.pending_code:

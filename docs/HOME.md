@@ -100,4 +100,5 @@ Destructive actions require console unlock when Telegram/web unlock is enabled.
 
 - [CONTROL_CENTER.md](CONTROL_CENTER.md) — architecture and helper allowlist  
 - [TELEGRAM.md](TELEGRAM.md) — bot commands  
+- [FLEET.md](FLEET.md) — many VPS from one admin PC + fleet Telegram  
 - [WEBAPP.md](WEBAPP.md) — optional Mini App tunnel  

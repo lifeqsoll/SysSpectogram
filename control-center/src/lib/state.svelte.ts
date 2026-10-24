@@ -3,7 +3,7 @@ import type { Lang } from './settings';
 import type { Range } from './api';
 
 /** Simple-home sections (default). */
-export const SIMPLE_SECTIONS = ['home', 'charts', 'alerts', 'settings'] as const;
+export const SIMPLE_SECTIONS = ['home', 'fleet', 'charts', 'alerts', 'settings'] as const;
 
 /** Geek / Advanced sections. */
 export const ADVANCED_SECTIONS = [

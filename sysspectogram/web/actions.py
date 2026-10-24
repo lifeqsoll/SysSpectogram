@@ -62,9 +62,12 @@ class WebControllers:
             except Exception:
                 ok = False
             if not ok:
+                from sysspectogram.unlock_help import locked_playbook
+
                 return {
                     "ok": False,
-                    "error": "control plane LOCKED — unlock via Telegram /unlock <console code>",
+                    "error": "control plane LOCKED",
+                    "help": locked_playbook(host_id=getattr(self, "host_id", None) or "host"),
                     "status": self.status(),
                 }
         try:
@@ -171,6 +174,23 @@ class WebControllers:
             msg = self.nft.apply_lockdown(dry_run=self.dry_run, allow_cidrs=allows)
             self.bus.lockdown = True
             return msg
+        if action == "quarantine":
+            ports = payload.get("ports") or [80, 443]
+            if isinstance(ports, (str, int)):
+                ports = [ports]
+            ttl = float(payload.get("ttl") or 3600)
+            msg = self.nft.quarantine_ports(
+                [int(p) for p in ports], dry_run=self.dry_run, ttl_sec=ttl
+            )
+            return msg
+        if action == "release_quarantine":
+            return self.nft.release_quarantine(dry_run=self.dry_run)
+        if action == "release_lockdown":
+            msg = self.nft.release_lockdown(dry_run=self.dry_run)
+            self.bus.lockdown = False
+            return msg
+        if action == "kirk_release":
+            return self.nft.kirk_release(dry_run=self.dry_run)
         if action == "set_dry_run":
             # Disallow flipping dry_run over the network after unlock (audit).
             raise PermissionError(

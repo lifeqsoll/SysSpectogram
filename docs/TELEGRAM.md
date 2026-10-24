@@ -4,25 +4,29 @@
 
 SysSpectogram `guard --telegram` exposes a phone remote for status, audit, OSINT, sims, and confirmed response actions. Only `TELEGRAM_CHAT_ID` is accepted.
 
-## Console unlock (v0.4)
+## Console unlock
 
 If someone steals `.env` (bot token + chat id), they still should not drive **kill/ban/lockdown** without the host. After `guard --telegram` starts:
 
-1. Host console prints a **6-digit TELEGRAM UNLOCK CODE** (never sent in the TG message body).
-2. Bot tells the allowlisted chat that the control plane is **LOCKED**.
-3. You send `/unlock 123456` from that chat.
-4. Session stays open for `telegram.unlock_ttl_sec` (default **2h**). `/lock` regenerates a new code on the console.
+1. Host writes an **alphanumeric** code to `state/unlock.code` (~10 chars, ~5 min to enter; never in the TG message body).
+2. Bot tells the allowlisted chat that the control plane is **LOCKED** (with a full how-to if you try actions while locked).
+3. You send `/unlock CODE` from that chat (case-insensitive).
+4. Session stays open until `/lock` when `unlock_ttl_sec: 0` (default). Optional file `state/control.unlocked` survives guard restart so you are **not** unlocking every morning.
 
-Also gated: live web / Mini App SOAR actions (`/api/action`) use the same unlock session. Unlock via TG `/unlock` **or** Mini App Settings → unlock code (`POST /api/unlock`). While LOCKED, process lists and ban details are hidden from the dashboard snapshot.
+Also gated: live web / Mini App SOAR actions (`/api/action`). Unlock via TG `/unlock` **or** Mini App Settings → unlock code. While LOCKED, process lists and ban details stay hidden.
 
-**Brute-force:** after 5 bad codes the console prints a **new** code; after 8 failures in 5 minutes unlock is refused until you wait / restart.
+**Brute-force:** after 5 bad codes a **new** code is issued; after 8 failures in 5 minutes unlock is refused briefly.
 
 ```yaml
 # configs/default.yaml
 telegram:
   require_console_unlock: true
-  unlock_ttl_sec: 7200
+  unlock_ttl_sec: 0
+  unlock_code_ttl_sec: 300
+  unlock_code_len: 10
 ```
+
+**Fleet:** per-VPS bots stay as above; optional **fleet bot** on the admin hub — see [FLEET.md](FLEET.md).
 
 ## Setup
 

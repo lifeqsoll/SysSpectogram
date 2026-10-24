@@ -77,6 +77,7 @@ Defaults are intentionally cautious.
 - Destructive actions require a **console unlock** code shown in Control Center / `state/unlock.code` (never sent in the unlock Telegram notice itself).
 - Unlock language follows `ui.lang` once per guard start (no dual EN+RU spam from one process).
 - Local SOAR uses `state/control.sock` with the **same** unlock gate as Telegram.
+- Multi-VPS fleet control uses **SSH + device tokens** (host pair code); see [docs/FLEET.md](docs/FLEET.md). No public HTTPS control plane.
 
 ### Single guard
 

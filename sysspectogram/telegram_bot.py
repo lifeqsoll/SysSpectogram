@@ -26,11 +26,12 @@ Status:
 /ping /help /menu /version /status /digest /last [n]
 /labels             # process label rules (As normal/anomaly)
 /dashboard          # open live Mini App (needs WEBAPP_URL)
-/unlock <code>      # console pairing code (required after guard start)
+/unlock <code>      # host pairing code (alphanumeric, ~5 min; then session stays open)
 /lock               # re-lock control plane
 
 Host audit (CLI audit):
 /audit /processes /ports /rootkit /panel /score
+/charts [cpu|mem|net|gpu|disk|disk_r|swap|all] [snap|15]
 
 Perimeter / response:
 /bans /ban <ip> [ttl_sec|perm]
@@ -125,7 +126,7 @@ class TelegramBot:
         include_nmap: bool = False,
         webapp_url: str | None = None,
         require_console_unlock: bool = True,
-        unlock_ttl_sec: float = 7200.0,
+        unlock_ttl_sec: float = 0.0,
         unlock: ConsoleUnlock | None = None,
         kirk_status: dict | None = None,
         response_mode: str | None = None,
@@ -368,11 +369,14 @@ class TelegramBot:
             rows.append([_btn(f"Kill root {comm}({pid})"[:40], f"ask|{tkill}")])
         tlock = self.tokens.issue("lockdown", {})
         rows.append([_btn("Lockdown", f"ask2|{tlock}")])
-        tign = self.tokens.issue(
-            "ignore_proc",
-            self._proc_feedback_payload(pid=pid, comm=comm, path=exe, rule_id="unexpected_root"),
+        fb = self._proc_feedback_row(
+            pid=pid if pid > 1 else None,
+            comm=comm or None,
+            path=exe or None,
+            rule_id="unexpected_root",
         )
-        rows.append([_btn("Ignore proc", f"do|{tign}")])
+        if fb:
+            rows.append(fb)
         self.client.send_message(text, reply_markup=_markup(rows))
 
     def send_session_alert(self, session) -> None:
@@ -593,9 +597,9 @@ class TelegramBot:
 
     def _menu_markup(self) -> dict:
         rows = [
-            [_btn("Status", "menu|status"), _btn("Audit", "menu|audit"), _btn("Panel", "menu|panel")],
-            [_btn("Score", "menu|score"), _btn("Ports", "menu|ports"), _btn("Bans", "menu|bans")],
-            [_btn("Digest", "menu|digest"), _btn("Recipes", "menu|recipes"), _btn("Help", "menu|help")],
+            [_btn("Status", "menu|status"), _btn("Audit", "menu|audit"), _btn("Charts", "menu|charts")],
+            [_btn("Panel", "menu|panel"), _btn("Score", "menu|score"), _btn("Ports", "menu|ports")],
+            [_btn("Bans", "menu|bans"), _btn("Digest", "menu|digest"), _btn("Help", "menu|help")],
         ]
         if self.webapp_url:
             rows.insert(
@@ -617,14 +621,21 @@ class TelegramBot:
         if cmd == "/unlock":
             if not args:
                 self.client.send_message(
-                    self.prefix("usage: /unlock <6-digit code from the Control Center>"),
+                    self.prefix(
+                        "usage: /unlock <code> — from Control Center / state/unlock.code "
+                        "(letters+digits, ~5 min on host)"
+                    ),
                     chat_id=chat_id,
                 )
                 return
             if self.try_unlock(args[0]):
-                mins = int(self.unlock_ttl_sec // 60) if self.unlock_ttl_sec else 0
+                if self.unlock_ttl_sec and self.unlock_ttl_sec > 0:
+                    mins = int(self.unlock_ttl_sec // 60)
+                    ttl_msg = f"{mins}m TTL"
+                else:
+                    ttl_msg = "session stays open until /lock"
                 self.client.send_message(
-                    self.prefix(f"control plane UNLOCKED ({mins}m TTL). /lock to re-lock."),
+                    self.prefix(f"control plane UNLOCKED ({ttl_msg})."),
                     chat_id=chat_id,
                 )
             else:
@@ -654,11 +665,10 @@ class TelegramBot:
             return
 
         if not self.session_unlocked():
+            from sysspectogram.unlock_help import locked_playbook
+
             self.client.send_message(
-                self.prefix(
-                    "control plane LOCKED. Get the 6-digit code in the Control Center (Show code), "
-                    "then send /unlock <code> from this chat."
-                ),
+                self.prefix(locked_playbook(host_id=self.host_id, lang=self.lang)),
                 chat_id=chat_id,
             )
             return
@@ -708,6 +718,8 @@ class TelegramBot:
                 self._cmd_rootkit(chat_id)
             elif cmd == "/panel":
                 self._cmd_panel(chat_id)
+            elif cmd == "/charts":
+                self._cmd_charts(args, chat_id)
             elif cmd == "/score":
                 self._cmd_score(chat_id)
             elif cmd == "/last":
@@ -879,17 +891,19 @@ class TelegramBot:
         data = cq.get("data") or ""
         cq_id = cq.get("id", "")
         if not self.session_unlocked():
+            from sysspectogram.unlock_help import locked_playbook
+
             if data.startswith("ask|") or data.startswith("ask2|") or data.startswith("yes|") or data.startswith("do|"):
                 self.client.answer_callback(cq_id, "locked")
                 self.client.send_message(
-                    self.prefix("LOCKED - /unlock <console code> before actions"),
+                    self.prefix(locked_playbook(host_id=self.host_id, lang=self.lang)),
                     chat_id=chat_id,
                 )
                 return
             if data.startswith("menu|"):
                 self.client.answer_callback(cq_id, "locked")
                 self.client.send_message(
-                    self.prefix("LOCKED - /unlock <console code> first"),
+                    self.prefix(locked_playbook(host_id=self.host_id, lang=self.lang)),
                     chat_id=chat_id,
                 )
                 return
@@ -899,6 +913,7 @@ class TelegramBot:
             mapping = {
                 "status": "/status",
                 "audit": "/audit",
+                "charts": "/charts all snap",
                 "panel": "/panel",
                 "score": "/score",
                 "ports": "/ports",
@@ -1262,6 +1277,80 @@ class TelegramBot:
             for f in findings[:20]:
                 lines.append(str(f))
         self.client.send_message(self.prefix("\n".join(lines)[:3800]), chat_id=chat_id)
+
+    def _cmd_charts(self, args: list[str], chat_id: str) -> None:
+        """App-like charts: `/charts [cpu|mem|net|gpu|disk|disk_r|swap|all] [snap|15]`."""
+        from sysspectogram.config import state_root
+        from sysspectogram.viz.tg_charts import (
+            ALL_KEYS,
+            SERIES,
+            build_chart_pngs,
+            build_rolling_gif,
+            live_sample_series,
+            load_series_from_store,
+        )
+
+        which = "all"
+        mode = "snap"
+        for a in args:
+            al = a.lower()
+            if al in SERIES or al in {"all", "core"}:
+                which = al
+            elif al in {"snap", "now", "png"}:
+                mode = "snap"
+            elif al in {"15", "gif", "anim"} or al.isdigit():
+                mode = "15" if al in {"15", "gif", "anim"} else al
+
+        seconds = 60.0 if mode == "snap" else float(mode if mode.isdigit() else 15)
+        self.client.send_message(
+            self.prefix(f"charts {which} ({'GIF ' + str(int(seconds)) + 's' if mode != 'snap' else 'snapshot'})…"),
+            chat_id=chat_id,
+        )
+
+        def job() -> None:
+            try:
+                store = state_root() / "state" / "timeseries.sqlite"
+                series = load_series_from_store(store, seconds=max(seconds, 15.0)) if store.is_file() else {}
+                if not any(series.get(k) for k in ALL_KEYS):
+                    series = live_sample_series(seconds=min(seconds, 15.0), interval=1.0)
+                if mode == "snap":
+                    for label, png in build_chart_pngs(series, which=which, host_id=self.host_id):
+                        self.client.send_photo_bytes(
+                            png,
+                            caption=self.prefix(f"{label} · snapshot")[:900],
+                            chat_id=chat_id,
+                        )
+                    if which == "all":
+                        for key in ALL_KEYS:
+                            if not series.get(key):
+                                continue
+                            for _lab, png in build_chart_pngs(series, which=key, host_id=self.host_id):
+                                self.client.send_photo_bytes(
+                                    png,
+                                    caption=self.prefix(f"{key}")[:900],
+                                    chat_id=chat_id,
+                                )
+                else:
+                    gif = build_rolling_gif(
+                        series, which=which, host_id=self.host_id, window=min(12, max(4, int(seconds // 2)))
+                    )
+                    if gif:
+                        self.client.send_animation_bytes(
+                            gif,
+                            caption=self.prefix(f"{which} · last ~{int(seconds)}s")[:900],
+                            chat_id=chat_id,
+                        )
+                    else:
+                        for _lab, png in build_chart_pngs(series, which=which, host_id=self.host_id):
+                            self.client.send_photo_bytes(
+                                png,
+                                caption=self.prefix(f"{which} · GIF unavailable, snapshot")[:900],
+                                chat_id=chat_id,
+                            )
+            except Exception as exc:
+                self.client.send_message(self.prefix(f"charts failed: {exc}"), chat_id=chat_id)
+
+        threading.Thread(target=job, daemon=True).start()
 
     def _cmd_panel(self, chat_id: str) -> None:
         import numpy as np
