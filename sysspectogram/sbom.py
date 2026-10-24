@@ -8,9 +8,13 @@ import json
 import os
 import re
 import subprocess
-import tomllib
 from pathlib import Path
 from typing import Any, Iterable
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
 
 SPDX_VERSION = "SPDX-2.3"
 SBOM_NAMESPACE = "https://sysspectogram.dev/sbom"

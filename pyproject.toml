@@ -22,10 +22,11 @@ dependencies = [
     "PyYAML>=6.0",
     "rich>=13.0",
     "dnspython>=2.4",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4", "tomli>=2.0; python_version < '3.11'"]
+dev = ["pytest>=7.4"]
 ml = ["torch>=2.0"]
 onnx = ["onnxruntime>=1.16"]
 all = ["torch>=2.0", "onnxruntime>=1.16"]
