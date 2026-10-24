@@ -19,7 +19,7 @@ Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts 
 
 ## Start here
 
-Three ways in. Geek tools stay behind **Advanced**. Release notes: **[v1.1.1](docs/RELEASE_v1.1.1.md)** · [v1.1.0](docs/RELEASE_v1.1.0.md).
+Three ways in. Geek tools stay behind **Advanced**. Release notes: **[v1.2.0](docs/RELEASE_v1.2.0.md)** · [v1.1.1](docs/RELEASE_v1.1.1.md) · [v1.1.0](docs/RELEASE_v1.1.0.md).
 
 ### 1. Desktop (AppImage / `.deb`)
 
@@ -42,14 +42,14 @@ cd control-center && npm install && npm run tauri dev
 ```bash
 # python3 + python3-venv + curl; replace tag if needed
 # prefer the tagged script (not floating main); or download friend-day0.sh from the release
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/friend-day0.sh | bash -s -- v1.1.1
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.0/scripts/friend-day0.sh | bash -s -- v1.2.0
 loginctl enable-linger $USER   # else protect stops on logout
 ```
 
 Optional privileged helper (polkit; no local checkout):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.1.1/scripts/install-helper-from-release.sh | sudo bash -s -- v1.1.1
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.2.0
 ```
 
 Full friend story: [docs/FRIEND.md](docs/FRIEND.md). Geek git Day-0: [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX after training elsewhere: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
@@ -85,8 +85,9 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 ### What you get
 
-- **Control Center (simple + Advanced)** — Home, Charts, Alerts, Settings; light/dark; EN/RU; first-run wizard
-- **Telegram + optional web** — Clear alerts; Ban/Kill after console unlock; web off by default
+- **Control Center (simple + Advanced)** — Home, Charts, Alerts, Settings, **Fleet**; light/dark; EN/RU; first-run wizard
+- **Fleet (many VPS)** — SSH + pair + device token; status / unlock-locked / Attack L2–L3 / profiles / graph ([FLEET.md](docs/FLEET.md))
+- **Telegram + optional web** — Clear alerts; `/charts`; Ban/Kill after console unlock; optional fleet hub bot; web off by default
 - **Guard + Rust agent** — Perimeter (SSH brute, …), FIM/process signals, timeseries charts
 - **Privileged helper** — polkit allowlist for settings / service / signed bundles
 - **Optional host ML** — Train on a builder PC; import ONNX weights on the VPS ([HOME.md](docs/HOME.md))
@@ -101,7 +102,8 @@ Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md
 
 | Topic | Links |
 | --- | --- |
-| Friends | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.1.1](docs/RELEASE_v1.1.1.md) |
+| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.2.0](docs/RELEASE_v1.2.0.md) |
+| Many VPS | [Fleet](docs/FLEET.md) · Control Center Fleet tab · `fleet` / `home pair-*` CLI |
 | Geek / advanced | [Configure](docs/CONFIGURE.md) · [Day-0 CLI (git)](docs/DAY0_VPS.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Defense | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |
 | More | [Telegram](docs/TELEGRAM.md) · [Live web](docs/WEBAPP.md) · [Recipes](docs/RECIPES.md) · [Train bridge](docs/TRAIN_BRIDGE.md) · [Product](docs/PRODUCT_v1.0.md) · [ADRs](docs/adr/) |
@@ -444,7 +446,8 @@ python -m sysspectogram [--config PATH] [--version] <command> ...
 | `spectro` | Render a metrics spectrogram for an incident or a time |
 | `web` | Live local / Telegram Mini App dashboard |
 | `control` | SOAR via local guard control socket |
-| `home` | Simple-home helpers (onboarding, model import, `.env`) |
+| `home` | Simple-home helpers (onboarding, model import, `.env`, pair-remote, warmup) |
+| `fleet` | Multi-VPS registry + SSH fan-out (admin PC; see [FLEET.md](docs/FLEET.md)) |
 | `protect` | User systemd protect service |
 | `menu` | Friend interactive menu for VPS/SSH |
 | `setup` | Interactive `.env` / Telegram setup (legacy) |
@@ -872,7 +875,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v1.1.x** focuses on friend install + simple-home UX. See [docs/RELEASE_v1.1.1.md](docs/RELEASE_v1.1.1.md), [docs/FRIEND.md](docs/FRIEND.md), [docs/HOME.md](docs/HOME.md).
+**v1.2.0** adds multi-VPS **Fleet**, lasting unlock, TG `/charts`, Attack L2/L3. See [docs/RELEASE_v1.2.0.md](docs/RELEASE_v1.2.0.md), [docs/FLEET.md](docs/FLEET.md). Friend install remains [docs/FRIEND.md](docs/FRIEND.md) · [docs/HOME.md](docs/HOME.md).
 
 ## Contributing
 

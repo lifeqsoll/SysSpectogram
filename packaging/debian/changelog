@@ -1,3 +1,10 @@
+sysspectogram (1.2.0-1) unstable; urgency=medium
+
+  * Fleet multi-VPS (SSH + device token), lasting unlock, TG /charts,
+    Attack L2 quarantine / L3 lockdown, Control Center Fleet tab.
+
+ -- lifeqsoll <lifeqsoll@users.noreply.github.com>  Sat, 24 Oct 2026 18:20:00 +0300
+
 sysspectogram (1.1.1-1) unstable; urgency=medium
 
   * Friend protect path: systemd unit, day-0/helper scripts, detect IP,
