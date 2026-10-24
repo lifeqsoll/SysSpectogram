@@ -232,6 +232,7 @@ def train_models(
         "device_trained": device,
         "windows_format": windows_format,
         "dataset_schema_version": meta.get("schema_version"),
+        "schema_version": int(meta.get("schema_version") or 2),
     }
     (out_dir / "meta.json").write_text(json.dumps(artifact_meta, indent=2), encoding="utf-8")
     import hashlib

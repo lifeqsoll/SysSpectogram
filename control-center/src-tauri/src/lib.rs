@@ -565,6 +565,49 @@ fn fleet_release(scope: Option<String>) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn fleet_incidents(scope: Option<String>, limit: Option<i64>) -> Result<Value, String> {
+    let s = scope.unwrap_or_else(|| "all".into());
+    let lim = limit.unwrap_or(40).to_string();
+    cli::run_json(&[
+        "fleet",
+        "incidents",
+        "--scope",
+        s.as_str(),
+        "--limit",
+        lim.as_str(),
+    ])
+}
+
+#[tauri::command]
+fn fleet_mark_fp(scope: Option<String>, label: Option<String>) -> Result<Value, String> {
+    let s = scope.unwrap_or_else(|| "all".into());
+    let lab = label.unwrap_or_else(|| "host_fp".into());
+    cli::run_json(&[
+        "fleet",
+        "mark-fp",
+        "--scope",
+        s.as_str(),
+        "--label",
+        lab.as_str(),
+    ])
+}
+
+#[tauri::command]
+fn fleet_ban(scope: String, ip: String, ttl: Option<f64>) -> Result<Value, String> {
+    let t = ttl.unwrap_or(3600.0).to_string();
+    cli::run_json(&[
+        "fleet",
+        "ban",
+        "--scope",
+        scope.as_str(),
+        "--ip",
+        ip.as_str(),
+        "--ttl",
+        t.as_str(),
+    ])
+}
+
+#[tauri::command]
 fn control_action(name: String, payload: Value) -> Result<Value, String> {
     let safe = name
         .chars()
@@ -722,6 +765,9 @@ pub fn run() {
             fleet_unlock_locked,
             fleet_attack,
             fleet_release,
+            fleet_incidents,
+            fleet_mark_fp,
+            fleet_ban,
             home_import_model,
             home_write_env,
             onboarding_status,

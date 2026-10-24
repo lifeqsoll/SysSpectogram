@@ -109,6 +109,13 @@ Alerts alone never cascade to L2/L3. Soft mitigation ≠ anti-DDoS — put CDN/s
 - Re-`fleet add` without `--device-token` **preserves** the existing token
 - Mistyped pair codes return `bad pair code` (no crash on length mismatch)
 
+### 6. Observability & fleet ops
+
+- **Prometheus:** `prometheus.enabled` → `http://127.0.0.1:9108/metrics`; CLI `metrics serve|dump`
+- **ML explain:** host alerts show top-3 metrics; TG **False positive**; Fleet `mark-fp`
+- **Eval / schema:** `eval run|schema|stamp-schema`; train writes `schema_version`
+- **Fleet feed:** `fleet incidents`; `fleet ban --ip` across scope
+
 ---
 
 ## Day-0 fleet sketch

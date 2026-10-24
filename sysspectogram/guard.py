@@ -657,6 +657,26 @@ def run_guard(
 
     stop = threading.Event()
 
+    prom_cfg = config.get("prometheus") or {}
+    prom_enabled = bool(prom_cfg.get("enabled"))
+    if prom_enabled:
+        try:
+            from sysspectogram.metrics_prom import GLOBAL_PROM, start_prom_server
+
+            ph = str(prom_cfg.get("host") or "127.0.0.1")
+            pp = int(prom_cfg.get("port") or 9108)
+            start_prom_server(ph, pp)
+            GLOBAL_PROM.set_gauge(
+                "sysspectogram_prom_up",
+                1.0,
+                help_text="Prometheus exporter started",
+                labels={"host": host_id},
+            )
+            console.print(f"[cyan]prometheus[/] http://{ph}:{pp}/metrics")
+        except Exception as exc:
+            console.print(f"[yellow]prometheus start failed[/] {exc}")
+            prom_enabled = False
+
     httpd = None
     control_srv = None
     GLOBAL_BUS.set_host(host_id, 0.5, model_loaded=bool(artifacts_dir))
@@ -1008,6 +1028,32 @@ def run_guard(
                             )
                         except Exception:
                             pass
+            if prom_enabled:
+                try:
+                    from sysspectogram.metrics_prom import GLOBAL_PROM
+
+                    GLOBAL_PROM.set_gauge(
+                        "sysspectogram_host_score",
+                        float(host_score),
+                        help_text="Latest host ML fused score",
+                    )
+                    GLOBAL_PROM.set_gauge(
+                        "sysspectogram_host_risk",
+                        float(risk),
+                        help_text="Latest fused host risk",
+                    )
+                    GLOBAL_PROM.set_gauge(
+                        "sysspectogram_agent_score",
+                        float(ascore),
+                        help_text="Latest agent score",
+                    )
+                    GLOBAL_PROM.set_gauge(
+                        "sysspectogram_host_anomaly",
+                        1.0 if is_anom else 0.0,
+                        help_text="1 when last window is anomalous",
+                    )
+                except Exception:
+                    pass
             if not is_anom:
                 if bot is not None:
                     try:
@@ -1020,6 +1066,16 @@ def run_guard(
             if now - last_alert < cooldown_sec:
                 return
             last_alert = now
+            if prom_enabled:
+                try:
+                    from sysspectogram.metrics_prom import GLOBAL_PROM
+
+                    GLOBAL_PROM.inc_counter(
+                        "sysspectogram_host_alerts_total",
+                        help_text="Host ML alerts emitted",
+                    )
+                except Exception:
+                    pass
             if bot is not None:
                 try:
                     bot.last_host_window = matrix
@@ -1030,7 +1086,7 @@ def run_guard(
             tops = list_top_processes(limit=max(top_n, 5))
             means = matrix.mean(axis=0)
             col_map = {c: float(means[i]) for i, c in enumerate(columns)}
-            feats = feature_attribution(matrix, columns, top_k=5)
+            feats = feature_attribution(matrix, columns, top_k=3)
             expl_kw = {
                 "cpu": col_map.get("cpu_percent"),
                 "mem": col_map.get("mem_percent"),

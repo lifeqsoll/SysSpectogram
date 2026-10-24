@@ -227,6 +227,119 @@ def attack(
     return {"ok": all(r.get("ok") for r in results), "level": level, "results": results}
 
 
+def ban_ip(
+    store: FleetStore,
+    scope: str,
+    ip: str,
+    *,
+    ttl_sec: float = 3600.0,
+    max_workers: int = 6,
+    identity: str | None = None,
+) -> dict[str, Any]:
+    """Fan-out IP ban to scope (control action `ban`)."""
+    hosts = _select(store, scope)
+
+    def one(h: FleetHost) -> dict[str, Any]:
+        st0 = remote_control(h, {"op": "status"}, identity=identity)
+        status = (st0.get("status") or {}) if st0.get("ok") else {}
+        if st0.get("ok") and status.get("control_unlocked") is False:
+            return {
+                "host_id": h.id,
+                "ok": False,
+                "error": "LOCKED",
+                "help": locked_playbook(host_id=h.id),
+            }
+        return remote_control(
+            h,
+            {"op": "action", "name": "ban", "payload": {"ip": ip, "ttl_sec": ttl_sec}},
+            identity=identity,
+        )
+
+    results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(hosts) or 1))) as pool:
+        futs = {pool.submit(one, h): h for h in hosts}
+        for fut in as_completed(futs):
+            results.append(fut.result())
+    return {"ok": all(r.get("ok") for r in results), "ip": ip, "results": results}
+
+
+def mark_false_positive(
+    store: FleetStore,
+    scope: str,
+    *,
+    label: str = "host_fp",
+    identity: str | None = None,
+) -> dict[str, Any]:
+    """Record a host-anomaly false positive on each host (operator_feedback.json)."""
+    import shlex
+
+    from sysspectogram.fleet.ssh import remote_python, ssh_run
+
+    hosts = _select(store, scope)
+    results: list[dict[str, Any]] = []
+    for h in hosts:
+        home = (h.home_path or "").rstrip("/") or "."
+        py = remote_python(h)
+        remote = (
+            f"cd {shlex.quote(home)} && {py} -m sysspectogram home false-positive "
+            f"--label {shlex.quote(label)} --source fleet"
+        )
+        r = ssh_run(h, remote, identity=identity)
+        data = r.json() or {"ok": False, "error": r.stderr or r.stdout}
+        data["host_id"] = h.id
+        results.append(data)
+    return {"ok": all(r.get("ok") for r in results), "results": results}
+
+
+def incidents_feed(
+    store: FleetStore,
+    scope: str = "all",
+    *,
+    limit: int = 40,
+    identity: str | None = None,
+) -> dict[str, Any]:
+    """Pull recent incidents/alerts JSONL tails from each host and merge."""
+    import shlex
+
+    from sysspectogram.fleet.ssh import remote_python, ssh_run
+
+    hosts = _select(store, scope)
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for h in hosts:
+        home = (h.home_path or "").rstrip("/") or "."
+        py = remote_python(h)
+        remote = (
+            f"cd {shlex.quote(home)} && {py} -m sysspectogram home feed-tail "
+            f"--limit {int(limit)} --host-id {shlex.quote(h.id)}"
+        )
+        r = ssh_run(h, remote, identity=identity, timeout=45.0)
+        data = r.json()
+        if not data or not data.get("ok"):
+            errors.append({"host_id": h.id, "error": (r.stderr or r.stdout or "ssh failed")[:300]})
+            continue
+        for row in data.get("rows") or []:
+            if isinstance(row, dict):
+                row.setdefault("host_id", h.id)
+                items.append(row)
+
+    def _ts(row: dict[str, Any]) -> float:
+        for k in ("ts", "last_ts", "first_ts", "at"):
+            try:
+                return float(row.get(k) or 0)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    items.sort(key=_ts, reverse=True)
+    return {
+        "ok": True,
+        "n": len(items),
+        "items": items[: max(1, limit)],
+        "errors": errors,
+    }
+
+
 def release(
     store: FleetStore,
     scope: str = "all",

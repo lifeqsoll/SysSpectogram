@@ -443,6 +443,8 @@ python -m sysspectogram [--config PATH] [--version] <command> ...
 | `control` | SOAR через локальный control.sock guard’а |
 | `home` | Простые хелперы: онбординг, модель, `.env`, pair, warmup |
 | `fleet` | Несколько VPS с админ-ПК ([FLEET.md](docs/FLEET.md)) |
+| `eval` | Офлайн ML-eval / stamp `schema_version` |
+| `metrics` | Prometheus text (`serve` на 127.0.0.1:9108) |
 | `protect` | Пользовательский systemd-сервис защиты |
 | `menu` | Интерактивное меню для VPS/SSH |
 | `setup` | Интерактивный `.env` / Telegram (устаревшее) |

@@ -14,7 +14,7 @@
   import { t } from '../lib/i18n';
   import { fmtNum, fmtTime } from '../lib/format';
   import { live } from '../lib/live.svelte';
-  import { ui } from '../lib/state.svelte';
+  import { ui, type SectionId } from '../lib/state.svelte';
 
   let guard = $state('...');
   let stack = $state<StackStatus | null>(null);
@@ -205,11 +205,11 @@
   const cpuNow = $derived(live.values.cpu_percent?.value ?? null);
   const tips = $derived(
     [
-      !running ? { id: 'start', text: t('home.tipStart'), go: null as string | null } : null,
-      running && mode === 'observe' ? { id: 'mode', text: t('home.tipMode'), go: 'settings' } : null,
-      !tgOn ? { id: 'tg', text: t('home.tipTg'), go: 'settings' } : null,
-      running ? { id: 'charts', text: t('home.tipCharts'), go: 'charts' } : null,
-    ].filter(Boolean) as { id: string; text: string; go: string | null }[],
+      !running ? { id: 'start', text: t('home.tipStart'), go: null as SectionId | null } : null,
+      running && mode === 'observe' ? { id: 'mode', text: t('home.tipMode'), go: 'settings' as SectionId } : null,
+      !tgOn ? { id: 'tg', text: t('home.tipTg'), go: 'settings' as SectionId } : null,
+      running ? { id: 'charts', text: t('home.tipCharts'), go: 'charts' as SectionId } : null,
+    ].filter(Boolean) as { id: string; text: string; go: SectionId | null }[],
   );
 </script>
 

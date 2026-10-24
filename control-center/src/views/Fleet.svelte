@@ -26,6 +26,7 @@
   let scope = $state('all');
   let profileId = $state('');
   let attackDeps = $state(false);
+  let banIp = $state('');
   let log = $state('');
   let warmupLocal = $state('');
 
@@ -145,6 +146,41 @@
     }
   }
 
+  async function runIncidents() {
+    log = 'incidents…';
+    try {
+      const r = await invoke<Record<string, unknown>>('fleet_incidents', { scope, limit: 40 });
+      log = JSON.stringify(r, null, 2);
+    } catch (e) {
+      log = String(e);
+    }
+  }
+
+  async function runMarkFp() {
+    log = 'mark false positive…';
+    try {
+      const r = await invoke<Record<string, unknown>>('fleet_mark_fp', { scope, label: 'host_fp' });
+      log = JSON.stringify(r, null, 2);
+    } catch (e) {
+      log = String(e);
+    }
+  }
+
+  async function runBan() {
+    const ip = banIp.trim();
+    if (!ip) {
+      log = 'enter IP to ban';
+      return;
+    }
+    log = `ban ${ip}…`;
+    try {
+      const r = await invoke<Record<string, unknown>>('fleet_ban', { scope, ip, ttl: 3600 });
+      log = JSON.stringify(r, null, 2);
+    } catch (e) {
+      log = String(e);
+    }
+  }
+
   onMount(refresh);
 </script>
 
@@ -195,6 +231,17 @@
       <button type="button" class="danger" onclick={() => runAttack('L3')}>Attack L3</button>
       <button type="button" onclick={runRelease}>Release</button>
       <button type="button" onclick={runWarmup}>Warmup</button>
+      <button type="button" onclick={runIncidents}>
+        {ui.lang === 'ru' ? 'Лента инцидентов' : 'Incidents feed'}
+      </button>
+      <button type="button" onclick={runMarkFp}>
+        {ui.lang === 'ru' ? 'Ложное (FP)' : 'False positive'}
+      </button>
+      <label>
+        ban IP
+        <input bind:value={banIp} placeholder="203.0.113.10" />
+      </label>
+      <button type="button" class="danger" onclick={runBan}>Ban on scope</button>
       <button type="button" class="ghost" onclick={refresh}>{ui.lang === 'ru' ? 'Обновить' : 'Refresh'}</button>
     </div>
 
@@ -299,6 +346,7 @@
     padding-bottom: 0.35rem;
   }
   select,
+  input,
   button {
     font: inherit;
     padding: 0.4rem 0.65rem;
@@ -307,6 +355,9 @@
     background: var(--panel, #141a20);
     color: inherit;
     cursor: pointer;
+  }
+  input {
+    min-width: 9rem;
   }
   button.warn {
     border-color: #b45309;

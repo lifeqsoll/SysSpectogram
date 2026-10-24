@@ -448,6 +448,8 @@ python -m sysspectogram [--config PATH] [--version] <command> ...
 | `control` | SOAR via local guard control socket |
 | `home` | Simple-home helpers (onboarding, model import, `.env`, pair-remote, warmup) |
 | `fleet` | Multi-VPS registry + SSH fan-out (admin PC; see [FLEET.md](docs/FLEET.md)) |
+| `eval` | Offline ML eval / `schema_version` stamp |
+| `metrics` | Prometheus text (`serve` on 127.0.0.1:9108) |
 | `protect` | User systemd protect service |
 | `menu` | Friend interactive menu for VPS/SSH |
 | `setup` | Interactive `.env` / Telegram setup (legacy) |

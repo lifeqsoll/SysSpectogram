@@ -76,6 +76,10 @@ web:
   host: 127.0.0.1
   port: 8765
   public_url: null
+prometheus:
+  enabled: false
+  host: 127.0.0.1
+  port: 9108
 siem:
   webhook_url: null
   webhook_secret: null

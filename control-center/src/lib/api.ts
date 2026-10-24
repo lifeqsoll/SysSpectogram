@@ -18,6 +18,12 @@ export const fleet = {
   attack: (scope: string, level?: string, deps?: boolean) =>
     invoke<Record<string, unknown>>('fleet_attack', { scope, level, deps }),
   release: (scope?: string) => invoke<Record<string, unknown>>('fleet_release', { scope }),
+  incidents: (scope?: string, limit?: number) =>
+    invoke<Record<string, unknown>>('fleet_incidents', { scope, limit }),
+  markFp: (scope?: string, label?: string) =>
+    invoke<Record<string, unknown>>('fleet_mark_fp', { scope, label }),
+  ban: (scope: string, ip: string, ttl?: number) =>
+    invoke<Record<string, unknown>>('fleet_ban', { scope, ip, ttl }),
 };
 
 export interface AppInfo {

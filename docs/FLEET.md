@@ -92,6 +92,10 @@ fleet edge-rm --from web1 --to worker1
 fleet graph                                   # hosts + edges + one-hop dependents
 
 fleet attack --scope web1 --level L2 --deps  # also touch graph dependents (skips bastion/dns)
+
+fleet incidents --scope all --limit 40       # merged alerts/incidents feed
+fleet mark-fp --scope web1                   # record host ML false positive on hosts
+fleet ban --scope all --ip 203.0.113.66      # ban IP on every host in scope
 ```
 
 ## Warmup (before shield)

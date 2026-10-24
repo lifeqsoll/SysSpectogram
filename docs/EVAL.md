@@ -35,7 +35,15 @@ python scripts/eval_offline.py \
   --out reports/eval/
 ```
 
-Writes `reports/eval/metrics.json` and `reports/eval/metrics.md` (includes per-class score mean/std and near-constant warnings).
+Or via CLI:
+
+```bash
+python -m sysspectogram eval schema --model artifacts/live
+python -m sysspectogram eval stamp-schema --model artifacts/live   # write schema_version=2 if missing
+python -m sysspectogram eval run --dataset dataset/ --model artifacts/live --out reports/eval/
+```
+
+Writes `reports/eval/metrics.json` and `reports/eval/metrics.md` (includes per-class score mean/std and near-constant warnings). Artifact `meta.json` should carry `schema_version` (and `windows_format: raw`).
 
 ### Enablement gate (safety)
 

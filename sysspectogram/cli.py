@@ -1335,6 +1335,9 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
     from sysspectogram.fleet.ops import (
         apply_profile,
         attack,
+        ban_ip,
+        incidents_feed,
+        mark_false_positive,
         release,
         status_many,
         unlock_locked,
@@ -1516,6 +1519,54 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
     if action == "release":
         print(json.dumps(release(store, scope, identity=identity), indent=2, ensure_ascii=False))
         return 0
+    if action == "ban":
+        ip = str(getattr(args, "ip", "") or "")
+        if not ip:
+            print(json.dumps({"ok": False, "error": "--ip required"}))
+            return 2
+        print(
+            json.dumps(
+                ban_ip(
+                    store,
+                    scope,
+                    ip,
+                    ttl_sec=float(getattr(args, "ttl", 3600) or 3600),
+                    identity=identity,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if action == "incidents":
+        print(
+            json.dumps(
+                incidents_feed(
+                    store,
+                    scope,
+                    limit=int(getattr(args, "limit", 40) or 40),
+                    identity=identity,
+                ),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+        return 0
+    if action == "mark-fp":
+        print(
+            json.dumps(
+                mark_false_positive(
+                    store,
+                    scope,
+                    label=str(getattr(args, "label", None) or "host_fp"),
+                    identity=identity,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
     if action == "tg":
         from sysspectogram.fleet_tg import run_fleet_bot
 
@@ -1543,6 +1594,85 @@ def _cmd_home_warmup(args: argparse.Namespace) -> int:
 
     print(json.dumps(warmup_checklist(), indent=2, ensure_ascii=False))
     return 0
+
+
+def _cmd_home_feed_tail(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.feed_tail import feed_tail
+
+    print(
+        json.dumps(
+            feed_tail(limit=int(getattr(args, "limit", 40) or 40), host_id=getattr(args, "host_id", None)),
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _cmd_home_false_positive(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.feed_tail import record_false_positive
+
+    print(
+        json.dumps(
+            record_false_positive(
+                label=str(getattr(args, "label", None) or "host_fp"),
+                source=str(getattr(args, "source", None) or "local"),
+            ),
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    import json
+    from pathlib import Path
+
+    from sysspectogram.ml.eval_report import ensure_schema_version, read_artifact_schema, run_eval
+
+    action = getattr(args, "eval_action", "run")
+    model = Path(args.model)
+    if action == "schema":
+        print(json.dumps(read_artifact_schema(model), indent=2))
+        return 0
+    if action == "stamp-schema":
+        print(json.dumps(ensure_schema_version(model), indent=2))
+        return 0
+    out = run_eval(
+        dataset=Path(args.dataset),
+        model=model,
+        out=Path(args.out),
+        methods=str(getattr(args, "methods", None) or "fuse,cnn,iforest,zscore"),
+        runtime=str(getattr(args, "runtime", None) or "onnx"),
+    )
+    print(json.dumps(out, indent=2, ensure_ascii=False, default=str))
+    return 0 if out.get("ok") else 2
+
+
+def _cmd_metrics(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.metrics_prom import GLOBAL_PROM, start_prom_server
+
+    action = getattr(args, "metrics_action", "dump")
+    if action == "dump":
+        print(GLOBAL_PROM.render(), end="")
+        return 0
+    host = str(getattr(args, "host", None) or "127.0.0.1")
+    port = int(getattr(args, "port", None) or 9108)
+    start_prom_server(host, port)
+    print(json.dumps({"ok": True, "url": f"http://{host}:{port}/metrics"}))
+    try:
+        while True:
+            import time
+
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        return 0
 
 
 def _cmd_settings(args: argparse.Namespace) -> int:
@@ -2190,6 +2320,14 @@ def build_parser() -> argparse.ArgumentParser:
     hm_set.set_defaults(func=_cmd_home_settings)
     hm_warm = hm_sub.add_parser("warmup", help="shield readiness checklist (never_ban, labels, …)")
     hm_warm.set_defaults(func=_cmd_home_warmup)
+    hm_feed = hm_sub.add_parser("feed-tail", help="tail alerts/incidents JSONL (fleet aggregation)")
+    hm_feed.add_argument("--limit", type=int, default=40)
+    hm_feed.add_argument("--host-id", default=None)
+    hm_feed.set_defaults(func=_cmd_home_feed_tail)
+    hm_fp = hm_sub.add_parser("false-positive", help="record host ML false positive feedback")
+    hm_fp.add_argument("--label", default="host_fp")
+    hm_fp.add_argument("--source", default="local")
+    hm_fp.set_defaults(func=_cmd_home_false_positive)
     hm_health = hm_sub.add_parser("health", help="quick health: helper, guard, metrics, telegram")
     hm_health.add_argument("--ping", action="store_true", help="send a Telegram test message")
     hm_health.set_defaults(func=_cmd_home_health)
@@ -2307,6 +2445,9 @@ def build_parser() -> argparse.ArgumentParser:
         ("unlock-locked", "mass-unlock LOCKED hosts via SSH (codes never leave admin PC)"),
         ("attack", "Attack L2 quarantine / L3 lockdown on scope"),
         ("release", "Release quarantine/lockdown/kirk on scope"),
+        ("incidents", "merged incidents/alerts feed from hosts"),
+        ("mark-fp", "mark host ML false positive on scope"),
+        ("ban", "ban an IP on every host in scope"),
         ("tg", "run fleet Telegram bot (hub)"),
     ):
         fp = fleet_sub.add_parser(fname, help=fhelp)
@@ -2316,7 +2457,39 @@ def build_parser() -> argparse.ArgumentParser:
         if fname == "attack":
             fp.add_argument("--level", default="L2", choices=["L2", "L3", "l2", "l3"])
             fp.add_argument("--deps", action="store_true", help="also touch graph dependents (not bastion/dns)")
+        if fname == "ban":
+            fp.add_argument("--ip", required=True)
+            fp.add_argument("--ttl", type=float, default=3600.0)
+        if fname == "incidents":
+            fp.add_argument("--limit", type=int, default=40)
+        if fname == "mark-fp":
+            fp.add_argument("--label", default="host_fp")
         fp.set_defaults(func=_cmd_fleet)
+
+    ev = sub.add_parser("eval", help="offline ML eval report / schema_version")
+    ev_sub = ev.add_subparsers(dest="eval_action", required=True)
+    ev_run = ev_sub.add_parser("run", help="run scripts/eval_offline.py and summarize")
+    ev_run.add_argument("--dataset", required=True)
+    ev_run.add_argument("--model", required=True)
+    ev_run.add_argument("--out", default="reports/eval")
+    ev_run.add_argument("--methods", default="fuse,cnn,iforest,zscore")
+    ev_run.add_argument("--runtime", default="onnx")
+    ev_run.set_defaults(func=_cmd_eval)
+    ev_sch = ev_sub.add_parser("schema", help="read artifact schema_version")
+    ev_sch.add_argument("--model", required=True)
+    ev_sch.set_defaults(func=_cmd_eval)
+    ev_st = ev_sub.add_parser("stamp-schema", help="write schema_version into meta.json")
+    ev_st.add_argument("--model", required=True)
+    ev_st.set_defaults(func=_cmd_eval)
+
+    met = sub.add_parser("metrics", help="Prometheus text metrics")
+    met_sub = met.add_subparsers(dest="metrics_action", required=True)
+    met_dump = met_sub.add_parser("dump", help="print current process gauges (usually empty outside guard)")
+    met_dump.set_defaults(func=_cmd_metrics)
+    met_srv = met_sub.add_parser("serve", help="serve /metrics on localhost")
+    met_srv.add_argument("--host", default="127.0.0.1")
+    met_srv.add_argument("--port", type=int, default=9108)
+    met_srv.set_defaults(func=_cmd_metrics)
 
     protect_p = sub.add_parser("protect", help="user systemd protect service (survives CC exit)")
     protect_sub = protect_p.add_subparsers(dest="protect_action", required=True)

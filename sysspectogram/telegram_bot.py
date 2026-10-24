@@ -602,6 +602,16 @@ class TelegramBot:
                     rows.append(fb)
         if not any("Ignore" in (b.get("text") or "") for r in rows for b in r):
             rows.append([_btn("Ignore alert", f"do|{self.tokens.issue('ignore', {})}")])
+        # Explicit false-positive for host ML (top features already in caption).
+        tfp = self.tokens.issue(
+            "host_fp",
+            {
+                "score": float(score),
+                "pattern": str(pat or ""),
+                "top_features": (explain_kwargs or {}).get("top_features") or [],
+            },
+        )
+        rows.append([_btn("False positive / ложное", f"do|{tfp}")])
         markup = _markup(rows) if rows else None
         if png_bytes:
             self.client.send_photo_bytes(png_bytes, caption=text[:900], reply_markup=markup)
@@ -1161,6 +1171,16 @@ class TelegramBot:
                         return f"muted rule {entry.pattern}"
                     return f"ignored process {entry.key}"
             return "ignored"
+        if action == "host_fp":
+            from sysspectogram.feed_tail import record_false_positive
+
+            out = record_false_positive(label="host_fp", source="telegram")
+            tops = payload.get("top_features") or []
+            tip = ""
+            if isinstance(tops, list) and tops:
+                names = ", ".join(str(t.get("feature") or t) for t in tops[:3] if t)
+                tip = f" top={names}"
+            return f"recorded false positive{tip} (n={out.get('n')})"
         if action == "report":
             self._send_report(self.client.chat_id)
             return "report sent"

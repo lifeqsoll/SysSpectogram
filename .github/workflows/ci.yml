@@ -21,7 +21,11 @@ jobs:
         run: |
           pip install -U pip
           pip install -e ".[dev,ml]" --extra-index-url https://download.pytorch.org/whl/cpu
+          # CPU runners: triton (GPU) can double-register / segfault on import (exit 139).
+          pip uninstall -y triton pytorch-triton || true
           pip install pip-audit ruff
+          # check_versions needs tomllib (3.11+) or tomli backport on 3.10
+          python -c "import tomllib" 2>/dev/null || pip install tomli
           sudo apt-get update -qq
           sudo apt-get install -y -qq minisign
       - name: version sync
