@@ -197,13 +197,14 @@ class NftBackend:
                 "dry-run lockdown: established+allow_cidrs accept, then SYN drop "
                 f"allow={allows or '-'}"
             )
-        if not shutil.which("nft"):
-            return "nft required for lockdown"
+        # Refuse empty allow before nft check so CI/hosts without nft still fail safe.
         if not allows:
             return (
                 "lockdown refused: allow_cidrs/never_ban empty "
                 "(would drop new SSH SYN from your admin IP)"
             )
+        if not shutil.which("nft"):
+            return "nft required for lockdown"
         self._ensure_chain()
         self._run(
             [

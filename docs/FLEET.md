@@ -51,6 +51,8 @@ Register in fleet:
   --role primary   # or worker / canary / bastion / dns
 ```
 
+Pin the SSH host key (recommended). Put a full `known_hosts` line into `fleet.json` as `host_key_line` for that host (or `keytype base64` — the CLI will prefix the hostname). When set, fleet SSH uses `StrictHostKeyChecking=yes` against a temp known_hosts file instead of `accept-new`.
+
 Mark primary (optional):
 
 ```bash

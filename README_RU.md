@@ -198,7 +198,7 @@ CNN не смотрит сырые процессы. Она смотрит, **к
 - Linux (любой обычный дистрибутив)
 - Python 3.10+
 - По желанию: Rust toolchain для сборки `sysspectogram-agent`
-- По желанию eBPF: `clang`/`llvm` + BTF ядра; attach от **root** ([EBPF_SETUP.md](docs/EBPF_SETUP.md))
+- По желанию eBPF: `clang`/`llvm` + BTF ядра; attach от **root** ([EBPF_SETUP.md](docs/EBPF_SETUP.md)). **Релизный musl-агент собирается с `--no-default-features` (без eBPF).** Нужны пробы — соберите agent сами с eBPF-фичами.
 - По желанию: `notify-send` для десктоп-уведомлений
 - По желанию: Docker для воспроизводимого обучения
 - `stress-ng` не обязателен — встроенных симуляторов хватает

@@ -26,6 +26,8 @@ class FleetHost:
     role: str = "worker"
     tags: list[str] = field(default_factory=list)
     profile_id: str | None = None
+    # Full OpenSSH known_hosts line (host key type + base64). When set, SSH pins it.
+    host_key_line: str = ""
 
     def public_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -108,6 +110,7 @@ class FleetStore:
                     role=str(row.get("role") or "worker"),
                     tags=[str(t) for t in (row.get("tags") or [])],
                     profile_id=row.get("profile_id"),
+                    host_key_line=str(row.get("host_key_line") or ""),
                 )
             )
         groups: list[FleetGroup] = []
@@ -187,6 +190,8 @@ class FleetStore:
                 host.tags = list(prev.tags)
             if host.profile_id is None and prev.profile_id:
                 host.profile_id = prev.profile_id
+            if not (host.host_key_line or "").strip() and prev.host_key_line:
+                host.host_key_line = prev.host_key_line
         st.hosts = [h for h in st.hosts if h.id != host.id] + [host]
         if host.role == "primary":
             st.primary_host_id = host.id

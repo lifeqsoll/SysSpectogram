@@ -20,6 +20,8 @@ From the [v1.2.0 GitHub Release](https://github.com/lifeqsoll/SysSpectogram/rele
 
 Same-version rule ([ADR 0005](adr/0005-signed-bundle-not-git.md)): GUI, wheel, and agent must match this tag. Assets may appear a few minutes after the tag while CI finishes (helper often uploads first; wheel/agent/AppImage follow).
 
+**Checksums:** stack installers (`friend-day0`, Install stack, `home update`) read **`SHA256SUMS`** (wheel + agent). Control Center AppImage/deb use **`SHA256SUMS.desktop`** — do not confuse the two.
+
 ---
 
 ## Who this is for

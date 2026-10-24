@@ -2,7 +2,9 @@
 
 [English](TELEGRAM.md) · [Русский](TELEGRAM_RU.md)
 
-`guard --telegram` — пульт с телефона. Только `TELEGRAM_CHAT_ID`.
+`guard --telegram` — пульт с телефона. Принимается только `TELEGRAM_CHAT_ID`.
+
+**Группы / супергруппы:** любой участник может писать боту. Задайте `TELEGRAM_ALLOWED_USER_IDS` (числовые id через запятую), иначе команды из группы отклоняются. В личке с ботом достаточно chat_id.
 
 ## Console unlock
 

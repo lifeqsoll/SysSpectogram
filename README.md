@@ -204,7 +204,7 @@ You must collect **normal** and **anomaly** CSVs yourself. The tool does not inv
 - Linux (any common distribution)
 - Python 3.10+
 - Optional: Rust toolchain to build `sysspectogram-agent`
-- Optional eBPF: `clang`/`llvm` + kernel BTF; attach with **root** ([EBPF_SETUP.md](docs/EBPF_SETUP.md))
+- Optional eBPF: `clang`/`llvm` + kernel BTF; attach with **root** ([EBPF_SETUP.md](docs/EBPF_SETUP.md)). **Release musl agent is built with `--no-default-features` (no eBPF object).** Build agent yourself with eBPF features if you need probes.
 - Optional: `notify-send` for desktop notifications
 - Optional: Telegram bot (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` in `.env`)
 - Optional: `nmap` / `dig` (or project `tools/bin` wrappers + dnspython)

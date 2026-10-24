@@ -87,7 +87,10 @@ def unpack_data_bundle(tar_path: Path, dest: Path) -> dict[str, Any]:
                 raise ValueError(f"unsafe tar member: {m.name}")
             if any(bad in m.name.lower() for bad in _FORBIDDEN):
                 raise ValueError(f"secret-like member refused: {m.name}")
-        tar.extractall(dest)
+        try:
+            tar.extractall(dest, filter="data")  # type: ignore[call-arg]
+        except TypeError:
+            tar.extractall(dest)
     manifest_path = dest / "bundle" / "manifest.json"
     if not manifest_path.exists():
         # flat extract

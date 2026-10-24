@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from sysspectogram.fleet.store import FleetHost
@@ -35,6 +37,59 @@ class SshResult:
             return None
 
 
+def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[list[str], Path | None]:
+    """Build ssh argv; if host_key_line is set, pin via a temp known_hosts file."""
+    cmd = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+    ]
+    known: Path | None = None
+    line = (host.host_key_line or "").strip()
+    if line:
+        parts = line.split()
+        # Full known_hosts line already has hostname as first token.
+        if len(parts) >= 3 and parts[0] not in (
+            "ssh-ed25519",
+            "ssh-rsa",
+            "ecdsa-sha2-nistp256",
+            "ecdsa-sha2-nistp384",
+            "ecdsa-sha2-nistp521",
+        ):
+            kh_line = line
+        else:
+            dest = host.ssh
+            host_part = dest.split("@", 1)[-1].split(":", 1)[0]
+            kh_line = f"{host_part} {line}"
+        fd, path_s = tempfile.mkstemp(prefix="ss-fleet-kh-", suffix=".known")
+        import os
+
+        os.close(fd)
+        known = Path(path_s)
+        known.write_text(kh_line + "\n", encoding="utf-8")
+        try:
+            known.chmod(0o600)
+        except OSError:
+            pass
+        cmd.extend(
+            [
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                f"UserKnownHostsFile={known}",
+                "-o",
+                "GlobalKnownHostsFile=/dev/null",
+            ]
+        )
+    else:
+        cmd.extend(["-o", "StrictHostKeyChecking=accept-new"])
+    if identity:
+        cmd.extend(["-i", identity])
+    return cmd, known
+
+
 def ssh_run(
     host: FleetHost,
     remote_command: str,
@@ -44,17 +99,7 @@ def ssh_run(
 ) -> SshResult:
     if not host.ssh:
         return SshResult(False, "", "ssh target empty", 2)
-    cmd = [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-    ]
-    if identity:
-        cmd.extend(["-i", identity])
+    cmd, known = _ssh_base_args(host, identity=identity)
     cmd.append(host.ssh)
     cmd.append(remote_command)
     try:
@@ -69,6 +114,12 @@ def ssh_run(
         return SshResult(False, "", "ssh timeout", 124)
     except OSError as exc:
         return SshResult(False, "", str(exc), 1)
+    finally:
+        if known is not None:
+            try:
+                known.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def remote_python(host: FleetHost) -> str:

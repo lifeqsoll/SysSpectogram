@@ -8,21 +8,30 @@ on:
 jobs:
   py:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: install (dev + CPU torch for ML imports)
         run: |
           pip install -U pip
           pip install -e ".[dev,ml]" --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install pip-audit
+          pip install pip-audit ruff
           sudo apt-get update -qq
           sudo apt-get install -y -qq minisign
+      - name: version sync
+        run: python scripts/check_versions.py
+      - name: ruff
+        run: ruff check sysspectogram tests scripts --select E9,F63,F7,F82
       - run: pytest -q --ignore=tests/test_rolelab.py
       - run: pytest -q tests/test_rolelab.py
       - name: supply-chain and package checks
+        if: matrix.python-version == '3.12'
         run: |
           python scripts/generate-sbom.py --out /tmp/sysspectogram.spdx.json
           python -m sysspectogram supply-chain sbom --output /tmp/sysspectogram-cli.spdx.json
@@ -31,8 +40,44 @@ jobs:
           bash scripts/package-smoke.sh
           python -m sysspectogram --version
       - name: dependency audit
+        if: matrix.python-version == '3.12'
         # --skip-editable emits a skip warning that fails --strict; still fails on vulns.
         run: pip-audit --skip-editable
+
+  py-notorch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install wheel extras only (no torch)
+        run: |
+          pip install -U pip
+          pip install -e ".[dev]"
+      - name: guard imports without torch
+        run: |
+          python -c "import torch" 2>/dev/null && { echo "torch unexpectedly installed"; exit 1; } || true
+          python -c "import sysspectogram.ml; print('ml_ok')"
+          python -c "from sysspectogram.ml.infer import load_inferencer; print('infer_ok')"
+          python -m sysspectogram --help >/dev/null
+          python -m sysspectogram --version
+
+  control-center:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: control-center/package-lock.json
+      - name: check + vitest
+        working-directory: control-center
+        run: |
+          npm ci
+          npm run check
+          npm test
 
   agent:
     runs-on: ubuntu-latest

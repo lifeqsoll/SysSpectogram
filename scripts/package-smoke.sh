@@ -38,6 +38,8 @@ for path in (
 print("Debian metadata OK")
 PY
 
+python "$ROOT/scripts/check_versions.py"
+
 if command -v makepkg >/dev/null 2>&1; then
   (cd packaging/aur && makepkg --printsrcinfo >/dev/null)
   echo "AUR SRCINFO OK"

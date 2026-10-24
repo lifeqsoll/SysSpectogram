@@ -85,7 +85,7 @@ Defaults are intentionally cautious.
 
 ### Packaged install (AppImage / deb)
 
-- First-run **Install stack** downloads the **same-version** GitHub Release assets (wheel + musl agent). **SHA-256 is required** (`SHA256SUMS` + agent `.sha256`). If a `.minisig` is published for an asset, **minisign must succeed** (install `minisign`; soft-fail is not accepted).
+- First-run **Install stack** downloads the **same-version** GitHub Release assets (wheel + musl agent). **SHA-256 is required** (`SHA256SUMS` for wheel/agent stack only + agent `.sha256`). Desktop bundles use a separate `SHA256SUMS.desktop` so they cannot overwrite the stack sums file. If a `.minisig` is published for an asset, **minisign must succeed** (install `minisign`; soft-fail is not accepted).
 - No runtime `git clone` / `git pull` as the friend install path ([ADR 0005](docs/adr/0005-signed-bundle-not-git.md)).
 - Runtime data lives under `~/.local/share/sysspectogram` unless `SYSSPECTOGRAM_HOME` is set.
 - Details: [RELEASE_v1.1.1.md](docs/RELEASE_v1.1.1.md), [FRIEND.md](docs/FRIEND.md), [SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).

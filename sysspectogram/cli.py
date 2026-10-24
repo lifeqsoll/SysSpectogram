@@ -7,7 +7,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from sysspectogram import __version__
+from sysspectogram import DEFAULT_RELEASE_TAG, __version__
 from sysspectogram.config import ROOT, load_config
 from sysspectogram.response.actions import NftBackend
 
@@ -1202,7 +1202,7 @@ def _cmd_home_update(args: argparse.Namespace) -> int:
 
     from sysspectogram.friend_update import update_stack
 
-    res = update_stack(str(getattr(args, "tag", None) or "v1.1.1"))
+    res = update_stack(str(getattr(args, "tag", None) or DEFAULT_RELEASE_TAG))
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0 if res.get("ok") else 1
 
@@ -2204,7 +2204,11 @@ def build_parser() -> argparse.ArgumentParser:
     hm_check = hm_sub.add_parser("checklist", help="VPS readiness checklist")
     hm_check.set_defaults(func=_cmd_home_checklist)
     hm_upd = hm_sub.add_parser("update", help="download signed wheel+agent from GitHub Releases")
-    hm_upd.add_argument("--tag", default="v1.1.1", help="release tag (e.g. v1.1.1)")
+    hm_upd.add_argument(
+        "--tag",
+        default=DEFAULT_RELEASE_TAG,
+        help=f"release tag (default {DEFAULT_RELEASE_TAG})",
+    )
     hm_upd.set_defaults(func=_cmd_home_update)
     hm_role = hm_sub.add_parser("seed-role", help="seed process-label FP pack for a host role")
     hm_role.add_argument("--role", required=True, help="ssh|nginx|docker|panel|python|wireguard")

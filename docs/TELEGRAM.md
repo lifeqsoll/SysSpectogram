@@ -4,6 +4,8 @@
 
 SysSpectogram `guard --telegram` exposes a phone remote for status, audit, OSINT, sims, and confirmed response actions. Only `TELEGRAM_CHAT_ID` is accepted.
 
+**Groups / supergroups:** any member can message the bot in that chat. Set `TELEGRAM_ALLOWED_USER_IDS` (comma-separated numeric user ids) or group commands are refused. Private chats with the bot still use chat_id alone.
+
 ## Console unlock
 
 If someone steals `.env` (bot token + chat id), they still should not drive **kill/ban/lockdown** without the host. After `guard --telegram` starts:
@@ -34,6 +36,8 @@ telegram:
 # .env (gitignored)
 TELEGRAM_BOT_TOKEN=123:ABC
 TELEGRAM_CHAT_ID=6360...
+# required if TELEGRAM_CHAT_ID is a group/supergroup:
+# TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
 
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ```

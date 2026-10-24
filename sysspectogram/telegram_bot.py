@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 import time
@@ -209,8 +210,24 @@ class TelegramBot:
     def prefix(self, text: str) -> str:
         return f"[{self.host_id}]\n{text}"
 
-    def allowed_chat(self, chat_id: Any) -> bool:
-        return str(chat_id) == str(self.client.chat_id)
+    def allowed_chat(
+        self,
+        chat_id: Any,
+        *,
+        chat_type: str | None = None,
+        from_user_id: Any = None,
+    ) -> bool:
+        if str(chat_id) != str(self.client.chat_id):
+            return False
+        # In groups/supergroups any member can hit the bot — require user allowlist.
+        ctype = (chat_type or "").lower()
+        if ctype in ("group", "supergroup"):
+            raw = (os.environ.get("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+            if not raw:
+                return False
+            allowed = {x.strip() for x in raw.replace(";", ",").split(",") if x.strip()}
+            return str(from_user_id or "") in allowed
+        return True
 
     def _proc_feedback_payload(
         self,
@@ -608,8 +625,15 @@ class TelegramBot:
             )
         return _markup(rows)
 
-    def handle_command(self, text: str, chat_id: str) -> None:
-        if not self.allowed_chat(chat_id):
+    def handle_command(
+        self,
+        text: str,
+        chat_id: str,
+        *,
+        chat_type: str | None = None,
+        from_user_id: Any = None,
+    ) -> None:
+        if not self.allowed_chat(chat_id, chat_type=chat_type, from_user_id=from_user_id):
             return
         parts = text.strip().split()
         if not parts:
@@ -885,7 +909,12 @@ class TelegramBot:
     def handle_callback(self, cq: dict) -> None:
         chat = (cq.get("message") or {}).get("chat") or {}
         chat_id = str(chat.get("id", ""))
-        if not self.allowed_chat(chat_id):
+        from_user = cq.get("from") or {}
+        if not self.allowed_chat(
+            chat_id,
+            chat_type=str(chat.get("type") or ""),
+            from_user_id=from_user.get("id"),
+        ):
             self.client.answer_callback(cq.get("id", ""), "unauthorized")
             return
         data = cq.get("data") or ""
@@ -923,7 +952,12 @@ class TelegramBot:
                 "help": "/help",
             }
             if key in mapping:
-                self.handle_command(mapping[key], chat_id)
+                self.handle_command(
+                    mapping[key],
+                    chat_id,
+                    chat_type=str(chat.get("type") or ""),
+                    from_user_id=from_user.get("id"),
+                )
             return
         if data.startswith("ask|") or data.startswith("ask2|"):
             double = data.startswith("ask2|")
@@ -1630,11 +1664,17 @@ class TelegramBot:
             self._offset = int(upd["update_id"]) + 1
             if "message" in upd:
                 msg = upd["message"]
-                chat_id = str((msg.get("chat") or {}).get("id", ""))
+                chat = msg.get("chat") or {}
+                chat_id = str(chat.get("id", ""))
                 text = msg.get("text") or ""
                 if text.startswith("/"):
                     try:
-                        self.handle_command(text, chat_id)
+                        self.handle_command(
+                            text,
+                            chat_id,
+                            chat_type=str(chat.get("type") or ""),
+                            from_user_id=(msg.get("from") or {}).get("id"),
+                        )
                     except Exception as exc:
                         self.client.send_message(self.prefix(f"cmd error: {exc}"), chat_id=chat_id)
             if "callback_query" in upd:

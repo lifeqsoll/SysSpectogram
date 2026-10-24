@@ -41,6 +41,7 @@ artifacts/*
 *.pt
 *.joblib
 *.onnx
+!Dockerfile.onnx
 *.npy
 *.npz
 # docs/assets/** (png/jpg screenshots) are tracked on purpose
@@ -79,3 +80,4 @@ helper/target/
 # --- Local-only working docs (not published) ---
 docs/superpowers/
 docs/ARCHITECTURE_v1.0.md
+GITHUB_PROFILE.md
