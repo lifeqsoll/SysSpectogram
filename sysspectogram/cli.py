@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from sysspectogram import DEFAULT_RELEASE_TAG, __version__
-from sysspectogram.config import ROOT, load_config
+from sysspectogram.config import ROOT, configs_dir, load_config, state_root
 from sysspectogram.response.actions import NftBackend
 
 console = Console()
@@ -620,7 +620,7 @@ def _cmd_scenario(args: argparse.Namespace) -> int:
     from sysspectogram.settings.schema import explain_diff, load_schema
     from sysspectogram.config import load_config as _load
 
-    scenarios = load_scenarios(ROOT / "configs" / "scenarios")
+    scenarios = load_scenarios(configs_dir() / "scenarios")
     if args.scenario_action == "list":
         rows = [{"id": s.id, "title": s.title, "description": s.description} for s in scenarios]
         if args.json:
@@ -634,8 +634,8 @@ def _cmd_scenario(args: argparse.Namespace) -> int:
         console.print(f"[red]unknown scenario {args.id!r}[/]")
         return 2
     sc = match[0]
-    schema = load_schema(ROOT / "configs" / "schema.yaml")
-    current = _load(ROOT / "configs" / "default.yaml")
+    schema = load_schema(configs_dir() / "schema.yaml")
+    current = _load(configs_dir() / "default.yaml")
     console.print(f"[bold]{sc.text('title', args.lang)}[/]")
     console.print(sc.text("description", args.lang))
     for d in explain_diff(schema, current, sc.overrides, args.lang):
@@ -1683,8 +1683,8 @@ def _cmd_settings(args: argparse.Namespace) -> int:
         from sysspectogram.settings.scenarios import load_scenarios
         from sysspectogram.settings.schema import get_value, load_schema
 
-        schema = load_schema(ROOT / "configs" / "schema.yaml")
-        cfg = load_config(ROOT / "configs" / "default.yaml")
+        schema = load_schema(configs_dir() / "schema.yaml")
+        cfg = load_config(configs_dir() / "default.yaml")
         overlay = {}
         ov_path = settings_overlay_path()
         if ov_path.is_file():
@@ -1705,7 +1705,7 @@ def _cmd_settings(args: argparse.Namespace) -> int:
             settings.append(row)
         scenarios = [
             {"id": s.id, "title": s.title, "description": s.description, "overrides": s.overrides}
-            for s in load_scenarios(ROOT / "configs" / "scenarios")
+            for s in load_scenarios(configs_dir() / "scenarios")
         ]
         out = {
             "schema": schema.get("schema"),

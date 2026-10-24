@@ -340,10 +340,10 @@ def _cmd_update() -> None:
 
 def _cmd_configure() -> None:
     from sysspectogram.configure_tui import run_configure
-    from sysspectogram.config import ROOT
+    from sysspectogram.config import default_config_path
 
     run_configure(
-        config_path=ROOT / "configs" / "default.yaml",
+        config_path=default_config_path(),
         interactive=True,
     )
 

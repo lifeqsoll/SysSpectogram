@@ -1,0 +1,216 @@
+# Settings schema for the Control Center and config validation (config.schema.v1).
+# Every entry needs title and description in both `en` and `ru`. CI checks this.
+# `key` is a dotted path into configs/default.yaml. `restart: true` means the guard
+# must be restarted before the change takes effect.
+
+schema: config.schema.v1
+groups:
+  home:
+    title: {en: Home, ru: Основное}
+  ensemble:
+    title: {en: Risk fusion, ru: Слияние риска}
+  agent:
+    title: {en: Rust agent, ru: Rust-агент}
+  kirk:
+    title: {en: Integrity and VMI, ru: Целостность и VMI}
+  alerts:
+    title: {en: Alerts, ru: Алерты}
+  monitor:
+    title: {en: Host monitoring, ru: Мониторинг хоста}
+  response:
+    title: {en: Response, ru: Реагирование}
+  telegram:
+    title: {en: Telegram, ru: Telegram}
+  web:
+    title: {en: Web dashboard, ru: Веб-дашборд}
+  timeseries:
+    title: {en: Dashboards storage, ru: Хранилище дашбордов}
+
+settings:
+  - key: ui.lang
+    group: home
+    type: enum
+    choices: [en, ru]
+    default: en
+    title: {en: Alert language, ru: Язык алертов}
+    description:
+      en: Language for Telegram and in-app alert titles. Match the Control Center language.
+      ru: Язык заголовков алертов в Telegram и в приложении. Совпадает с языком Control Center.
+  - key: web.enabled
+    group: web
+    type: bool
+    default: false
+    restart: true
+    title: {en: Enable web dashboard, ru: Включить веб-дашборд}
+    description:
+      en: Serve the local web UI (charts and actions). Off by default — the desktop app is enough for most people.
+      ru: Поднять локальный веб-интерфейс (графики и действия). По умолчанию выкл — большинству хватает приложения.
+  - key: telegram.enabled
+    group: telegram
+    type: bool
+    default: false
+    restart: true
+    title: {en: Enable Telegram alerts, ru: Включить Telegram-алерты}
+    description:
+      en: Send plain-language alerts to your Telegram chat. Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.
+      ru: Присылать понятные алерты в Telegram. Нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env.
+  - key: ensemble.host_weight
+    group: ensemble
+    type: float
+    min: 0.0
+    max: 1.0
+    default: 0.6
+    title: {en: Host weight, ru: Вес хоста}
+    description:
+      en: Share of the host ML score in the fused risk. The fused formula is host_weight * host + agent_weight * agent, normalized.
+      ru: Доля оценки ML по хосту в итоговом риске. Формула host_weight * host + agent_weight * agent, нормированная.
+  - key: ensemble.agent_weight
+    group: ensemble
+    type: float
+    min: 0.0
+    max: 1.0
+    default: 0.4
+    title: {en: Agent weight, ru: Вес агента}
+    description:
+      en: Share of the agent score in the fused risk. Set to 0 to ignore the agent in fusion.
+      ru: Доля оценки агента в итоговом риске. 0 означает, что агент не участвует в слиянии.
+  - key: ensemble.risk_threshold
+    group: ensemble
+    type: float
+    min: 0.0
+    max: 1.0
+    default: 0.7
+    title: {en: Fused risk threshold, ru: Порог итогового риска}
+    description:
+      en: An anomaly fires when the fused risk reaches this value, even if the host score alone is below its own threshold.
+      ru: Аномалия срабатывает, когда итоговый риск достигает этого значения, даже если оценка хоста ниже своего порога.
+  - key: agent.enabled
+    group: agent
+    type: bool
+    default: true
+    restart: true
+    title: {en: Enable Rust agent, ru: Включить Rust-агент}
+    description:
+      en: Start the integrity agent and receive its alerts over the Unix socket.
+      ru: Запускать агент целостности и принимать его алерты через Unix-сокет.
+  - key: agent.mode
+    group: agent
+    type: enum
+    choices: [userspace, ebpf]
+    default: ebpf
+    restart: true
+    title: {en: Agent mode, ru: Режим агента}
+    description:
+      en: "userspace needs no root. ebpf attaches probes and needs root; without root the agent falls back to userspace."
+      ru: "userspace не требует root. ebpf подключает пробы и требует root; без root агент переходит в userspace."
+  - key: agent.score_half_life_sec
+    group: agent
+    type: float
+    min: 1
+    max: 3600
+    default: 60
+    title: {en: Agent score half-life, ru: Период полураспада оценки агента}
+    description:
+      en: After this many seconds without new agent alerts the agent score is halved. Lower values make agent signals short-lived.
+      ru: Через столько секунд без новых алертов агента его оценка уменьшается вдвое. Меньшие значения делают сигналы агента короткими.
+  - key: agent.spectrogram
+    group: agent
+    type: bool
+    default: false
+    restart: true
+    title: {en: Event spectrogram model, ru: Модель спектрограммы событий}
+    description:
+      en: Experimental CNN over agent events. Uses the higher of the IF score and the CNN score. Off until the replay shows a gain.
+      ru: Экспериментальная CNN по событиям агента. Берётся максимум из оценки IF и CNN. Выключена, пока replay не покажет выигрыш.
+  - key: kirk.vmi
+    group: kirk
+    type: bool
+    default: false
+    restart: true
+    title: {en: Hypervisor cross-check, ru: Проверка с гипервизора}
+    description:
+      en: Read-only comparison of the guest process view with the hypervisor task list. Reports hidden tasks.
+      ru: Read-only сверка гостевого списка процессов со списком задач с гипервизора. Сообщает о скрытых задачах.
+  - key: kirk.vmi_backend
+    group: kirk
+    type: enum
+    choices: [mock, libvmi]
+    default: mock
+    restart: true
+    title: {en: VMI backend, ru: Бэкенд VMI}
+    description:
+      en: mock is for tests and demos. libvmi reads a libvirt guest and needs a matching ISF profile.
+      ru: mock нужен для тестов и демо. libvmi читает гостя libvirt и требует подходящий профиль ISF.
+  - key: kirk.vmi_trust
+    group: kirk
+    type: enum
+    choices: [lab, out-of-band]
+    default: lab
+    title: {en: VMI trust label, ru: Метка доверия VMI}
+    description:
+      en: Use out-of-band only when the hypervisor is a separate trust domain. On one machine keep lab.
+      ru: out-of-band ставьте только если гипервизор — отдельный домен доверия. На одной машине оставьте lab.
+  - key: kirk.vmi_confirm
+    group: kirk
+    type: int
+    min: 1
+    max: 10
+    default: 2
+    title: {en: Confirmation passes, ru: Количество подтверждений}
+    description:
+      en: How many consecutive passes must show a hidden task before an alert. Higher values reduce races but delay alerts.
+      ru: Сколько подряд проходов должны показать скрытую задачу, прежде чем появится алерт. Больше значение — меньше ложных срабатываний и больше задержка.
+  - key: alerts.strict_secrets
+    group: alerts
+    type: bool
+    default: true
+    title: {en: Strict secrets, ru: Строгая работа с секретами}
+    description:
+      en: Refuse inline tokens in alert sinks. Tokens must come from environment variables.
+      ru: Запрещать токены прямо в конфиге алертов. Токены должны приходить из переменных окружения.
+  - key: monitor.interval_sec
+    group: monitor
+    type: int
+    min: 1
+    max: 3600
+    default: 5
+    title: {en: Inference interval, ru: Интервал инференса}
+    description:
+      en: Seconds between host ML inferences. Lower values react faster and use more CPU.
+      ru: Секунды между инференсами ML по хосту. Меньше — быстрее реакция и больше нагрузка на CPU.
+  - key: timeseries.enabled
+    group: timeseries
+    type: bool
+    default: true
+    restart: true
+    title: {en: Store dashboard history, ru: Хранить историю для дашбордов}
+    description:
+      en: Write per-second samples and rollups to SQLite for the 1 h to 30 d dashboards.
+      ru: Записывать сэмплы по секундам и агрегаты в SQLite для дашбордов от 1 часа до 30 дней.
+  - key: response.mode
+    group: response
+    type: enum
+    choices: [observe, shield, aggressive, isolate]
+    default: observe
+    restart: true
+    title: {en: Protection mode, ru: Режим защиты}
+    description:
+      en: "observe: notify only. shield: soft auto-ban (SSH brute / honeypot / canary). aggressive: full auto-ban (scans, egress, …). isolate: full auto-ban + kirk network isolation on critical signals. Manual actions still need unlock."
+      ru: "observe: только уведомления. shield: мягкий автобан (SSH-брут / honeypot / canary). aggressive: полная автозащита (сканы, egress, …). isolate: полная автозащита + сетевая изоляция kirk при критических сигналах. Ручные действия всё равно требуют разблокировки."
+  - key: response.never_ban_cidrs
+    group: response
+    type: string
+    default: ""
+    restart: true
+    title: {en: Never-ban IPs / CIDRs, ru: Never-ban IP / CIDR}
+    description:
+      en: "One or many. Comma or newline separated. Bare IPs become /32. Example: 203.0.113.10, 198.51.100.20/32. Find a public IP with curl -4 ifconfig.me."
+      ru: "Один или несколько. Через запятую или с новой строки. Голый IP → /32. Пример: 203.0.113.10, 198.51.100.20/32. Публичный IP: curl -4 ifconfig.me."
+  - key: telegram.require_console_unlock
+    group: telegram
+    type: bool
+    default: true
+    title: {en: Require console unlock, ru: Требовать разблокировку с консоли}
+    description:
+      en: Destructive Telegram actions need an unlock from the host console first. Keep this on.
+      ru: Деструктивные действия из Telegram требуют разблокировки с консоли хоста. Рекомендуется оставить включённым.

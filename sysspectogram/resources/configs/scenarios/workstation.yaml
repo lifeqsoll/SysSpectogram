@@ -1,0 +1,12 @@
+schema: scenario.v1
+id: workstation
+title: {en: Developer workstation, ru: Рабочая станция разработчика}
+description:
+  en: For a laptop or desktop with builds and many short processes. Softer thresholds and feedback learning on, so normal tooling is learned quickly.
+  ru: Для ноутбука или десктопа со сборками и множеством коротких процессов. Мягкие пороги и обучение по фидбеку, чтобы быстро выучить обычные инструменты.
+overrides:
+  ensemble.risk_threshold: 0.8
+  agent.enabled: true
+  agent.mode: userspace
+  response.mode: observe
+  monitor.interval_sec: 10

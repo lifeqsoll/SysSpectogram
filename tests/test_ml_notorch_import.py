@@ -2,27 +2,37 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_ml_package_imports_without_eager_torch():
-    """Package import must stay lazy: cnn/train/dataset must not load at import time.
-
-    Do not pop ``torch`` from ``sys.modules`` — that leaves C++ TORCH_LIBRARY
-    registrations and breaks later ``import torch`` (triton double-register / segfault).
-    No-torch CI job covers a real torch-free env.
-    """
-    for key in list(sys.modules):
-        if key == "sysspectogram.ml" or key.startswith("sysspectogram.ml."):
-            del sys.modules[key]
-
-    import sysspectogram.ml as ml
-
-    assert ml.Prediction is not None
-    assert callable(ml.load_inferencer)
-    assert "sysspectogram.ml.cnn" not in sys.modules
-    assert "sysspectogram.ml.train" not in sys.modules
-    assert "sysspectogram.ml.dataset" not in sys.modules
+def test_ml_package_imports_without_eager_torch_subprocess():
+    """Lazy ml import in a subprocess — never pop torch from the pytest process."""
+    code = r"""
+import sys
+for k in list(sys.modules):
+    if k == "sysspectogram.ml" or k.startswith("sysspectogram.ml."):
+        del sys.modules[k]
+import sysspectogram.ml as ml
+assert ml.Prediction is not None
+assert callable(ml.load_inferencer)
+assert "sysspectogram.ml.cnn" not in sys.modules
+assert "sysspectogram.ml.train" not in sys.modules
+assert "sysspectogram.ml.dataset" not in sys.modules
+print("ok")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "ok" in proc.stdout
 
 
 def test_lockdown_refuses_empty_allow_without_nft(monkeypatch):

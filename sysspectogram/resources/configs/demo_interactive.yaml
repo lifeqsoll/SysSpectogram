@@ -1,0 +1,22 @@
+# Local screenshot / interactive demo overlay (not for production)
+load_profile: lite
+runtime:
+  prefer: notorch
+response:
+  mode: observe
+telegram:
+  require_console_unlock: true
+agent:
+  enabled: true
+  auto_start: true
+  mode: userspace
+  require_same_uid: false
+  require_hmac: true
+  root_watch: true
+  root_learn_sec: 30
+sessions:
+  enabled: true
+  learn_sec: 5
+  poll_sec: 5
+root_watch:
+  enabled: false

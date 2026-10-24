@@ -1,0 +1,13 @@
+schema: scenario.v1
+id: hardened-observe
+title: {en: Hardened, observe only, ru: Усиленный режим, только наблюдение}
+description:
+  en: Records and notifies, never acts. Event spectrogram and VMI stay off. Use while you are still learning the host's normal behaviour.
+  ru: Только записывает и уведомляет, никаких действий. Спектрограмма событий и VMI выключены. Используйте, пока изучаете обычное поведение хоста.
+overrides:
+  response.mode: observe
+  telegram.require_console_unlock: true
+  agent.enabled: true
+  agent.mode: userspace
+  agent.spectrogram: false
+  kirk.vmi: false

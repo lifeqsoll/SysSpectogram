@@ -1,0 +1,12 @@
+schema: scenario.v1
+id: web-server
+title: {en: Web server, ru: Веб-сервер}
+description:
+  en: For a host serving HTTP. Watches inbound scans and keeps auto-ban off. Thresholds are a little looser to limit noise from real traffic.
+  ru: Для хоста с HTTP. Следит за входящими сканами, автоблокировка выключена. Пороги чуть мягче, чтобы не шуметь на реальном трафике.
+overrides:
+  ensemble.risk_threshold: 0.75
+  agent.enabled: true
+  agent.mode: userspace
+  response.mode: observe
+  monitor.interval_sec: 10

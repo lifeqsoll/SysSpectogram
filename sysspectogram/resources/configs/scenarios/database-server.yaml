@@ -1,0 +1,13 @@
+schema: scenario.v1
+id: database-server
+title: {en: Database server, ru: Сервер баз данных}
+description:
+  en: PostgreSQL, MySQL or similar. Watches access to data directories and secrets, with strict secret checks. eBPF is the default because it sees file opens. Auto-ban stays off, so a dump job will not lock you out.
+  ru: PostgreSQL, MySQL или похожие. Следит за доступом к каталогам данных и секретам, строгая проверка секретов включена. eBPF по умолчанию, потому что видит открытие файлов. Автоблокировка выключена, поэтому задание резервного копирования не заблокирует вас.
+overrides:
+  agent.enabled: true
+  agent.mode: ebpf
+  ensemble.risk_threshold: 0.8
+  monitor.interval_sec: 10
+  alerts.strict_secrets: true
+  response.mode: observe

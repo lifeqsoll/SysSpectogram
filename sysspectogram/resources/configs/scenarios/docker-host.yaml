@@ -1,0 +1,13 @@
+schema: scenario.v1
+id: docker-host
+title: {en: Docker host, ru: Хост с Docker}
+description:
+  en: Docker daemon with containers. eBPF gives exec and file visibility across container processes, so it is the default here. Needs root for probes; without root the agent falls back to userspace.
+  ru: Хост с демоном Docker и контейнерами. eBPF даёт видимость exec и файлов в процессах контейнеров, поэтому он выбран по умолчанию. Для проб нужен root; без root агент переходит в userspace.
+overrides:
+  agent.enabled: true
+  agent.mode: ebpf
+  ensemble.risk_threshold: 0.8
+  monitor.interval_sec: 10
+  alerts.strict_secrets: true
+  response.mode: observe

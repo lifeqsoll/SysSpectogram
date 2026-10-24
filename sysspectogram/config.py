@@ -7,9 +7,24 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = ROOT / "configs" / "default.yaml"
+_PKG_DIR = Path(__file__).resolve().parent
+_BUNDLED_CONFIGS = _PKG_DIR / "resources" / "configs"
 STATE_ENV = "SYSSPECTOGRAM_HOME"
 _DOTENV_LOADED = False
+
+
+def configs_dir() -> Path:
+    """Directory with default.yaml / schema / scenarios (wheel or source tree)."""
+    if (_BUNDLED_CONFIGS / "default.yaml").is_file():
+        return _BUNDLED_CONFIGS
+    return ROOT / "configs"
+
+
+def default_config_path() -> Path:
+    return configs_dir() / "default.yaml"
+
+
+DEFAULT_CONFIG = default_config_path()
 
 
 def state_root() -> Path:

@@ -1,0 +1,193 @@
+load_profile: lite
+runtime:
+  prefer: notorch
+collector: {}
+window:
+  size: 60
+  stride: 5
+train:
+  epochs: 25
+  batch_size: 32
+  lr: 0.001
+  val_ratio: 0.2
+  seed: 42
+  cnn_weight: 0.6
+  iforest_weight: 0.4
+  recall_target: 0.85
+monitor:
+  interval_sec: 5
+ensemble:
+  default_threshold: 0.5
+  host_weight: 0.6
+  agent_weight: 0.4
+  risk_threshold: 0.7
+host:
+  id: null
+perimeter:
+  fail_threshold: 8
+  fail_window_sec: 60
+  scan_unique_ips: 8
+  scan_window_sec: 60
+  state_path: state/perimeter.json
+  jsonl_out: reports/perimeter.jsonl
+  denylist_paths:
+  - configs/denylist.txt
+  alert_new_egress: false
+  suspicious_domains:
+  - malware.test
+  - c2.example
+  auto_ban:
+    enabled: false
+    rules:
+    - bruteforce_ssh
+    - egress_denylist_hit
+    - honeypot_hit
+    - lockdown_inbound
+    - flow_syn_burst
+    - flow_port_scan
+    ttl_sec: 3600
+response:
+  mode: observe
+  never_ban_cidrs: []
+  learn_hours: 24
+ui:
+  lang: en
+recon:
+  auto: false
+  nmap: false
+  cooldown_sec: 900
+  dir: reports/recon
+  passive_dns_url: null
+telegram:
+  enabled: false
+  bot_token: null
+  chat_id: null
+  token_secret: null
+  allow_destructive_sims: false
+  require_console_unlock: true
+  # 0 = session never expires after unlock (until /lock or guard restart)
+  unlock_ttl_sec: 0
+  # pairing code lifetime on the host (Steam Guard–like); unused codes rotate
+  unlock_code_ttl_sec: 300
+  unlock_code_len: 10
+  health_ping_hours: 0
+web:
+  enabled: false
+  host: 127.0.0.1
+  port: 8765
+  public_url: null
+prometheus:
+  enabled: false
+  host: 127.0.0.1
+  port: 9108
+siem:
+  webhook_url: null
+  webhook_secret: null
+lab:
+  mode: false
+  nmap_targets:
+  - 127.0.0.1
+  - ::1
+honeypot:
+  enabled: false
+  port: 2222
+canary:
+  enabled: false
+  ports:
+  - 3377
+  - 4488
+  - 5599
+  bind: 0.0.0.0
+sessions:
+  enabled: true
+  learn_sec: 120
+  poll_sec: 15
+  allow_users: []
+  allow_cidrs: []
+root_watch:
+  enabled: false
+  learn_sec: 300
+  poll_sec: 60
+  allow_comms: []
+flow:
+  enabled: true
+  backend: netview
+  window_sec: 30
+  syn_threshold: 120
+  unique_port_threshold: 60
+  # Per-source SYN-ish count → flow_syn_burst with IP (host soft-mitigation; not anti-DDoS)
+  per_ip_syn_threshold: 40
+agent:
+  enabled: true
+  auto_start: true
+  socket: null
+  binary: null
+  jsonl: reports/agent.jsonl
+  score_window_sec: 120
+  score_threshold: 0.65
+  score_half_life_sec: 60   # agent score decays by half every N seconds (ADR 0001)
+  spectrogram: false        # experimental event CNN, default off (ADR 0002)
+  spectrogram_model: artifacts/agent
+  iforest: null
+  require_same_uid: true
+  require_hmac: true
+  hmac_secret: state/agent_hmac.secret
+  root_watch: true
+  root_learn_sec: 300
+  mode: ebpf
+  fim:
+    enabled: true
+    interval_sec: 300
+    baseline_path: state/fim-baseline.json
+    confirm_streak: 2
+    confirm_ttl_sec: 300
+feedback:
+  if_refit: false
+  widen_rules: comm_prefix
+  model_dir: artifacts
+kirk:
+  enabled: true
+  trust: auto
+  require_tpm: false
+  auto_isolate: false
+  auto_isolate_host_risk: false
+  host_risk_threshold: 0.99
+  isolate_ttl_sec: 3600
+  allow_ssh_cidrs: []
+  # Hide/drift/IMA: require N hits before TG / auto_isolate (noise control)
+  confirm_streak: 2
+  confirm_ttl_sec: 180
+  ima_watch: true
+  ima_state_path: state/ima_offset.txt
+  baseline_path: state/kirk-baseline.json
+  vmi: false            # read-only hypervisor cross-check, default off (ADR 0003)
+  vmi_backend: mock     # mock | libvmi
+  vmi_domain: null      # libvirt domain name when backend is libvmi
+  vmi_profile: null     # ISF profile; sidecar <profile>.meta.json holds kernel_release
+  vmi_trust: lab        # lab | out-of-band, set by deployment
+  vmi_confirm: 2        # consecutive passes before a hidden task is reported
+  vmi_interval_sec: 30
+  vmi_pids_sec: 5       # how often the agent sends its pid snapshot
+watchdog:
+  phoenix: true
+  kernel_protect: false
+timeseries:
+  enabled: true
+  # relative paths resolve under SYSSPECTOGRAM_HOME (or the source tree when unset)
+  path: state/timeseries.sqlite
+alerts:
+  strict_secrets: true
+  allow_private_sinks: false
+  sinks:
+  - type: file
+    path: reports/alerts.jsonl
+role: generic-linux
+model:
+  path: artifacts
+supply_chain:
+  # false = unsigned lab OK; if artifacts.manifest.json.minisig exists, verify is still mandatory.
+  # Friend day0 / CC bootstrap always require minisign on release assets.
+  enforce: false
+  public_key: null
+  manifest_name: artifacts.manifest.json
+  signature_name: artifacts.manifest.json.minisig

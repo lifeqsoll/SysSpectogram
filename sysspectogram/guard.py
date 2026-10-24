@@ -75,8 +75,14 @@ def _benign_sudo_sudoers(comm: str | None, path: str | None) -> bool:
 
 
 def _resolve(path: str | Path) -> Path:
+    """Resolve relative paths. Runtime dirs follow SYSSPECTOGRAM_HOME via state_root()."""
     p = Path(path)
-    return p if p.is_absolute() else (ROOT / p).resolve()
+    if p.is_absolute():
+        return p
+    rel = str(path).replace("\\", "/")
+    if rel.startswith(("state/", "reports/", "artifacts/")):
+        return (state_root() / p).resolve()
+    return (ROOT / p).resolve()
 
 
 def _write_private(path: Path, text: str) -> None:

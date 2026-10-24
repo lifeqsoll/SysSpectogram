@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sysspectogram"
-version = "1.2.0"
+version = "1.2.1"
 description = "Self-hosted Linux VPS / host guard: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,9 @@ sysspectogram = "sysspectogram.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sysspectogram*"]
+
+[tool.setuptools.package-data]
+sysspectogram = ["resources/configs/*.yaml", "resources/configs/*.txt", "resources/configs/scenarios/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
