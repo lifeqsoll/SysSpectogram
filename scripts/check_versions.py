@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail if package / Tauri / Cargo / __version__ disagree (optional: GITHUB_REF tag)."""
+"""Fail if package / Tauri / Cargo / __version__ / locks disagree (optional: GITHUB_REF tag)."""
 
 from __future__ import annotations
 
@@ -14,11 +14,24 @@ try:
 except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[no-redef]
 
+OUR_LOCK_PACKAGES = {
+    "control-center/src-tauri/Cargo.lock": "sysspectogram-control-center",
+    "fleet-center/src-tauri/Cargo.lock": "sysspectogram-fleet-center",
+    "agent/Cargo.lock": "sysspectogram-agent",
+    "helper/Cargo.lock": "sysspectogram-helper",
+}
+
+
+def _cargo_lock_pkg_version(text: str, name: str) -> str | None:
+    m = re.search(rf'name = "{re.escape(name)}"\nversion = "([^"]+)"', text)
+    return m.group(1) if m else None
+
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     expected = str(pyproject["project"]["version"])
+    tag = f"v{expected}"
 
     init = (root / "sysspectogram" / "__init__.py").read_text(encoding="utf-8")
     m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', init)
@@ -69,12 +82,55 @@ def main() -> int:
         print(f"fleet-center tauri.conf.json version mismatch: want {expected}, got {fc_tauri.get('version')}", file=sys.stderr)
         return 1
 
+    for rel, name in OUR_LOCK_PACKAGES.items():
+        lock = root / rel
+        if not lock.is_file():
+            print(f"missing {rel}", file=sys.stderr)
+            return 1
+        got = _cargo_lock_pkg_version(lock.read_text(encoding="utf-8"), name)
+        if got != expected:
+            print(f"{rel}::{name} version mismatch: want {expected}, got {got}", file=sys.stderr)
+            return 1
+
+    for rel in ("control-center/package-lock.json", "fleet-center/package-lock.json"):
+        data = json.loads((root / rel).read_text(encoding="utf-8"))
+        got = str(data.get("version") or "")
+        root_pkg = (data.get("packages") or {}).get("") or {}
+        got_root = str(root_pkg.get("version") or "")
+        if got != expected or got_root != expected:
+            print(
+                f"{rel} version mismatch: want {expected}, got version={got} packages['']={got_root}",
+                file=sys.stderr,
+            )
+            return 1
+
+    for script in ("scripts/friend-day0.sh", "scripts/install-helper-from-release.sh"):
+        text = (root / script).read_text(encoding="utf-8")
+        want = f'TAG="${{1:-{tag}}}"'
+        if want not in text:
+            print(f"{script} default TAG missing {want}", file=sys.stderr)
+            return 1
+
+    i18n = (root / "control-center" / "src" / "lib" / "i18n.ts").read_text(encoding="utf-8")
+    m_i18n = re.search(r"export const APP_VERSION_TAG = '(v\d+\.\d+\.\d+)'", i18n)
+    if not m_i18n or m_i18n.group(1) != tag:
+        print(
+            f"i18n.ts APP_VERSION_TAG mismatch: want {tag}, got {m_i18n.group(1) if m_i18n else None}",
+            file=sys.stderr,
+        )
+        return 1
+    # No other hard-coded vX.Y.Z outside the constant / template uses of APP_VERSION_TAG
+    hard = set(re.findall(r"v\d+\.\d+\.\d+", i18n))
+    if hard - {tag}:
+        print(f"i18n.ts unexpected tags {sorted(hard - {tag})} (want only {tag})", file=sys.stderr)
+        return 1
+
     ref = os.environ.get("GITHUB_REF", "")
     if ref.startswith("refs/tags/"):
-        tag = ref.rsplit("/", 1)[-1]
+        ref_tag = ref.rsplit("/", 1)[-1]
         want = f"v{expected}"
-        if tag != want:
-            print(f"tag {tag} does not match project version {want}", file=sys.stderr)
+        if ref_tag != want:
+            print(f"tag {ref_tag} does not match project version {want}", file=sys.stderr)
             return 1
 
     print(f"versions OK {expected}")

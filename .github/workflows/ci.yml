@@ -113,3 +113,16 @@ jobs:
         run: |
           cargo test -q --no-default-features
           cargo build --release -q --no-default-features
+
+  rust-locks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo metadata --locked (all Rust projects)
+        run: |
+          set -euo pipefail
+          for d in agent helper control-center/src-tauri fleet-center/src-tauri; do
+            echo "== $d =="
+            (cd "$d" && cargo metadata --locked --format-version 1 >/dev/null)
+          done

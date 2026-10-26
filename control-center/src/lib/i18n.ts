@@ -1,6 +1,9 @@
 // UI strings. Every key must have both en and ru (checked by the test below).
 import { ui } from './state.svelte';
 
+/** Keep in sync with package.json / check_versions.py (bump_versions.py updates this). */
+export const APP_VERSION_TAG = 'v1.3.2';
+
 export const STRINGS: Record<string, { en: string; ru: string }> = {
   'app.name': { en: 'SysSpectogram', ru: 'SysSpectogram' },
   'app.subtitle': { en: 'Control Center', ru: 'Центр управления' },
@@ -51,7 +54,7 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   },
   'home.installHelperHelp': {
     en: 'Optional. Needs a desktop polkit password dialog (pkexec). If this window cannot prompt, run install-helper-from-release.sh with sudo in a normal terminal.',
-    ru: 'Опционально. Нужен диалог polkit (pkexec). Если окно не может спросить пароль — sudo bash scripts/install-helper-from-release.sh v1.3.1 в обычном терминале.',
+    ru: `Опционально. Нужен диалог polkit (pkexec). Если окно не может спросить пароль — sudo bash scripts/install-helper-from-release.sh ${APP_VERSION_TAG} в обычном терминале.`,
   },
   'home.recent': { en: 'Recent alerts', ru: 'Недавние алерты' },
   'home.next': { en: 'What to do next', ru: 'Что сделать дальше' },
@@ -136,10 +139,13 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   'set.mlImported': { en: 'Weights copied to artifacts/live. Restart the guard.', ru: 'Веса скопированы в artifacts/live. Перезапустите guard.' },
   'boot.title': { en: 'Install SysSpectogram', ru: 'Установка SysSpectogram' },
   'boot.lead': {
-    en: 'This AppImage/deb needs the Python stack and agent once. We download the signed v1.1.0 release from GitHub — no git clone.',
-    ru: 'Этому AppImage/deb один раз нужен Python-стек и агент. Скачаем подписанный релиз v1.1.0 с GitHub — без git clone.',
+    en: `This AppImage/deb needs the Python stack and agent once. We download the signed ${APP_VERSION_TAG} release from GitHub — no git clone.`,
+    ru: `Этому AppImage/deb один раз нужен Python-стек и агент. Скачаем подписанный релиз ${APP_VERSION_TAG} с GitHub — без git clone.`,
   },
-  'boot.install': { en: 'Install stack v1.1.0', ru: 'Установить стек v1.1.0' },
+  'boot.install': {
+    en: `Install stack ${APP_VERSION_TAG}`,
+    ru: `Установить стек ${APP_VERSION_TAG}`,
+  },
   'boot.working': { en: 'Downloading and installing…', ru: 'Скачивание и установка…' },
   'boot.done': { en: 'Stack ready. Continue to onboarding.', ru: 'Стек готов. Перейдите к настройке.' },
   'boot.hint': {
