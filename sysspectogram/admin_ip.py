@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from ipaddress import ip_address, ip_network
+from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
 from typing import Any
 
 DETECT_URLS = (
@@ -14,6 +14,10 @@ DETECT_URLS = (
     "https://icanhazip.com",
 )
 UA = "SysSpectogram/1.2 (+never-ban seed)"
+
+# Never-ban is for admin egress, not "disable soft-ban for the internet".
+MAX_V4_PREFIX_LEN = 24  # /24 or narrower (/25…/32)
+MAX_V6_PREFIX_LEN = 64  # /64 or narrower
 
 
 def cidr_for_ip(ip: str) -> str:
@@ -24,6 +28,38 @@ def cidr_for_ip(ip: str) -> str:
         return token
     addr = ip_address(token)
     return f"{addr}/32" if addr.version == 4 else f"{addr}/128"
+
+
+def validate_never_ban_cidr(raw: str) -> tuple[str | None, str | None]:
+    """Return ``(canonical_cidr, error_reason)``.
+
+    Rejects junk, ``/0``, and prefixes wider than /24 (v4) or /64 (v6).
+    """
+    token = (raw or "").strip()
+    if not token:
+        return None, "empty"
+    try:
+        if "/" in token:
+            net = ip_network(token, strict=False)
+        else:
+            addr = ip_address(token)
+            net = ip_network(f"{addr}/32" if addr.version == 4 else f"{addr}/128", strict=False)
+    except ValueError:
+        return None, "invalid_ip"
+    if isinstance(net, IPv4Network):
+        if int(net.network_address) == 0 and net.prefixlen == 0:
+            return None, "too_wide"
+        if net.prefixlen < MAX_V4_PREFIX_LEN:
+            return None, "too_wide"
+    elif isinstance(net, IPv6Network):
+        if int(net.network_address) == 0 and net.prefixlen == 0:
+            return None, "too_wide"
+        if net.prefixlen < MAX_V6_PREFIX_LEN:
+            return None, "too_wide"
+    else:
+        return None, "invalid_ip"
+    # Host routes stay as /32 or /128; otherwise keep the network form.
+    return str(net), None
 
 
 def detect_public_ip(*, timeout: float = 5.0) -> str | None:
@@ -44,7 +80,12 @@ def detect_public_ip(*, timeout: float = 5.0) -> str | None:
 
 def _covers(cidrs: list[str], ip: str) -> bool:
     try:
-        addr = ip_address(ip)
+        # Accept bare IP or single-host CIDR for coverage checks.
+        token = (ip or "").strip()
+        if "/" in token:
+            addr = ip_network(token, strict=False).network_address
+        else:
+            addr = ip_address(token)
     except ValueError:
         return False
     for raw in cidrs:
@@ -67,10 +108,11 @@ def merge_never_ban(existing: list[str] | None, ip: str) -> list[str]:
     bare = (ip or "").strip()
     if not bare:
         return out
-    cidr = cidr_for_ip(bare)
-    if not cidr:
+    cidr, err = validate_never_ban_cidr(bare)
+    if err or not cidr:
         return out
-    if _covers(out, bare.split("/")[0]):
+    host_for_cover = cidr.split("/")[0]
+    if _covers(out, host_for_cover):
         return out
     if cidr not in seen:
         out.append(cidr)
@@ -87,25 +129,53 @@ def seed_never_ban(
 
     Detects *this machine's* egress IP unless ``ip`` is passed. On a VPS that is
     usually the VPS address — pass ``--ip`` from the admin PC for the laptop IP.
-    Refuses to clobber a corrupt user-settings.json unless ``force``.
+    Refuses to clobber a corrupt / non-object user-settings.json unless ``force``
+    (always writes ``.bak`` before replace when force-clobbering).
     """
     from sysspectogram.config import load_config, user_settings_path
 
     cfg = load_config()
     cur = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
-    detected = (ip or "").strip() or None
-    if not detected:
-        detected = detect_public_ip()
-    if not detected:
-        return {
-            "ok": False,
-            "written": False,
-            "ip": None,
-            "never_ban_cidrs": cur,
-            "reason": "detect_failed",
-            "hint": "pass --ip A.B.C.D if detect fails (admin egress, not VPS)",
-        }
-    if _covers(cur, detected) and not force:
+    raw_ip = (ip or "").strip() or None
+    if raw_ip:
+        canonical, err = validate_never_ban_cidr(raw_ip)
+        if err or not canonical:
+            return {
+                "ok": False,
+                "written": False,
+                "ip": raw_ip,
+                "never_ban_cidrs": cur,
+                "reason": err or "invalid_ip",
+                "hint": (
+                    "pass a host IP or narrow CIDR "
+                    f"(IPv4 /{MAX_V4_PREFIX_LEN}+, IPv6 /{MAX_V6_PREFIX_LEN}+); "
+                    "reject /0 and junk"
+                ),
+            }
+        detected = canonical
+    else:
+        detected_bare = detect_public_ip()
+        if not detected_bare:
+            return {
+                "ok": False,
+                "written": False,
+                "ip": None,
+                "never_ban_cidrs": cur,
+                "reason": "detect_failed",
+                "hint": "pass --ip A.B.C.D if detect fails (admin egress, not VPS)",
+            }
+        canonical, err = validate_never_ban_cidr(detected_bare)
+        if err or not canonical:
+            return {
+                "ok": False,
+                "written": False,
+                "ip": detected_bare,
+                "never_ban_cidrs": cur,
+                "reason": err or "invalid_ip",
+            }
+        detected = canonical
+    cover_ip = detected.split("/")[0]
+    if _covers(cur, cover_ip) and not force:
         return {
             "ok": True,
             "written": False,
@@ -125,40 +195,55 @@ def seed_never_ban(
     if write:
         path = user_settings_path()
         data: dict[str, Any] = {}
-        corrupt = False
         if path.is_file():
+            raw_text = ""
             try:
-                raw = path.read_text(encoding="utf-8")
-                parsed = json.loads(raw)
-            except (OSError, json.JSONDecodeError):
-                corrupt = True
+                raw_text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                return {
+                    "ok": False,
+                    "written": False,
+                    "ip": detected,
+                    "never_ban_cidrs": cur,
+                    "reason": "user_settings_unreadable",
+                    "hint": str(exc),
+                }
+            try:
+                parsed: Any = json.loads(raw_text)
+            except json.JSONDecodeError:
                 parsed = None
-            if corrupt and not force:
-                return {
-                    "ok": False,
-                    "written": False,
-                    "ip": detected,
-                    "never_ban_cidrs": cur,
-                    "reason": "user_settings_corrupt",
-                    "hint": "fix state/user-settings.json or re-run with --force (backs up .bak)",
-                }
-            if isinstance(parsed, dict):
-                data = parsed
-            elif parsed is not None and not force:
-                return {
-                    "ok": False,
-                    "written": False,
-                    "ip": detected,
-                    "never_ban_cidrs": cur,
-                    "reason": "user_settings_not_object",
-                    "hint": "fix state/user-settings.json or re-run with --force",
-                }
-            if corrupt and force:
+                if not force:
+                    return {
+                        "ok": False,
+                        "written": False,
+                        "ip": detected,
+                        "never_ban_cidrs": cur,
+                        "reason": "user_settings_corrupt",
+                        "hint": "fix state/user-settings.json or re-run with --force (backs up .bak)",
+                    }
                 bak = path.with_suffix(path.suffix + ".bak")
                 try:
-                    bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                    bak.write_text(raw_text, encoding="utf-8")
                 except OSError:
                     pass
+            else:
+                if isinstance(parsed, dict):
+                    data = parsed
+                else:
+                    if not force:
+                        return {
+                            "ok": False,
+                            "written": False,
+                            "ip": detected,
+                            "never_ban_cidrs": cur,
+                            "reason": "user_settings_not_object",
+                            "hint": "fix state/user-settings.json or re-run with --force (backs up .bak)",
+                        }
+                    bak = path.with_suffix(path.suffix + ".bak")
+                    try:
+                        bak.write_text(raw_text, encoding="utf-8")
+                    except OSError:
+                        pass
         # Overlay stores CIDR lists as a comma-separated string (see friend_menu / home settings).
         data["response.never_ban_cidrs"] = ", ".join(merged)
         path.parent.mkdir(parents=True, exist_ok=True)

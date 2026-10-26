@@ -83,6 +83,22 @@ jobs:
           npm run check
           npm test
 
+  fleet-center:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: fleet-center/package-lock.json
+      - name: check + vitest
+        working-directory: fleet-center
+        run: |
+          npm ci
+          npm run check
+          npm test
+
   agent:
     runs-on: ubuntu-latest
     env:

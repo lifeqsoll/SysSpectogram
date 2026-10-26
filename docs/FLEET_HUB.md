@@ -75,4 +75,4 @@ python -m sysspectogram fleet status --scope all
 python -m sysspectogram edge status
 ```
 
-Optional fleet Telegram on the hub: `FLEET_TELEGRAM_BOT_TOKEN`, `FLEET_TELEGRAM_CHAT_ID`, and allowlist `FLEET_TELEGRAM_ALLOW_USERS` (comma-separated chat/user IDs).
+Optional fleet Telegram on the hub: `FLEET_TELEGRAM_BOT_TOKEN`, `FLEET_TELEGRAM_CHAT_ID`, and allowlist `FLEET_TELEGRAM_ALLOW_USERS` (comma-separated **user** IDs only — group/channel IDs are ignored; groups require this list).

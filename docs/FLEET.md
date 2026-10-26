@@ -142,12 +142,13 @@ On the hub (admin PC with linger, or a small always-on box):
 ```bash
 export FLEET_TELEGRAM_BOT_TOKEN=…   # separate bot recommended
 export FLEET_TELEGRAM_CHAT_ID=…
-# Optional: only these Telegram chat/user IDs may drive the bot (comma-separated)
+# Optional: only these Telegram **user** IDs may drive the bot (comma-separated).
+# Group/channel IDs are ignored — required for group chats.
 export FLEET_TELEGRAM_ALLOW_USERS=123456789,987654321
 .venv/bin/python -m sysspectogram fleet tg
 ```
 
-When `FLEET_TELEGRAM_ALLOW_USERS` is set, updates from any other chat/user are ignored (callbacks get `unauthorized`). If unset, only the configured `FLEET_TELEGRAM_CHAT_ID` is accepted.
+When `FLEET_TELEGRAM_ALLOW_USERS` is set, only those **user** IDs in the configured chat may drive the bot (callbacks get `unauthorized` otherwise). Group IDs in the list do nothing. If unset, a private DM with `FLEET_TELEGRAM_CHAT_ID` is accepted; a **group** chat always needs the user allowlist.
 
 Hub unlock code is written to `~/.config/sysspectogram/fleet.hub_unlock.code` (0600), **not** to Telegram. `/unlock CODE` once → session until `/lock`.
 

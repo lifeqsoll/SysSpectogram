@@ -112,8 +112,13 @@ def warmup_remote(
         r = ssh_run(h, remote, identity=identity)
         data = r.json() or {"ok": False, "error": r.stderr or r.stdout}
         data["host_id"] = h.id
+        if "ok" not in data:
+            data["ok"] = False
         results.append(data)
-    return {"ok": True, "results": results}
+    ok = bool(results) and all(bool(r.get("ok")) for r in results)
+    if not results:
+        ok = True
+    return {"ok": ok, "results": results}
 
 
 def status_many(

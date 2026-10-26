@@ -114,36 +114,30 @@ def pair_finish(
 
 
 def parse_ssh_host_port(ssh_dest: str) -> tuple[str, int | None] | None:
-    """Extract host + optional port from user@host[:port] / [ipv6] forms.
+    """Extract host + optional port (compat wrapper around :func:`parse_ssh_destination`)."""
+    from sysspectogram.fleet.ssh import parse_ssh_destination
 
-    Rejects destinations that look like SSH option injection (leading ``-``).
-    """
-    dest = (ssh_dest or "").strip()
-    if not dest or dest.startswith("-"):
+    parsed = parse_ssh_destination(ssh_dest)
+    if parsed is None:
         return None
-    hostport = dest.split("@", 1)[-1].strip()
-    if not hostport or hostport.startswith("-"):
+    return (parsed.host, parsed.port)
+
+
+def keyscan_argv(ssh_dest: str, *, keyscan_bin: str = "ssh-keyscan") -> list[str] | None:
+    """Build ssh-keyscan argv (no brackets around IPv6; port via ``-p``)."""
+    from sysspectogram.fleet.ssh import parse_ssh_destination
+
+    parsed = parse_ssh_destination(ssh_dest)
+    if parsed is None:
         return None
-    if hostport.startswith("["):
-        # [2001:db8::1] or [2001:db8::1]:2222
-        end = hostport.find("]")
-        if end < 0:
-            return None
-        host = hostport[1:end]
-        rest = hostport[end + 1 :]
-        if not rest:
-            return (host, None)
-        if rest.startswith(":") and rest[1:].isdigit():
-            return (host, int(rest[1:]))
+    if parsed.host.startswith("-"):
         return None
-    if hostport.count(":") == 1:
-        host, port_s = hostport.rsplit(":", 1)
-        if port_s.isdigit() and host and not host.startswith("-"):
-            return (host, int(port_s))
-    if ":" in hostport and hostport.count(":") > 1:
-        # bare IPv6 without brackets
-        return (hostport, None)
-    return (hostport, None)
+    cmd = [keyscan_bin, "-T", "5", "-t", "ed25519,rsa"]
+    if parsed.port is not None:
+        cmd.extend(["-p", str(parsed.port)])
+    # ssh-keyscan expects a bare address; brackets break IPv6 lookups.
+    cmd.append(parsed.host)
+    return cmd
 
 
 def suggest_keyscan(ssh_dest: str) -> dict[str, Any]:
@@ -151,24 +145,17 @@ def suggest_keyscan(ssh_dest: str) -> dict[str, Any]:
     import shutil
     import subprocess
 
-    parsed = parse_ssh_host_port(ssh_dest)
-    if not parsed:
+    from sysspectogram.fleet.ssh import parse_ssh_destination
+
+    parsed = parse_ssh_destination(ssh_dest)
+    if parsed is None:
         return {"ok": False, "error": "invalid ssh destination", "host": None}
-    host_part, port = parsed
     keyscan = shutil.which("ssh-keyscan") or shutil.which("ssh-keyscan.exe")
     if not keyscan:
-        return {"ok": False, "error": "ssh-keyscan not found", "host": host_part}
-    # ssh-keyscan has no ``--`` on all platforms; never pass a leading-``-`` host.
-    if host_part.startswith("-"):
-        return {"ok": False, "error": "invalid host (must not start with -)", "host": host_part}
-    cmd = [keyscan, "-T", "5", "-t", "ed25519,rsa"]
-    if port is not None:
-        cmd.extend(["-p", str(port)])
-    # Prefer bracketed form for IPv6 so keyscan does not mis-split on ':'.
-    scan_host = host_part
-    if ":" in host_part and not host_part.startswith("["):
-        scan_host = f"[{host_part}]"
-    cmd.append(scan_host)
+        return {"ok": False, "error": "ssh-keyscan not found", "host": parsed.host}
+    cmd = keyscan_argv(ssh_dest, keyscan_bin=keyscan)
+    if not cmd:
+        return {"ok": False, "error": "invalid host", "host": parsed.host}
     try:
         proc = subprocess.run(
             cmd,
@@ -178,19 +165,21 @@ def suggest_keyscan(ssh_dest: str) -> dict[str, Any]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"ok": False, "error": str(exc), "host": host_part, "port": port}
+        return {"ok": False, "error": str(exc), "host": parsed.host, "port": parsed.port}
     lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip() and not ln.startswith("#")]
     if not lines:
         return {
             "ok": False,
             "error": proc.stderr.strip() or "no keys",
-            "host": host_part,
-            "port": port,
+            "host": parsed.host,
+            "port": parsed.port,
+            "argv": cmd,
         }
     return {
         "ok": True,
-        "host": host_part,
-        "port": port,
+        "host": parsed.host,
+        "port": parsed.port,
         "host_key_line": lines[0].strip(),
         "all": lines,
+        "argv": cmd,
     }

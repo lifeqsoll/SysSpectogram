@@ -52,6 +52,23 @@ def main() -> int:
         print(f"debian/changelog missing ({expected}-1)", file=sys.stderr)
         return 1
 
+    for rel in ("agent/Cargo.toml", "helper/Cargo.toml", "fleet-center/src-tauri/Cargo.toml"):
+        cargo_txt = (root / rel).read_text(encoding="utf-8")
+        cm2 = re.search(r'^version\s*=\s*"([^"]+)"', cargo_txt, re.M)
+        if not cm2 or cm2.group(1) != expected:
+            print(f"{rel} version mismatch: want {expected}, got {cm2.group(1) if cm2 else None}", file=sys.stderr)
+            return 1
+
+    fc_pkg = json.loads((root / "fleet-center" / "package.json").read_text(encoding="utf-8"))
+    if str(fc_pkg.get("version")) != expected:
+        print(f"fleet-center/package.json version mismatch: want {expected}, got {fc_pkg.get('version')}", file=sys.stderr)
+        return 1
+
+    fc_tauri = json.loads((root / "fleet-center" / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    if str(fc_tauri.get("version")) != expected:
+        print(f"fleet-center tauri.conf.json version mismatch: want {expected}, got {fc_tauri.get('version')}", file=sys.stderr)
+        return 1
+
     ref = os.environ.get("GITHUB_REF", "")
     if ref.startswith("refs/tags/"):
         tag = ref.rsplit("/", 1)[-1]

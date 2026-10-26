@@ -8,4 +8,5 @@ export default defineConfig({
   server: { port: 1421, strictPort: true },
   envPrefix: ['VITE_', 'TAURI_'],
   build: { target: 'es2021', minify: 'esbuild', sourcemap: false },
+  test: { environment: 'node', include: ['src/**/*.test.ts'] },
 });

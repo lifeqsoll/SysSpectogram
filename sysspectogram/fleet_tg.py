@@ -1,8 +1,9 @@
 """Fleet Telegram bot on the admin hub — scope picker + fan-out ops.
 
 Uses FLEET_TELEGRAM_BOT_TOKEN + FLEET_TELEGRAM_CHAT_ID (or TELEGRAM_* fallback).
-Optional FLEET_TELEGRAM_ALLOW_USERS (comma-separated chat/user IDs) rejects others.
-Per-VPS bots remain separate.
+Optional FLEET_TELEGRAM_ALLOW_USERS: comma-separated **user** IDs only (positive).
+Group/channel IDs in the allowlist are ignored — they must never grant “anyone in
+this chat”. Groups require a non-empty user allowlist. Per-VPS bots remain separate.
 """
 
 from __future__ import annotations
@@ -31,9 +32,26 @@ def _markup(rows: list[list[dict]]) -> dict:
 
 
 def parse_allow_users(raw: str | None = None) -> frozenset[str]:
-    """Comma-separated Telegram chat or user IDs from env (or explicit string)."""
+    """Comma-separated Telegram IDs from env (raw tokens; filter with user_allow_ids)."""
     text = raw if raw is not None else os.environ.get("FLEET_TELEGRAM_ALLOW_USERS", "")
     return frozenset(p.strip() for p in str(text or "").split(",") if p.strip())
+
+
+def user_allow_ids(raw: frozenset[str] | None = None) -> frozenset[str]:
+    """Positive Telegram user IDs only — drop group/channel (negative) entries."""
+    src = raw if raw is not None else parse_allow_users()
+    out: set[str] = set()
+    for item in src:
+        s = str(item).strip()
+        if not s or s.startswith("-"):
+            continue
+        try:
+            if int(s) <= 0:
+                continue
+        except ValueError:
+            continue
+        out.add(s)
+    return frozenset(out)
 
 
 def _row_field(row: dict[str, Any], key: str, default: Any = None) -> Any:
@@ -64,7 +82,9 @@ class FleetTelegramBot:
             ttl_sec=0,
             persist_path=Path.home() / ".config" / "sysspectogram" / "fleet.unlock",
         )
-        self.allow_users = allow_users if allow_users is not None else parse_allow_users()
+        raw_allow = allow_users if allow_users is not None else parse_allow_users()
+        self.allow_users = raw_allow
+        self.user_ids = user_allow_ids(raw_allow)
         self.scope: str = "all"
         self._offset: int | None = None
         self._busy = False
@@ -72,14 +92,6 @@ class FleetTelegramBot:
 
     def prefix(self, text: str) -> str:
         return f"[fleet:{self.scope}]\n{text}"
-
-    def allowed(self, chat_id: Any, user_id: Any = None) -> bool:
-        """Accept configured chat, or any ID listed in FLEET_TELEGRAM_ALLOW_USERS."""
-        chat_s = str(chat_id or "")
-        user_s = str(user_id or "") if user_id is not None else ""
-        if self.allow_users:
-            return chat_s in self.allow_users or (bool(user_s) and user_s in self.allow_users)
-        return chat_s == str(self.client.chat_id)
 
     @staticmethod
     def _is_group_chat(chat_id: Any) -> bool:
@@ -92,13 +104,31 @@ class FleetTelegramBot:
         except ValueError:
             return False
 
-    def mutating_allowed(self, chat_id: Any, user_id: Any = None) -> bool:
-        """Stricter gate for attack/release/unlock: groups need a user allowlist."""
-        if not self.allowed(chat_id, user_id):
+    def allowed(self, chat_id: Any, user_id: Any = None) -> bool:
+        """Gate: configured chat + (for groups / allowlist) matching **user** id.
+
+        Putting a group chat ID into FLEET_TELEGRAM_ALLOW_USERS does **not**
+        authorize every member — only positive user IDs count.
+        """
+        chat_s = str(chat_id or "")
+        user_s = str(user_id or "").strip() if user_id is not None else ""
+        configured = str(self.client.chat_id or "")
+        if chat_s != configured:
             return False
-        if self._is_group_chat(chat_id) and not self.allow_users:
-            return False
+        if self._is_group_chat(chat_s):
+            if not self.user_ids:
+                return False
+            return bool(user_s) and user_s in self.user_ids
+        # Private DM with the configured chat.
+        if self.user_ids:
+            # In DMs chat_id often equals user_id; accept either explicit user or chat.
+            effective = user_s or chat_s
+            return effective in self.user_ids
         return True
+
+    def mutating_allowed(self, chat_id: Any, user_id: Any = None) -> bool:
+        """Same as allowed — groups already require a user allowlist."""
+        return self.allowed(chat_id, user_id)
 
     def scope_keyboard(self) -> dict:
         st = self.store.load()
@@ -194,56 +224,35 @@ class FleetTelegramBot:
             self._run_status(chat_id)
             return
         if cmd in ("/unlock_locked", "/unlock-locked"):
-            if not self.mutating_allowed(chat_id, user_id):
-                self.client.send_message(
-                    self.prefix(
-                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
-                    ),
-                    chat_id=chat_id,
-                )
-                return
             self._run_unlock(chat_id)
             return
         if cmd == "/attack":
-            if not self.mutating_allowed(chat_id, user_id):
-                self.client.send_message(
-                    self.prefix(
-                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
-                    ),
-                    chat_id=chat_id,
-                )
-                return
             level = (args[0] if args else "L2").upper()
             self._run_attack(chat_id, level, user_id=user_id)
             return
         if cmd == "/confirm_l3":
             pend = self._pending_l3
-            self._pending_l3 = None
             pend_user = str(pend.get("user_id") or "") if pend else ""
             req_user = str(user_id or "")
-            if (
-                not pend
-                or str(pend.get("chat_id")) != str(chat_id)
-                or not pend_user
-                or not req_user
-                or pend_user != req_user
-                or time.time() - float(pend.get("ts") or 0) > 60
-            ):
+            expired = bool(pend) and time.time() - float(pend.get("ts") or 0) > 60
+            if not pend or expired:
+                if expired:
+                    self._pending_l3 = None
+                self.client.send_message(
+                    self.prefix("no pending L3 confirm (or expired)"),
+                    chat_id=chat_id,
+                )
+                return
+            if str(pend.get("chat_id")) != str(chat_id) or not pend_user or not req_user or pend_user != req_user:
+                # Keep pending so the rightful user can still confirm.
                 self.client.send_message(
                     self.prefix("no pending L3 confirm (or expired / wrong user)"),
                     chat_id=chat_id,
                 )
                 return
-            if not self.mutating_allowed(chat_id, user_id):
-                self.client.send_message(
-                    self.prefix(
-                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
-                    ),
-                    chat_id=chat_id,
-                )
-                return
+            # Consume only after the same user+chat passes.
+            self._pending_l3 = None
             self.scope = str(pend.get("scope") or self.scope)
-            # Force through as confirmed L3
             self.client.send_message(self.prefix(f"ATTACK L3 on {self.scope}…"), chat_id=chat_id)
 
             def job() -> None:
@@ -260,14 +269,6 @@ class FleetTelegramBot:
             threading.Thread(target=job, daemon=True).start()
             return
         if cmd == "/release":
-            if not self.mutating_allowed(chat_id, user_id):
-                self.client.send_message(
-                    self.prefix(
-                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
-                    ),
-                    chat_id=chat_id,
-                )
-                return
             self._run_release(chat_id)
             return
         self.client.send_message(self.prefix("unknown — /menu"), chat_id=chat_id)
@@ -300,39 +301,12 @@ class FleetTelegramBot:
             self.client.answer_callback(cq_id, "status")
             self._run_status(chat_id)
         elif data == "cmd|unlock":
-            if not self.mutating_allowed(chat_id, user_id):
-                self.client.answer_callback(cq_id, "need allowlist")
-                self.client.send_message(
-                    self.prefix(
-                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
-                    ),
-                    chat_id=chat_id,
-                )
-                return
             self.client.answer_callback(cq_id, "unlock")
             self._run_unlock(chat_id)
         elif data == "cmd|release":
-            if not self.mutating_allowed(chat_id, user_id):
-                self.client.answer_callback(cq_id, "need allowlist")
-                self.client.send_message(
-                    self.prefix(
-                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
-                    ),
-                    chat_id=chat_id,
-                )
-                return
             self.client.answer_callback(cq_id, "release")
             self._run_release(chat_id)
         elif data.startswith("cmd|attack_"):
-            if not self.mutating_allowed(chat_id, user_id):
-                self.client.answer_callback(cq_id, "need allowlist")
-                self.client.send_message(
-                    self.prefix(
-                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
-                    ),
-                    chat_id=chat_id,
-                )
-                return
             level = data.split("_", 1)[1]
             self.client.answer_callback(cq_id, level)
             self._run_attack(chat_id, level, user_id=user_id)
@@ -495,8 +469,9 @@ def run_fleet_bot(*, store_path: Path | None = None, identity: str | None = None
             {
                 "ok": True,
                 "hosts": len(store.load().hosts),
-                "allow_users": sorted(allow),
-                "hint": "polling",
+                "allow_users_raw": sorted(allow),
+                "allow_user_ids": sorted(bot.user_ids),
+                "hint": "polling; FLEET_TELEGRAM_ALLOW_USERS = user IDs only",
             }
         )
     )

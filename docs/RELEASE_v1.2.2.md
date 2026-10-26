@@ -155,9 +155,9 @@ Control Center / Fleet Center: Edge panel (Status · Under Attack · Clear · Pl
 
 ### 6. Fleet Telegram hub
 
-- `FLEET_TELEGRAM_ALLOW_USERS` — comma-separated chat/user IDs; others ignored
-- Prefer DM bots; putting a **group** chat ID in the allowlist lets every member pass the chat check — avoid that for destructive ops
-- Attack **L3** from TG requires a second step: `/confirm_l3` within 60s
+- `FLEET_TELEGRAM_ALLOW_USERS` — comma-separated **user** IDs only (group IDs ignored)
+- Prefer DM bots; groups **require** a user allowlist (hub unlock/lock/use gated the same way)
+- Attack **L3** from TG: same user must `/confirm_l3` within 60s (wrong user does not clear pending)
 - Status lines read nested `detail` from structured fleet results
 
 ### 7. Fleet Center app (`fleet-center/`)
@@ -283,11 +283,12 @@ Mass ops (explicit):
 - Document `edge` in the CLI parity matrix ([CONTROL_CENTER.md](CONTROL_CENTER.md))
 - Fleet `public_dict()` test expects `token_set`, not masked `device_token` string
 - Fleet Center: `profile-apply` requires typed `PROFILE` confirm (Rust still passes `--yes` only after UI gate, same as attack/ban)
-- Fleet Telegram: `/confirm_l3` bound to **same user_id** (not just chat); group chats need `FLEET_TELEGRAM_ALLOW_USERS` for mutating ops
-- `fleet warmup` / `mark-fp` require host-key pin (same as other mutating SSH)
-- `fleet keyscan`: IPv6 + non-default port; reject leading-`-` hosts
-- `home seed-never-ban`: refuse corrupt `user-settings.json` unless `--force` (`.bak`); `--ip` for admin egress; TUI default **No**
-- `.gitignore`: `/bin/sysspectogram-agent`; fleet-center lock synced (`npm ci`); drop unused `uplot`
+- Fleet Telegram: `/confirm_l3` bound to **same user_id**; wrong-user confirm does **not** clear pending; `FLEET_TELEGRAM_ALLOW_USERS` is **user IDs only** (group IDs ignored); groups without user allowlist cannot `/unlock`/`/lock`/`/use`
+- `fleet warmup` / `mark-fp` require host-key pin; warmup `ok` is false when any host fails
+- `fleet keyscan` / SSH: bare IPv6 (no brackets), `-p` for non-default port, known_hosts `[host]:port`
+- `home seed-never-ban --ip`: validate via `ip_network`; reject junk / `/0` / wider than `/24` (v4) or `/64` (v6); `--force` always writes `.bak` for corrupt **or** non-object JSON
+- Fleet Center in CI (`npm ci` + check + vitest); agent/helper Cargo.toml aligned to 1.2.2
+- `.gitignore`: `/bin/sysspectogram-agent`; fleet-center lock synced; drop unused `uplot`
 
 ---
 

@@ -40,6 +40,75 @@ class SshResult:
             return None
 
 
+@dataclass(frozen=True)
+class SshDestination:
+    """Parsed ssh target: user@host with optional port (never embed port in hostname)."""
+
+    user: str | None
+    host: str
+    port: int | None
+
+    def ssh_argv_dest(self) -> str:
+        """Destination token for ``ssh -- <dest>`` (no port; use ``-p`` separately)."""
+        if self.user:
+            return f"{self.user}@{self.host}"
+        return self.host
+
+    def known_hosts_name(self) -> str:
+        """Host name token for a known_hosts line (brackets + port when needed)."""
+        if self.port is not None:
+            return f"[{self.host}]:{self.port}"
+        if ":" in self.host:
+            return f"[{self.host}]"
+        return self.host
+
+
+def parse_ssh_destination(ssh_dest: str) -> SshDestination | None:
+    """Parse ``user@host``, ``user@host:port``, ``user@[ipv6]:port``.
+
+    Rejects empty / leading-``-`` destinations (option injection).
+    """
+    dest = (ssh_dest or "").strip()
+    if not dest or dest.startswith("-"):
+        return None
+    user: str | None = None
+    hostport = dest
+    if "@" in dest:
+        user, hostport = dest.split("@", 1)
+        user = user.strip() or None
+        hostport = hostport.strip()
+        if user and user.startswith("-"):
+            return None
+    if not hostport or hostport.startswith("-"):
+        return None
+    host: str
+    port: int | None = None
+    if hostport.startswith("["):
+        end = hostport.find("]")
+        if end < 0:
+            return None
+        host = hostport[1:end]
+        rest = hostport[end + 1 :]
+        if rest:
+            if not (rest.startswith(":") and rest[1:].isdigit()):
+                return None
+            port = int(rest[1:])
+    elif hostport.count(":") == 1:
+        left, right = hostport.rsplit(":", 1)
+        if right.isdigit() and left and not left.startswith("-"):
+            host, port = left, int(right)
+        else:
+            host = hostport
+    else:
+        # bare hostname, or bare IPv6 (multiple colons)
+        host = hostport
+    if not host or host.startswith("-"):
+        return None
+    if port is not None and not (1 <= port <= 65535):
+        return None
+    return SshDestination(user=user, host=host, port=port)
+
+
 def ssh_binary() -> str:
     for name in ("ssh", "ssh.exe"):
         found = shutil.which(name)
@@ -66,7 +135,12 @@ def require_host_pin(host: FleetHost, *, mutating: bool) -> str | None:
     )
 
 
-def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[list[str], Path | None]:
+def _ssh_base_args(
+    host: FleetHost,
+    *,
+    identity: str | None = None,
+    parsed: SshDestination | None = None,
+) -> tuple[list[str], Path | None]:
     """Build ssh argv; if host_key_line is set, pin via a temp known_hosts file."""
     cmd = [
         ssh_binary(),
@@ -75,6 +149,8 @@ def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[lis
         "-o",
         "ConnectTimeout=15",
     ]
+    if parsed and parsed.port is not None:
+        cmd.extend(["-p", str(parsed.port)])
     known: Path | None = None
     line = (host.host_key_line or "").strip()
     if line:
@@ -88,9 +164,9 @@ def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[lis
         ):
             kh_line = line
         else:
-            dest = host.ssh
-            host_part = dest.split("@", 1)[-1].split(":", 1)[0]
-            kh_line = f"{host_part} {line}"
+            dest = parsed or parse_ssh_destination(host.ssh)
+            name = dest.known_hosts_name() if dest else (host.ssh or "unknown")
+            kh_line = f"{name} {line}"
         fd, path_s = tempfile.mkstemp(prefix="ss-fleet-kh-", suffix=".known")
         os.close(fd)
         known = Path(path_s)
@@ -126,12 +202,15 @@ def ssh_run(
 ) -> SshResult:
     if not host.ssh:
         return SshResult(False, "", "ssh target empty", 2)
-    dest = (host.ssh or "").strip()
-    if not dest or dest.startswith("-"):
+    dest_raw = (host.ssh or "").strip()
+    if not dest_raw or dest_raw.startswith("-"):
         return SshResult(False, "", "invalid ssh destination (must not be empty or start with -)", 2)
-    cmd, known = _ssh_base_args(host, identity=identity)
+    parsed = parse_ssh_destination(dest_raw)
+    if parsed is None:
+        return SshResult(False, "", "invalid ssh destination", 2)
+    cmd, known = _ssh_base_args(host, identity=identity, parsed=parsed)
     cmd.append("--")
-    cmd.append(dest)
+    cmd.append(parsed.ssh_argv_dest())
     cmd.append(remote_command)
     try:
         proc = subprocess.run(
