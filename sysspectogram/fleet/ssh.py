@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,10 +40,36 @@ class SshResult:
             return None
 
 
+def ssh_binary() -> str:
+    for name in ("ssh", "ssh.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return "ssh"
+
+
+def allow_tofu() -> bool:
+    return os.environ.get("FLEET_SSH_TOFU", "").strip() in ("1", "true", "yes")
+
+
+def require_host_pin(host: FleetHost, *, mutating: bool) -> str | None:
+    """Return error string if host must be pinned for this op."""
+    if (host.host_key_line or "").strip():
+        return None
+    if not mutating:
+        return None
+    if allow_tofu():
+        return None
+    return (
+        f"host {host.id}: host_key_line required for mutating fleet ops "
+        "(fleet pin-host, or FLEET_SSH_TOFU=1)"
+    )
+
+
 def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[list[str], Path | None]:
     """Build ssh argv; if host_key_line is set, pin via a temp known_hosts file."""
     cmd = [
-        "ssh",
+        ssh_binary(),
         "-o",
         "BatchMode=yes",
         "-o",
@@ -50,7 +79,6 @@ def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[lis
     line = (host.host_key_line or "").strip()
     if line:
         parts = line.split()
-        # Full known_hosts line already has hostname as first token.
         if len(parts) >= 3 and parts[0] not in (
             "ssh-ed25519",
             "ssh-rsa",
@@ -64,8 +92,6 @@ def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[lis
             host_part = dest.split("@", 1)[-1].split(":", 1)[0]
             kh_line = f"{host_part} {line}"
         fd, path_s = tempfile.mkstemp(prefix="ss-fleet-kh-", suffix=".known")
-        import os
-
         os.close(fd)
         known = Path(path_s)
         known.write_text(kh_line + "\n", encoding="utf-8")
@@ -78,7 +104,7 @@ def _ssh_base_args(host: FleetHost, *, identity: str | None = None) -> tuple[lis
                 "-o",
                 "StrictHostKeyChecking=yes",
                 "-o",
-                f"UserKnownHostsFile={known}",
+                "UserKnownHostsFile=" + str(known),
                 "-o",
                 "GlobalKnownHostsFile=/dev/null",
             ]
@@ -96,14 +122,26 @@ def ssh_run(
     *,
     timeout: float = 60.0,
     identity: str | None = None,
+    stdin_data: str | None = None,
 ) -> SshResult:
     if not host.ssh:
         return SshResult(False, "", "ssh target empty", 2)
+    dest = (host.ssh or "").strip()
+    if not dest or dest.startswith("-"):
+        return SshResult(False, "", "invalid ssh destination (must not be empty or start with -)", 2)
     cmd, known = _ssh_base_args(host, identity=identity)
-    cmd.append(host.ssh)
+    cmd.append("--")
+    cmd.append(dest)
     cmd.append(remote_command)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        proc = subprocess.run(
+            cmd,
+            input=stdin_data,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
         return SshResult(
             ok=proc.returncode == 0,
             stdout=proc.stdout or "",
@@ -133,38 +171,60 @@ def remote_control(
     *,
     timeout: float = 60.0,
     identity: str | None = None,
+    mutating: bool = False,
 ) -> dict[str, Any]:
-    """Run control.sock request on the remote host via SSH."""
+    """Run control.sock request on the remote host via SSH.
+
+    Payload (including device_token) is sent on SSH stdin as JSON so the token
+    never appears in remote process argv.
+    """
+    pin_err = require_host_pin(host, mutating=mutating)
+    if pin_err:
+        return {"ok": False, "error": pin_err, "host_id": host.id}
+
     home = (host.home_path or "").rstrip("/") or "."
     py = remote_python(host)
     body = dict(payload)
     if host.device_token and "device_token" not in body:
         body["device_token"] = host.device_token
-    payload_lit = json.dumps(body, separators=(",", ":"))
+    # Remote snippet reads JSON from stdin — no secrets in -c string.
     remote = (
         f"cd {shlex.quote(home)} && {py} -c "
         + shlex.quote(
-            "import json; "
-            "from sysspectogram.control_socket import request; "
-            "from sysspectogram.config import state_root; "
-            f"p=json.loads({payload_lit!r}); "
-            "sock=state_root()/'state'/'control.sock'; "
+            "import json,sys;"
+            "from sysspectogram.control_socket import request;"
+            "from sysspectogram.config import state_root;"
+            "p=json.load(sys.stdin);"
+            "sock=state_root()/'state'/'control.sock';"
             "print(json.dumps(request(sock,p),ensure_ascii=False))"
         )
     )
-    r = ssh_run(host, remote, timeout=timeout, identity=identity)
+    t0 = time.perf_counter()
+    r = ssh_run(
+        host,
+        remote,
+        timeout=timeout,
+        identity=identity,
+        stdin_data=json.dumps(body, separators=(",", ":")),
+    )
+    latency_ms = (time.perf_counter() - t0) * 1000.0
     data = r.json()
     if data is None:
         return {
             "ok": False,
             "error": r.stderr.strip() or r.stdout.strip() or f"ssh rc={r.returncode}",
             "host_id": host.id,
+            "latency_ms": round(latency_ms, 1),
         }
     data.setdefault("host_id", host.id)
+    data.setdefault("latency_ms", round(latency_ms, 1))
     return data
 
 
 def remote_cat_unlock_code(host: FleetHost, *, identity: str | None = None) -> str | None:
+    pin_err = require_host_pin(host, mutating=True)
+    if pin_err:
+        return None
     home = (host.home_path or "").rstrip("/") or "."
     r = ssh_run(
         host,

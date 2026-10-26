@@ -1,0 +1,71 @@
+"""home update must use python -m pip (broken shebang-safe)."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from unittest import mock
+
+from sysspectogram import friend_update as fu
+
+
+def test_update_stack_invokes_python_dash_m_pip(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    venv_bin = home / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    py = venv_bin / "python"
+    py.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    py.chmod(0o755)
+    # Deliberately NO venv/bin/pip — old code would FileNotFoundError.
+    monkeypatch.setattr(fu, "_home", lambda: home)
+
+    wheel = tmp_path / "pkg.whl"
+    wheel.write_bytes(b"whl")
+    agent = tmp_path / "sysspectogram-agent-x86_64-linux-musl"
+    agent.write_bytes(b"agent")
+    sums = f"{'a' * 64}  {wheel.name}\n".replace("a" * 64, __import__("hashlib").sha256(b"whl").hexdigest())
+
+    assets = {
+        wheel.name: "https://example.test/pkg.whl",
+        "SHA256SUMS": "https://example.test/SHA256SUMS",
+        "sysspectogram-agent-x86_64-linux-musl": "https://example.test/agent",
+        "sysspectogram-agent-x86_64-linux-musl.sha256": "https://example.test/agent.sha256",
+    }
+    urls = {
+        assets[wheel.name]: b"whl",
+        assets["SHA256SUMS"]: sums.encode(),
+        assets["sysspectogram-agent-x86_64-linux-musl"]: b"agent",
+        assets["sysspectogram-agent-x86_64-linux-musl.sha256"]: (
+            __import__("hashlib").sha256(b"agent").hexdigest() + "  agent\n"
+        ).encode(),
+        "https://api.github.com/repos/lifeqsoll/SysSpectogram/releases/tags/v9.9.9": (
+            __import__("json")
+            .dumps(
+                {
+                    "assets": [
+                        {"name": n, "browser_download_url": u} for n, u in assets.items()
+                    ]
+                }
+            )
+            .encode()
+        ),
+    }
+
+    def fake_get(url: str) -> bytes:
+        return urls[url]
+
+    monkeypatch.setattr(fu, "_get", fake_get)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check=False, **kwargs):  # noqa: ANN001
+        calls.append([str(c) for c in cmd])
+        assert kwargs.get("capture_output") is True
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(fu.subprocess, "run", fake_run)
+    out = fu.update_stack("v9.9.9")
+    assert out.get("ok") is True, out
+    pip_calls = [c for c in calls if "-m" in c and "pip" in c]
+    assert pip_calls, calls
+    assert pip_calls[0][:3] == [str(py), "-m", "pip"]
+    assert not any(Path(c[0]).name == "pip" for c in calls if c)

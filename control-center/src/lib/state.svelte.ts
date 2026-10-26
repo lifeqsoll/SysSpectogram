@@ -44,16 +44,40 @@ function storedAdvanced(): boolean {
   }
 }
 
+function storedFleetHubOnly(): boolean {
+  try {
+    return localStorage.getItem('sys-fleet-hub') === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Nav when Fleet hub-only mode is on. */
+export const HUB_SECTIONS = ['fleet', 'settings'] as const;
+
 export const ui = $state({
   lang: storedLang() as Lang,
   theme: storedTheme() as ThemeId,
   advanced: storedAdvanced(),
-  section: 'home' as SectionId,
+  fleetHubOnly: storedFleetHubOnly(),
+  section: (storedFleetHubOnly() ? 'fleet' : 'home') as SectionId,
   range: '1h' as Range,
   onboardingDone: true as boolean,
   /** False until stack is ready (dev checkout always ready). */
   bootstrapDone: true as boolean,
 });
+
+export function setFleetHubOnly(on: boolean): void {
+  ui.fleetHubOnly = on;
+  try {
+    localStorage.setItem('sys-fleet-hub', on ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+  if (on) {
+    ui.section = 'fleet';
+  }
+}
 
 export function setLang(lang: Lang): void {
   ui.lang = lang;
@@ -93,6 +117,9 @@ export function applyThemeToDom(): void {
 }
 
 export function navSections(): readonly SectionId[] {
+  if (ui.fleetHubOnly) {
+    return HUB_SECTIONS as unknown as SectionId[];
+  }
   if (ui.advanced) {
     return [...SIMPLE_SECTIONS, ...ADVANCED_SECTIONS.filter((s) => s !== 'settingsAdvanced')] as SectionId[];
   }

@@ -138,17 +138,27 @@ def update_stack(tag: str) -> dict[str, Any]:
     venv = home / ".venv"
     py = venv / "bin" / "python"
     if not py.is_file():
-        r = subprocess.run(["python3", "-m", "venv", str(venv)], check=False)
+        r = subprocess.run(
+            ["python3", "-m", "venv", str(venv)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         if r.returncode != 0:
-            return {"ok": False, "error": "venv failed", "steps": steps}
+            err = (r.stderr or r.stdout or "venv failed").strip()
+            return {"ok": False, "error": f"venv failed: {err}", "steps": steps}
         steps.append({"step": "venv", "ok": True})
-    pip = venv / "bin" / "pip"
+    # Always `python -m pip` — venv/bin/pip shebang breaks after the tree is moved.
+    # capture_output: pip must not pollute stdout (CC parses CLI stdout as JSON).
     r = subprocess.run(
-        [str(pip), "install", "--upgrade", "pip", "wheel", str(wheel_path)],
+        [str(py), "-m", "pip", "install", "--upgrade", "pip", "wheel", str(wheel_path)],
         check=False,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
-        return {"ok": False, "error": "pip install failed", "steps": steps}
+        err = (r.stderr or r.stdout or "pip install failed").strip()
+        return {"ok": False, "error": f"pip install failed: {err[:500]}", "steps": steps}
     steps.append({"step": "pip_install", "ok": True})
 
     bin_dir = home / "bin"

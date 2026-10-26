@@ -252,6 +252,21 @@ def run_configure(
         env_updates["TELEGRAM_CHAT_ID"] = chat
     _update_env(env_path, env_updates)
 
+    try:
+        from sysspectogram.admin_ip import seed_never_ban
+
+        if Confirm.ask("Seed never-ban with this machine's public IP?", default=True):
+            seeded = seed_never_ban(write=True)
+            if seeded.get("ok"):
+                console.print(
+                    f"[cyan]never_ban[/] ip={seeded.get('ip')} → {seeded.get('never_ban_cidrs')} "
+                    f"({seeded.get('reason')})"
+                )
+            else:
+                console.print(f"[yellow]never_ban seed skipped[/]: {seeded.get('reason')}")
+    except Exception as exc:
+        console.print(f"[yellow]never_ban seed error[/]: {exc}")
+
     if seed_fp and role_in and role_in != "generic-linux":
         n = _seed_labels(prefix, role_in)
         console.print(f"[cyan]Seeded {n} role FP labels for {role_in}[/]")

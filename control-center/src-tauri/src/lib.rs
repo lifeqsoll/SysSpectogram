@@ -105,6 +105,11 @@ fn home_seed_role(role: String) -> Result<Value, String> {
     cli::run_json(&["home", "seed-role", "--role", &role])
 }
 
+#[tauri::command]
+fn home_seed_never_ban() -> Result<Value, String> {
+    cli::run_json(&["home", "seed-never-ban"])
+}
+
 /// Fetch public IPv4 via ifconfig.me (fallbacks). For never-ban wizard.
 #[tauri::command]
 fn detect_public_ip() -> Result<Value, String> {
@@ -226,20 +231,49 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
     }
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).ok();
 
-    let runner = ["/usr/bin/pkexec", "/usr/bin/sudo"]
-        .into_iter()
-        .find(|p| std::path::Path::new(p).is_file())
-        .ok_or_else(|| "need pkexec or sudo to install helper".to_string())?;
-    let out = Command::new(runner)
-        .arg("bash")
-        .arg(&script)
-        .arg(&t)
+    // GUI path: only pkexec (graphical polkit). Never sudo — it needs /dev/tty and
+    // fails with "textual authentication agent" when Control Center has no TTY.
+    let pkexec = std::path::Path::new("/usr/bin/pkexec");
+    let term_hint = format!(
+        "Open a normal terminal (not this window) and run:\n  curl -fsSL https://raw.githubusercontent.com/{repo}/{t}/scripts/install-helper-from-release.sh | sudo bash -s -- {t}\nThen log out/in so group sysspectogram applies."
+    );
+    if !pkexec.is_file() {
+        return Err(format!("pkexec not found (install polkit). {term_hint}"));
+    }
+    // Keep session vars so the polkit agent can show a password dialog.
+    let mut env_args: Vec<String> = vec!["env".into()];
+    for key in [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_RUNTIME_DIR",
+    ] {
+        if let Ok(v) = std::env::var(key) {
+            env_args.push(format!("{key}={v}"));
+        }
+    }
+    env_args.push("bash".into());
+    env_args.push(script.to_string_lossy().into_owned());
+    env_args.push(t.clone());
+    let out = Command::new(pkexec)
+        .args(&env_args)
         .output()
         .map_err(|e| format!("run helper install: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
-        return Err(format!("helper install failed: {stderr}\n{stdout}"));
+        let blob = format!("{stderr}\n{stdout}");
+        if blob.contains("/dev/tty")
+            || blob.contains("authentication agent")
+            || blob.contains("No such device")
+            || (blob.contains("polkit") && blob.contains("not authorized"))
+        {
+            return Err(format!(
+                "Cannot ask for admin password from this window (no polkit agent / TTY).\n{term_hint}"
+            ));
+        }
+        return Err(format!("helper install failed: {blob}"));
     }
     Ok(json!({
         "ok": true,
@@ -505,8 +539,84 @@ fn fleet_graph() -> Result<Value, String> {
 
 #[tauri::command]
 fn fleet_warmup(scope: Option<String>) -> Result<Value, String> {
-    let s = scope.unwrap_or_else(|| "local".into());
+    let s = scope.unwrap_or_else(|| "all".into());
     cli::run_json(&["fleet", "warmup", "--scope", s.as_str()])
+}
+
+#[tauri::command]
+fn fleet_pair_start(
+    ssh: String,
+    home: Option<String>,
+    label: Option<String>,
+    identity: Option<String>,
+    host_key_line: Option<String>,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "fleet".into(),
+        "pair-start".into(),
+        "--ssh".into(),
+        ssh,
+    ];
+    if let Some(h) = home.filter(|x| !x.is_empty()) {
+        args.extend(["--home".into(), h]);
+    }
+    if let Some(l) = label.filter(|x| !x.is_empty()) {
+        args.extend(["--label".into(), l]);
+    }
+    if let Some(i) = identity.filter(|x| !x.is_empty()) {
+        args.extend(["--identity".into(), i]);
+    }
+    if let Some(k) = host_key_line.filter(|x| !x.is_empty()) {
+        args.extend(["--host-key-line".into(), k]);
+    }
+    let owned: Vec<String> = args;
+    let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+    cli::run_json(&refs)
+}
+
+#[tauri::command]
+fn fleet_pair_finish(
+    ssh: String,
+    home: Option<String>,
+    code: String,
+    id: String,
+    label: Option<String>,
+    role: Option<String>,
+    identity: Option<String>,
+    host_key_line: Option<String>,
+) -> Result<Value, String> {
+    let mut owned: Vec<String> = vec![
+        "fleet".into(),
+        "pair-finish".into(),
+        "--ssh".into(),
+        ssh,
+        "--code".into(),
+        code,
+        "--id".into(),
+        id,
+    ];
+    if let Some(h) = home.filter(|x| !x.is_empty()) {
+        owned.extend(["--home".into(), h]);
+    }
+    if let Some(l) = label.filter(|x| !x.is_empty()) {
+        owned.extend(["--label".into(), l]);
+    }
+    if let Some(r) = role.filter(|x| !x.is_empty()) {
+        owned.extend(["--role".into(), r]);
+    }
+    if let Some(i) = identity.filter(|x| !x.is_empty()) {
+        owned.extend(["--identity".into(), i]);
+    }
+    if let Some(k) = host_key_line.filter(|x| !x.is_empty()) {
+        owned.extend(["--host-key-line".into(), k]);
+    }
+    let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+    cli::run_json(&refs)
+}
+
+#[tauri::command]
+fn fleet_keyscan(ssh: String) -> Result<Value, String> {
+    cli::run_json(&["fleet", "keyscan", "--ssh", ssh.as_str()])
 }
 
 #[tauri::command]
@@ -519,6 +629,7 @@ fn fleet_profile_apply(id: String, scope: Option<String>) -> Result<Value, Strin
         id.as_str(),
         "--scope",
         s.as_str(),
+        "--yes",
     ])
 }
 
@@ -531,7 +642,7 @@ fn fleet_status(scope: Option<String>) -> Result<Value, String> {
 #[tauri::command]
 fn fleet_unlock_locked(scope: Option<String>) -> Result<Value, String> {
     let s = scope.unwrap_or_else(|| "all".into());
-    cli::run_json(&["fleet", "unlock-locked", "--scope", s.as_str()])
+    cli::run_json(&["fleet", "unlock-locked", "--scope", s.as_str(), "--yes"])
 }
 
 #[tauri::command]
@@ -546,6 +657,7 @@ fn fleet_attack(scope: String, level: Option<String>, deps: Option<bool>) -> Res
             "--level",
             lv.as_str(),
             "--deps",
+            "--yes",
         ]);
     }
     cli::run_json(&[
@@ -555,13 +667,14 @@ fn fleet_attack(scope: String, level: Option<String>, deps: Option<bool>) -> Res
         scope.as_str(),
         "--level",
         lv.as_str(),
+        "--yes",
     ])
 }
 
 #[tauri::command]
 fn fleet_release(scope: Option<String>) -> Result<Value, String> {
     let s = scope.unwrap_or_else(|| "all".into());
-    cli::run_json(&["fleet", "release", "--scope", s.as_str()])
+    cli::run_json(&["fleet", "release", "--scope", s.as_str(), "--yes"])
 }
 
 #[tauri::command]
@@ -593,6 +706,29 @@ fn fleet_mark_fp(scope: Option<String>, label: Option<String>) -> Result<Value, 
 }
 
 #[tauri::command]
+fn edge_status(lang: Option<String>) -> Result<Value, String> {
+    let l = lang.unwrap_or_else(|| "en".into());
+    cli::run_json(&["edge", "status", "--lang", &l])
+}
+
+#[tauri::command]
+fn edge_under_attack() -> Result<Value, String> {
+    cli::run_json(&["edge", "under-attack", "--yes"])
+}
+
+#[tauri::command]
+fn edge_clear(level: Option<String>) -> Result<Value, String> {
+    let lv = level.unwrap_or_else(|| "high".into());
+    cli::run_json(&["edge", "clear", "--level", &lv, "--yes"])
+}
+
+#[tauri::command]
+fn edge_playbook(lang: Option<String>) -> Result<Value, String> {
+    let l = lang.unwrap_or_else(|| "en".into());
+    cli::run_json(&["edge", "playbook", "--lang", &l, "--json"])
+}
+
+#[tauri::command]
 fn fleet_ban(scope: String, ip: String, ttl: Option<f64>) -> Result<Value, String> {
     let t = ttl.unwrap_or(3600.0).to_string();
     cli::run_json(&[
@@ -604,6 +740,7 @@ fn fleet_ban(scope: String, ip: String, ttl: Option<f64>) -> Result<Value, Strin
         ip.as_str(),
         "--ttl",
         t.as_str(),
+        "--yes",
     ])
 }
 
@@ -768,6 +905,13 @@ pub fn run() {
             fleet_incidents,
             fleet_mark_fp,
             fleet_ban,
+            fleet_pair_start,
+            fleet_pair_finish,
+            fleet_keyscan,
+            edge_status,
+            edge_under_attack,
+            edge_clear,
+            edge_playbook,
             home_import_model,
             home_write_env,
             onboarding_status,
@@ -784,6 +928,7 @@ pub fn run() {
             protect_disable,
             home_update,
             home_seed_role,
+            home_seed_never_ban,
             detect_public_ip,
             install_helper_release,
         ])

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
   import { t } from '../lib/i18n';
-  import { setAdvanced, setLang, setTheme, ui } from '../lib/state.svelte';
+  import { setAdvanced, setFleetHubOnly, setLang, setTheme, ui } from '../lib/state.svelte';
   import type { Lang } from '../lib/settings';
 
   let error = $state<string | null>(null);
@@ -204,6 +204,31 @@
           detectBusy = false;
         }
       }}>{detectBusy ? '…' : t('set.detectIp')}</button>
+    <button
+      class="btn"
+      style="margin-top: 8px; margin-left: 8px"
+      disabled={busy}
+      onclick={async () => {
+        busy = true;
+        error = null;
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const res = await invoke<{ ok?: boolean; never_ban_cidrs?: string[]; ip?: string; error?: string }>(
+            'home_seed_never_ban',
+          );
+          if (!res.ok) throw new Error(res.error || 'seed failed');
+          const list = res.never_ban_cidrs || [];
+          neverBan = list.join('\n');
+          notice =
+            ui.lang === 'ru'
+              ? `never-ban: ${res.ip || '—'} (проверьте NAT)`
+              : `never-ban: ${res.ip || '—'} (check NAT)`;
+        } catch (e) {
+          error = errorText(e);
+        } finally {
+          busy = false;
+        }
+      }}>{ui.lang === 'ru' ? 'Записать never-ban' : 'Seed never-ban'}</button>
   </div>
   <label class="row">
     <input type="checkbox" bind:checked={telegramEnabled} />
@@ -278,6 +303,15 @@
 </div>
 
 <div class="panel stack">
+  <label class="row">
+    <input type="checkbox" checked={ui.fleetHubOnly} onchange={(e) => setFleetHubOnly((e.currentTarget as HTMLInputElement).checked)} />
+    <span>{ui.lang === 'ru' ? 'Только Fleet hub (скрыть local protect)' : 'Fleet hub only (hide local protect)'}</span>
+  </label>
+  <p class="muted" style="margin: 0 0 12px">
+    {ui.lang === 'ru'
+      ? 'Навигация: Fleet + Settings. Для админ-ПК с несколькими VPS.'
+      : 'Nav: Fleet + Settings. For admin PC managing many VPS.'}
+  </p>
   <label class="row">
     <input type="checkbox" checked={ui.advanced} onchange={(e) => setAdvanced((e.currentTarget as HTMLInputElement).checked)} />
     <span>{t('set.advanced')}</span>

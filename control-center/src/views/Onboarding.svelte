@@ -27,6 +27,8 @@
     return 'ssh';
   }
 
+  let autoDetectTried = $state(false);
+
   async function detectIp(): Promise<void> {
     detectBusy = true;
     error = null;
@@ -48,6 +50,13 @@
       detectBusy = false;
     }
   }
+
+  $effect(() => {
+    if (step === 4 && !autoDetectTried && !skipNeverBan && !neverBan.trim()) {
+      autoDetectTried = true;
+      void detectIp();
+    }
+  });
 
   function next(): void {
     error = null;

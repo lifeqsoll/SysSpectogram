@@ -435,6 +435,12 @@ def run_guard(
         f"[cyan]response.mode[/] {resp_mode} auto_ban_rules={sorted(auto_ban_rules) or '-'} "
         f"kirk_auto_isolate={kirk_auto_isolate}"
     )
+    if resp_mode not in ("observe", "notify", "") and not never_ban:
+        console.print(
+            "[yellow]never_ban empty[/] under soft+/shield — "
+            "run: python -m sysspectogram home seed-never-ban "
+            "(or set response.never_ban_cidrs) before auto-ban/lockdown"
+        )
 
     def on_alert(alert, recon):
         rid = str(getattr(alert, "rule_id", "") or "alert")

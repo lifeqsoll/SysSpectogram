@@ -219,9 +219,12 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
         }
         log.push(json!({"step": "venv", "ok": true}));
     }
-    let pip = venv.join("bin").join("pip");
-    let st = Command::new(&pip)
+    // Prefer `python -m pip` — venv/bin/pip shebang breaks if the tree was moved.
+    let py = venv.join("bin").join("python");
+    let st = Command::new(&py)
         .args([
+            "-m",
+            "pip",
             "install",
             "--upgrade",
             "pip",

@@ -6,6 +6,12 @@
 //! 2. the source checkout this binary was built in (if it sits inside one)
 //! 3. user data dir (~/.local/share/sysspectogram) for AppImage / deb
 //! 4. the system-installed state directory (/var/lib/sysspectogram)
+//!
+//! Hub / fleet-only: Fleet Tauri commands go through `cli::run_json` →
+//! `python -m sysspectogram fleet …` using [`python`] + [`root`]. They do **not**
+//! require `helper.sock`, polkit, `/opt/sysspectogram`, or a local guard. Prefer
+//! `SYSSPECTOGRAM_HOME` (checkout or user data with a `.venv`) so resolution never
+//! depends on the optional system install paths below.
 
 use std::path::{Path, PathBuf};
 
@@ -74,6 +80,10 @@ pub fn root() -> PathBuf {
 }
 
 /// Python for the CLI and the app-started guard.
+///
+/// Fleet/hub CLI calls only need an importable `sysspectogram` on this
+/// interpreter — no helper socket. Falls through to `python3` on PATH when
+/// neither the home `.venv` nor the optional `/opt/…` install exists.
 pub fn python() -> PathBuf {
     if let Some(p) = std::env::var_os("SYSSPECTOGRAM_PYTHON") {
         return PathBuf::from(p);
@@ -82,6 +92,7 @@ pub fn python() -> PathBuf {
     if home_venv.exists() {
         return home_venv;
     }
+    // Optional system package (VPS / deb). Hub laptops usually have only a user venv.
     let installed = PathBuf::from(INSTALLED_PYTHON);
     if installed.exists() {
         installed
@@ -90,6 +101,8 @@ pub fn python() -> PathBuf {
     }
 }
 
+/// Privileged helper socket (overlays / polkit). Optional on a fleet hub —
+/// fleet commands do not call this path.
 pub fn helper_socket() -> PathBuf {
     std::env::var_os("SYSSPECTOGRAM_HELPER_SOCKET")
         .map(PathBuf::from)

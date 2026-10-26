@@ -2,6 +2,8 @@
 
 Manage **multiple** SysSpectogram hosts from a laptop (Control Center **Fleet** tab + CLI) and an optional **fleet Telegram bot**. Each VPS still has its own bot for single-host ops.
 
+**Admin hub setup** (OpenSSH Client, user venv, no helper/polkit on the laptop): [FLEET_HUB.md](FLEET_HUB.md). Smoke checklist: [scripts/fleet-hub-smoke.md](../scripts/fleet-hub-smoke.md).
+
 Security model: **SSH + pair code (~5 min) + device token**. No public HTTPS control API. No unlock/pair codes in Telegram. No “emergency pocket codes”.
 
 Full design notes: [superpowers/plans/2026-10-24-remote-cc-ssh.md](superpowers/plans/2026-10-24-remote-cc-ssh.md).
@@ -140,8 +142,12 @@ On the hub (admin PC with linger, or a small always-on box):
 ```bash
 export FLEET_TELEGRAM_BOT_TOKEN=…   # separate bot recommended
 export FLEET_TELEGRAM_CHAT_ID=…
+# Optional: only these Telegram chat/user IDs may drive the bot (comma-separated)
+export FLEET_TELEGRAM_ALLOW_USERS=123456789,987654321
 .venv/bin/python -m sysspectogram fleet tg
 ```
+
+When `FLEET_TELEGRAM_ALLOW_USERS` is set, updates from any other chat/user are ignored (callbacks get `unauthorized`). If unset, only the configured `FLEET_TELEGRAM_CHAT_ID` is accepted.
 
 Hub unlock code is written to `~/.config/sysspectogram/fleet.hub_unlock.code` (0600), **not** to Telegram. `/unlock CODE` once → session until `/lock`.
 
@@ -161,5 +167,7 @@ Open **Fleet** in the sidebar: host table, graph edges, profiles, Warmup, scope,
 
 - After `pair-remote`, control actions need `device_token` (local CC on the VPS should use a paired profile or avoid pairing until you understand this).
 - Never auto-isolate bastion/DNS in policies (graph/Attack deps are conservative).
-- Soft mitigation ≠ anti-DDoS; put CDN/scrubber in front of public sites.
+- Soft mitigation ≠ anti-DDoS; put CDN in front of public sites. Hub Edge panel / `edge` CLI — see [EDGE.md](EDGE.md).
+- Mutating fleet ops need `host_key_line` (`fleet pin-host`) unless `FLEET_SSH_TOFU=1`.
+- Destructive CLI ops need `--yes` when stdin is not a TTY.
 - Soft = L1 IP ban; L2 = site ports on that node; plan DNS/canary failover if you need zero downtime.

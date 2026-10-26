@@ -5,9 +5,18 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Iterable
 
-from sysspectogram.fleet.ssh import remote_cat_unlock_code, remote_control
+from sysspectogram.fleet.results import FleetOpReport, wrap_host_dict
+from sysspectogram.fleet.ssh import remote_cat_unlock_code, remote_control, require_host_pin
 from sysspectogram.fleet.store import FleetHost, FleetStore
 from sysspectogram.unlock_help import locked_playbook
+
+
+def _report(scope: str, rows: list[dict[str, Any]], **extra: Any) -> dict[str, Any]:
+    results = [wrap_host_dict(r) for r in rows]
+    ok = bool(results) and all(r.ok for r in results)
+    if not results:
+        ok = True
+    return FleetOpReport(ok=ok, scope=scope, results=results, extra=dict(extra)).to_dict()
 
 
 def _select(store: FleetStore, scope: str) -> list[FleetHost]:
@@ -53,6 +62,9 @@ def apply_profile(
     payload = json.dumps(settings, separators=(",", ":"))
 
     def one(h: FleetHost) -> dict[str, Any]:
+        pin_err = require_host_pin(h, mutating=True)
+        if pin_err:
+            return {"host_id": h.id, "ok": False, "error": pin_err}
         home = (h.home_path or "").rstrip("/") or "."
         py = remote_python(h)
         remote = (
@@ -65,21 +77,16 @@ def apply_profile(
         return {
             "host_id": h.id,
             "ok": ok,
+            "error": None if ok else (data.get("error") or r.stderr or "apply failed"),
             "result": data or {"stdout": r.stdout, "stderr": r.stderr},
         }
 
     results: list[dict[str, Any]] = []
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(hosts) or 1))) as pool:
         futs = {pool.submit(one, h): h for h in hosts}
         for fut in as_completed(futs):
             results.append(fut.result())
-    return {
-        "ok": all(r.get("ok") for r in results),
-        "profile_id": profile_id,
-        "results": results,
-    }
+    return _report(scope, results, profile_id=profile_id)
 
 
 def warmup_remote(
@@ -116,7 +123,7 @@ def status_many(
     results: list[dict[str, Any]] = []
 
     def one(h: FleetHost) -> dict[str, Any]:
-        return remote_control(h, {"op": "status"}, identity=identity)
+        return remote_control(h, {"op": "status"}, identity=identity, mutating=False)
 
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(hosts) or 1))) as pool:
         futs = {pool.submit(one, h): h for h in hosts}
@@ -127,7 +134,7 @@ def status_many(
             except Exception as exc:
                 results.append({"ok": False, "host_id": h.id, "error": str(exc)})
     online = sum(1 for r in results if r.get("ok"))
-    return {"ok": True, "n": len(hosts), "online": online, "results": results}
+    return _report(scope, results, n=len(hosts), online=online)
 
 
 def unlock_locked(
@@ -142,7 +149,7 @@ def unlock_locked(
     out: list[dict[str, Any]] = []
 
     def one(h: FleetHost) -> dict[str, Any]:
-        st = remote_control(h, {"op": "status"}, identity=identity)
+        st = remote_control(h, {"op": "status"}, identity=identity, mutating=False)
         if not st.get("ok"):
             return {"host_id": h.id, "ok": False, "error": st.get("error"), "step": "status"}
         status = st.get("status") or {}
@@ -153,10 +160,12 @@ def unlock_locked(
             return {
                 "host_id": h.id,
                 "ok": False,
-                "error": "no unlock.code on host",
+                "error": "no unlock.code on host (or host not pinned)",
                 "help": locked_playbook(host_id=h.id),
             }
-        ur = remote_control(h, {"op": "unlock", "code": code}, identity=identity)
+        ur = remote_control(
+            h, {"op": "unlock", "code": code}, identity=identity, mutating=True
+        )
         ur["host_id"] = h.id
         if not ur.get("ok"):
             ur["help"] = locked_playbook(host_id=h.id)
@@ -167,7 +176,12 @@ def unlock_locked(
         for fut in as_completed(futs):
             out.append(fut.result())
     ok_n = sum(1 for r in out if r.get("ok"))
-    return {"ok": ok_n == len(out), "unlocked_or_skipped": ok_n, "n": len(out), "results": out}
+    return _report(
+        scope,
+        out,
+        unlocked_or_skipped=ok_n,
+        n=len(out),
+    )
 
 
 def attack(
@@ -198,7 +212,7 @@ def attack(
     port_list = list(ports) if ports else [80, 443]
 
     def one(h: FleetHost) -> dict[str, Any]:
-        st0 = remote_control(h, {"op": "status"}, identity=identity)
+        st0 = remote_control(h, {"op": "status"}, identity=identity, mutating=False)
         status = (st0.get("status") or {}) if st0.get("ok") else {}
         if st0.get("ok") and status.get("control_unlocked") is False:
             return {
@@ -212,11 +226,13 @@ def attack(
                 h,
                 {"op": "action", "name": "quarantine", "payload": {"ports": port_list}},
                 identity=identity,
+                mutating=True,
             )
         return remote_control(
             h,
             {"op": "action", "name": "lockdown", "payload": {}},
             identity=identity,
+            mutating=True,
         )
 
     results: list[dict[str, Any]] = []
@@ -224,7 +240,7 @@ def attack(
         futs = {pool.submit(one, h): h for h in hosts}
         for fut in as_completed(futs):
             results.append(fut.result())
-    return {"ok": all(r.get("ok") for r in results), "level": level, "results": results}
+    return _report(scope, results, level=level)
 
 
 def ban_ip(
@@ -240,7 +256,7 @@ def ban_ip(
     hosts = _select(store, scope)
 
     def one(h: FleetHost) -> dict[str, Any]:
-        st0 = remote_control(h, {"op": "status"}, identity=identity)
+        st0 = remote_control(h, {"op": "status"}, identity=identity, mutating=False)
         status = (st0.get("status") or {}) if st0.get("ok") else {}
         if st0.get("ok") and status.get("control_unlocked") is False:
             return {
@@ -253,6 +269,7 @@ def ban_ip(
             h,
             {"op": "action", "name": "ban", "payload": {"ip": ip, "ttl_sec": ttl_sec}},
             identity=identity,
+            mutating=True,
         )
 
     results: list[dict[str, Any]] = []
@@ -260,7 +277,7 @@ def ban_ip(
         futs = {pool.submit(one, h): h for h in hosts}
         for fut in as_completed(futs):
             results.append(fut.result())
-    return {"ok": all(r.get("ok") for r in results), "ip": ip, "results": results}
+    return _report(scope, results, ip=ip)
 
 
 def mark_false_positive(
@@ -351,9 +368,24 @@ def release(
 
     def one(h: FleetHost) -> dict[str, Any]:
         # release quarantine then try kirk_release / clear lockdown comments best-effort
-        a = remote_control(h, {"op": "action", "name": "release_quarantine", "payload": {}}, identity=identity)
-        b = remote_control(h, {"op": "action", "name": "kirk_release", "payload": {}}, identity=identity)
-        c = remote_control(h, {"op": "action", "name": "release_lockdown", "payload": {}}, identity=identity)
+        a = remote_control(
+            h,
+            {"op": "action", "name": "release_quarantine", "payload": {}},
+            identity=identity,
+            mutating=True,
+        )
+        b = remote_control(
+            h,
+            {"op": "action", "name": "kirk_release", "payload": {}},
+            identity=identity,
+            mutating=True,
+        )
+        c = remote_control(
+            h,
+            {"op": "action", "name": "release_lockdown", "payload": {}},
+            identity=identity,
+            mutating=True,
+        )
         return {
             "host_id": h.id,
             "ok": bool(a.get("ok") or b.get("ok") or c.get("ok")),
@@ -367,4 +399,4 @@ def release(
         futs = {pool.submit(one, h): h for h in hosts}
         for fut in as_completed(futs):
             results.append(fut.result())
-    return {"ok": True, "results": results}
+    return _report(scope, results)

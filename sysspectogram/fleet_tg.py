@@ -1,6 +1,7 @@
 """Fleet Telegram bot on the admin hub — scope picker + fan-out ops.
 
 Uses FLEET_TELEGRAM_BOT_TOKEN + FLEET_TELEGRAM_CHAT_ID (or TELEGRAM_* fallback).
+Optional FLEET_TELEGRAM_ALLOW_USERS (comma-separated chat/user IDs) rejects others.
 Per-VPS bots remain separate.
 """
 
@@ -29,6 +30,22 @@ def _markup(rows: list[list[dict]]) -> dict:
     return {"inline_keyboard": rows}
 
 
+def parse_allow_users(raw: str | None = None) -> frozenset[str]:
+    """Comma-separated Telegram chat or user IDs from env (or explicit string)."""
+    text = raw if raw is not None else os.environ.get("FLEET_TELEGRAM_ALLOW_USERS", "")
+    return frozenset(p.strip() for p in str(text or "").split(",") if p.strip())
+
+
+def _row_field(row: dict[str, Any], key: str, default: Any = None) -> Any:
+    """FleetOpReport puts extras under detail — also accept flat legacy keys."""
+    if key in row and row.get(key) is not None:
+        return row.get(key)
+    detail = row.get("detail")
+    if isinstance(detail, dict) and key in detail:
+        return detail.get(key)
+    return default
+
+
 class FleetTelegramBot:
     def __init__(
         self,
@@ -37,6 +54,7 @@ class FleetTelegramBot:
         *,
         identity: str | None = None,
         unlock: ConsoleUnlock | None = None,
+        allow_users: frozenset[str] | None = None,
     ) -> None:
         self.client = client
         self.store = store
@@ -46,15 +64,22 @@ class FleetTelegramBot:
             ttl_sec=0,
             persist_path=Path.home() / ".config" / "sysspectogram" / "fleet.unlock",
         )
+        self.allow_users = allow_users if allow_users is not None else parse_allow_users()
         self.scope: str = "all"
         self._offset: int | None = None
         self._busy = False
+        self._pending_l3: dict[str, Any] | None = None
 
     def prefix(self, text: str) -> str:
         return f"[fleet:{self.scope}]\n{text}"
 
-    def allowed(self, chat_id: Any) -> bool:
-        return str(chat_id) == str(self.client.chat_id)
+    def allowed(self, chat_id: Any, user_id: Any = None) -> bool:
+        """Accept configured chat, or any ID listed in FLEET_TELEGRAM_ALLOW_USERS."""
+        chat_s = str(chat_id or "")
+        user_s = str(user_id or "") if user_id is not None else ""
+        if self.allow_users:
+            return chat_s in self.allow_users or (bool(user_s) and user_s in self.allow_users)
+        return chat_s == str(self.client.chat_id)
 
     def scope_keyboard(self) -> dict:
         st = self.store.load()
@@ -83,8 +108,8 @@ class FleetTelegramBot:
         )
         return _markup(rows)
 
-    def handle_command(self, text: str, chat_id: str) -> None:
-        if not self.allowed(chat_id):
+    def handle_command(self, text: str, chat_id: str, user_id: str | None = None) -> None:
+        if not self.allowed(chat_id, user_id):
             return
         parts = text.strip().split()
         if not parts:
@@ -156,6 +181,33 @@ class FleetTelegramBot:
             level = (args[0] if args else "L2").upper()
             self._run_attack(chat_id, level)
             return
+        if cmd == "/confirm_l3":
+            pend = self._pending_l3
+            self._pending_l3 = None
+            if (
+                not pend
+                or str(pend.get("chat_id")) != str(chat_id)
+                or time.time() - float(pend.get("ts") or 0) > 60
+            ):
+                self.client.send_message(self.prefix("no pending L3 confirm (or expired)"), chat_id=chat_id)
+                return
+            self.scope = str(pend.get("scope") or self.scope)
+            # Force through as confirmed L3
+            self.client.send_message(self.prefix(f"ATTACK L3 on {self.scope}…"), chat_id=chat_id)
+
+            def job() -> None:
+                r = attack(self.store, self.scope, level="L3", identity=self.identity)
+                lines = [f"level={r.get('level')}"]
+                for row in r.get("results") or []:
+                    hid = row.get("host_id")
+                    if row.get("ok"):
+                        lines.append(f"· {hid}: {_row_field(row, 'result') or 'ok'}")
+                    else:
+                        lines.append(f"· {hid}: {row.get('error')}")
+                self.client.send_message(self.prefix("\n".join(lines)[:3800]), chat_id=chat_id)
+
+            threading.Thread(target=job, daemon=True).start()
+            return
         if cmd == "/release":
             self._run_release(chat_id)
             return
@@ -164,7 +216,9 @@ class FleetTelegramBot:
     def handle_callback(self, cq: dict) -> None:
         chat = (cq.get("message") or {}).get("chat") or {}
         chat_id = str(chat.get("id", ""))
-        if not self.allowed(chat_id):
+        from_user = cq.get("from") or {}
+        user_id = str(from_user.get("id", "") or "") or None
+        if not self.allowed(chat_id, user_id):
             self.client.answer_callback(cq.get("id", ""), "unauthorized")
             return
         data = cq.get("data") or ""
@@ -208,8 +262,8 @@ class FleetTelegramBot:
             for row in r.get("results") or []:
                 hid = row.get("host_id") or "?"
                 if row.get("ok"):
-                    st = row.get("status") or {}
-                    unlocked = st.get("control_unlocked", "?")
+                    st = _row_field(row, "status") or {}
+                    unlocked = st.get("control_unlocked", "?") if isinstance(st, dict) else "?"
                     lines.append(f"· {hid}: ok unlocked={unlocked}")
                 else:
                     lines.append(f"· {hid}: FAIL {row.get('error')}")
@@ -226,32 +280,45 @@ class FleetTelegramBot:
             for row in r.get("results") or []:
                 hid = row.get("host_id")
                 if row.get("ok"):
-                    lines.append(f"· {hid}: ok" + (" (skip)" if row.get("skipped") else ""))
+                    skip = _row_field(row, "skipped")
+                    lines.append(f"· {hid}: ok" + (" (skip)" if skip else ""))
                 else:
                     lines.append(f"· {hid}: {row.get('error')}")
-                    if row.get("help"):
-                        lines.append(str(row["help"])[:800])
+                    help_txt = _row_field(row, "help")
+                    if help_txt:
+                        lines.append(str(help_txt)[:800])
             self.client.send_message(self.prefix("\n".join(lines)[:3800]), chat_id=chat_id)
 
         threading.Thread(target=job, daemon=True).start()
 
     def _run_attack(self, chat_id: str, level: str) -> None:
-        self.client.send_message(self.prefix(f"ATTACK {level} on {self.scope}…"), chat_id=chat_id)
+        level_u = (level or "L2").upper()
+        if level_u == "L3":
+            # Second gate: Telegram L3 needs /confirm_l3 after pressing the button once.
+            self._pending_l3 = {"chat_id": str(chat_id), "scope": self.scope, "ts": time.time()}
+            self.client.send_message(
+                self.prefix(
+                    f"Confirm ATTACK L3 on scope={self.scope}: reply /confirm_l3 within 60s"
+                ),
+                chat_id=chat_id,
+            )
+            return
+        self.client.send_message(self.prefix(f"ATTACK {level_u} on {self.scope}…"), chat_id=chat_id)
 
         def job() -> None:
-            r = attack(self.store, self.scope, level=level, identity=self.identity)
+            r = attack(self.store, self.scope, level=level_u, identity=self.identity)
             lines = [f"level={r.get('level')}"]
             for row in r.get("results") or []:
                 hid = row.get("host_id")
                 if row.get("ok"):
-                    lines.append(f"· {hid}: {row.get('result') or 'ok'}")
+                    lines.append(f"· {hid}: {_row_field(row, 'result') or 'ok'}")
                 else:
                     lines.append(f"· {hid}: {row.get('error')}")
-                    help_txt = row.get("help") or (
+                    help_txt = _row_field(row, "help") or (
                         locked_playbook(host_id=str(hid)) if row.get("error") == "LOCKED" else ""
                     )
                     if help_txt:
-                        lines.append(help_txt[:900])
+                        lines.append(str(help_txt)[:900])
             self.client.send_message(self.prefix("\n".join(lines)[:3800]), chat_id=chat_id)
 
         threading.Thread(target=job, daemon=True).start()
@@ -298,8 +365,10 @@ class FleetTelegramBot:
                     msg = u["message"]
                     text = msg.get("text") or ""
                     chat_id = str((msg.get("chat") or {}).get("id") or "")
+                    from_user = msg.get("from") or {}
+                    user_id = str(from_user.get("id", "") or "") or None
                     if text:
-                        self.handle_command(text, chat_id)
+                        self.handle_command(text, chat_id, user_id=user_id)
                 elif "callback_query" in u:
                     self.handle_callback(u["callback_query"])
 
@@ -320,7 +389,17 @@ def run_fleet_bot(*, store_path: Path | None = None, identity: str | None = None
         )
         return 2
     store = FleetStore(store_path)
-    bot = FleetTelegramBot(client, store, identity=identity)
-    print(json.dumps({"ok": True, "hosts": len(store.load().hosts), "hint": "polling"}))
+    allow = parse_allow_users()
+    bot = FleetTelegramBot(client, store, identity=identity, allow_users=allow)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "hosts": len(store.load().hosts),
+                "allow_users": sorted(allow),
+                "hint": "polling",
+            }
+        )
+    )
     bot.poll_forever()
     return 0

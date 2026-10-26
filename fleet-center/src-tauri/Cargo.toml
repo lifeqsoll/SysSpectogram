@@ -1,0 +1,25 @@
+[package]
+name = "sysspectogram-fleet-center"
+version = "1.2.1"
+description = "SysSpectogram Fleet Hub: desktop UI for multi-VPS fleet and edge ops"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "fleet_center_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

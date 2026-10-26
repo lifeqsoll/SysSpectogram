@@ -70,11 +70,15 @@ packaging/kmod/**/modules.order
 packaging/kmod/**/.*.cmd
 packaging/kmod/**/.tmp_versions/
 
-# --- Control Center and helper build output ---
+# --- Control Center / Fleet Hub and helper build output ---
 control-center/node_modules/
 control-center/dist/
 control-center/src-tauri/target/
 control-center/src-tauri/gen/
+fleet-center/node_modules/
+fleet-center/dist/
+fleet-center/src-tauri/target/
+fleet-center/src-tauri/gen/
 helper/target/
 
 # --- Local-only working docs (not published) ---

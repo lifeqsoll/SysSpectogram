@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ADVANCED_SECTIONS, SIMPLE_SECTIONS, applyThemeToDom, setLang as setLangState, ui } from './lib/state.svelte';
+  import {
+    ADVANCED_SECTIONS,
+    HUB_SECTIONS,
+    SIMPLE_SECTIONS,
+    applyThemeToDom,
+    setLang as setLangState,
+    ui,
+  } from './lib/state.svelte';
   import { t } from './lib/i18n';
   import { live, startLive } from './lib/live.svelte';
   import { api } from './lib/api';
@@ -148,20 +155,29 @@
         </div>
       </div>
       <nav aria-label="Sections">
-        {#each SIMPLE_SECTIONS as s (s)}
-          <button class:active={ui.section === s} onclick={() => (ui.section = s)}>
-            <Icon name={iconFor(s)} size={18} />
-            <span>{t(`nav.${s}`)}</span>
-          </button>
-        {/each}
-        {#if ui.advanced}
-          <div class="nav-label">Advanced</div>
-          {#each ADVANCED_SECTIONS as s (s)}
+        {#if ui.fleetHubOnly}
+          {#each HUB_SECTIONS as s (s)}
             <button class:active={ui.section === s} onclick={() => (ui.section = s)}>
               <Icon name={iconFor(s)} size={18} />
               <span>{t(`nav.${s}`)}</span>
             </button>
           {/each}
+        {:else}
+          {#each SIMPLE_SECTIONS as s (s)}
+            <button class:active={ui.section === s} onclick={() => (ui.section = s)}>
+              <Icon name={iconFor(s)} size={18} />
+              <span>{t(`nav.${s}`)}</span>
+            </button>
+          {/each}
+          {#if ui.advanced}
+            <div class="nav-label">Advanced</div>
+            {#each ADVANCED_SECTIONS as s (s)}
+              <button class:active={ui.section === s} onclick={() => (ui.section = s)}>
+                <Icon name={iconFor(s)} size={18} />
+                <span>{t(`nav.${s}`)}</span>
+              </button>
+            {/each}
+          {/if}
         {/if}
       </nav>
       <div class="lang">

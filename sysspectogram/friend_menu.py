@@ -191,13 +191,29 @@ def _cmd_never_ban() -> None:
     cfg = load_config()
     cur = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
     console.print(_t("Current:", "Сейчас:"), ", ".join(cur) if cur else "(empty)")
+    default = ", ".join(cur)
+    if not cur:
+        try:
+            from sysspectogram.admin_ip import detect_public_ip, cidr_for_ip
+
+            ip = detect_public_ip()
+            if ip:
+                default = cidr_for_ip(ip)
+                console.print(
+                    _t(
+                        f"Detected public IP {ip} (may be shared NAT).",
+                        f"Обнаружен публичный IP {ip} (может быть общий NAT).",
+                    )
+                )
+        except Exception:
+            pass
     console.print(
         _t(
             "Enter IPs/CIDRs comma or space separated. Bare IP → /32.",
             "IP/CIDR через запятую или пробел. Голый IP → /32.",
         )
     )
-    raw = Prompt.ask(_t("Never-ban", "Never-ban"), default=", ".join(cur))
+    raw = Prompt.ask(_t("Never-ban", "Never-ban"), default=default)
     _write_overlay({"response.never_ban_cidrs": raw})
     console.print("[green]saved[/]")
 
@@ -278,6 +294,23 @@ def _cmd_checklist() -> None:
             "Целостность: после protect команда TG /rootkit — эвристика, не вердикт. Trust = best-effort без IMA+SB/TPM.",
         )
     )
+
+
+def _cmd_edge() -> None:
+    from sysspectogram.edge import edge_status, playbook_m
+
+    lang = _lang()
+    console.print(playbook_m(lang))
+    console.print()
+    st = edge_status(lang=lang)
+    console.print(st)
+    if st.get("need_config"):
+        console.print(
+            _t(
+                "Set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID in .env — docs/EDGE.md",
+                "Задайте CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID в .env — docs/EDGE.md",
+            )
+        )
 
 
 def _cmd_under_scan() -> None:
@@ -370,6 +403,7 @@ def run_menu() -> int:
             ("7", _t("Checklist", "Чеклист")),
             ("8", _t("Under-scan (host mitigation)", "Under-scan (защита хоста)")),
             ("9", _t("Update stack", "Обновить стек")),
+            ("e", _t("Edge / DDoS playbook", "Edge / DDoS плейбук")),
             ("a", _t("Advanced configure", "Расширенный configure")),
             ("0", _t("Quit", "Выход")),
         ]
@@ -388,5 +422,6 @@ def run_menu() -> int:
             "7": _cmd_checklist,
             "8": _cmd_under_scan,
             "9": _cmd_update,
+            "e": _cmd_edge,
             "a": _cmd_configure,
         }[choice]()

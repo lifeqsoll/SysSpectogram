@@ -114,10 +114,9 @@ if [[ ! -x "${VENV}/bin/python" ]]; then
   echo "==> venv ${VENV}"
   python3 -m venv "${VENV}"
 fi
-# shellcheck disable=SC1091
-source "${VENV}/bin/activate"
-pip install -q --upgrade pip
-pip install -q --force-reinstall "${WHEEL_PATH}"
+# Prefer python -m pip (venv/bin/pip shebang breaks if HOME_DIR/venv moved).
+"${VENV}/bin/python" -m pip install -q --upgrade pip
+"${VENV}/bin/python" -m pip install -q --force-reinstall "${WHEEL_PATH}"
 
 AGENT_DIR="${HOME_DIR}/bin"
 mkdir -p "${AGENT_DIR}"

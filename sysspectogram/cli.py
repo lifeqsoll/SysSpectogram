@@ -1205,6 +1205,33 @@ def _cmd_protect(args: argparse.Namespace) -> int:
     from sysspectogram import protect_service as ps
 
     action = str(getattr(args, "protect_action", "") or "")
+    if action == "enable":
+        try:
+            from sysspectogram.admin_ip import seed_never_ban
+            from sysspectogram.config import load_config
+
+            # Detect only — never auto-write (MITM / wrong-NAT risk). Explicit: home seed-never-ban.
+            seed = seed_never_ban(write=False)
+            cfg = load_config()
+            mode = str((cfg.get("response") or {}).get("mode") or "observe").lower()
+            never = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
+            if mode not in ("observe", "notify", "") and not never:
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "never_ban empty — run: python -m sysspectogram home seed-never-ban",
+                            "detected_ip": seed.get("ip"),
+                            "seed": seed,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 2
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": f"never_ban check: {exc}"}))
+            return 2
     fn = {
         "status": ps.status,
         "enable": ps.install_and_enable,
@@ -1219,6 +1246,65 @@ def _cmd_protect(args: argparse.Namespace) -> int:
     res = fn()
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0 if res.get("ok") else 1
+
+
+def _cmd_home_seed_never_ban(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.admin_ip import seed_never_ban
+
+    out = seed_never_ban(write=not bool(getattr(args, "dry_run", False)))
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0 if out.get("ok") else 1
+
+
+def _cmd_edge(args: argparse.Namespace) -> int:
+    import json
+    import sys
+
+    from sysspectogram.edge import clear_under_attack, edge_status, playbook_m, set_under_attack
+
+    action = str(getattr(args, "edge_action", "") or "")
+    lang = str(getattr(args, "lang", None) or "en")
+    if action == "playbook":
+        text = playbook_m(lang)
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "playbook": text}, ensure_ascii=False, indent=2))
+        else:
+            print(text)
+        return 0
+    if action == "status":
+        print(json.dumps(edge_status(lang=lang), ensure_ascii=False, indent=2))
+        return 0
+
+    def _need_yes() -> int | None:
+        if bool(getattr(args, "yes", False)):
+            return None
+        if not sys.stdin.isatty():
+            print(json.dumps({"ok": False, "error": "need --yes"}))
+            return 2
+        try:
+            ans = input(f"Type YES to confirm edge {action}: ").strip()
+        except EOFError:
+            print(json.dumps({"ok": False, "error": "need --yes"}))
+            return 2
+        if ans != "YES":
+            print(json.dumps({"ok": False, "error": "aborted"}))
+            return 2
+        return None
+
+    denied = _need_yes()
+    if denied is not None:
+        return denied
+    if action == "under-attack":
+        print(json.dumps(set_under_attack(), ensure_ascii=False, indent=2))
+        return 0
+    if action == "clear":
+        level = str(getattr(args, "level", None) or "high")
+        print(json.dumps(clear_under_attack(level=level), ensure_ascii=False, indent=2))
+        return 0
+    print(json.dumps({"ok": False, "error": f"unknown edge action {action}"}))
+    return 2
 
 
 def _cmd_menu(args: argparse.Namespace) -> int:
@@ -1321,6 +1407,27 @@ def _cmd_home_remote_revoke(args: argparse.Namespace) -> int:
     return 0 if out.get("ok") else 2
 
 
+def _fleet_require_yes(args: argparse.Namespace, label: str) -> int | None:
+    """Gate destructive fleet mass-ops. Returns exit code to stop, or None to continue."""
+    import json
+    import sys
+
+    if bool(getattr(args, "yes", False)):
+        return None
+    if not sys.stdin.isatty():
+        print(json.dumps({"ok": False, "error": "need --yes", "op": label}))
+        return 2
+    try:
+        ans = input(f"Type YES to confirm fleet {label}: ").strip()
+    except EOFError:
+        print(json.dumps({"ok": False, "error": "need --yes", "op": label}))
+        return 2
+    if ans != "YES":
+        print(json.dumps({"ok": False, "error": "aborted", "op": label}))
+        return 2
+    return None
+
+
 def _cmd_fleet(args: argparse.Namespace) -> int:
     import json
 
@@ -1335,6 +1442,7 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
         unlock_locked,
         warmup_remote,
     )
+    from sysspectogram.fleet.pair import pair_finish, pair_start, suggest_keyscan
     from sysspectogram.fleet.store import (
         FleetEdge,
         FleetGroup,
@@ -1370,17 +1478,25 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
         )
         return 0
     if action == "add":
+        import sys as _sys
+
         tags = [t.strip() for t in str(getattr(args, "tags", "") or "").split(",") if t.strip()]
+        token = str(getattr(args, "device_token", "") or "")
+        if bool(getattr(args, "device_token_stdin", False)):
+            token = (_sys.stdin.read() or "").strip()
+        elif not token:
+            token = (os.environ.get("SYSSPECTOGRAM_DEVICE_TOKEN") or "").strip()
         host = FleetHost(
             id=str(args.id),
             label=str(args.label or args.id),
             ssh=str(args.ssh or ""),
             home_path=str(args.home or ""),
             device_id=str(args.device_id or ""),
-            device_token=str(args.device_token or ""),
+            device_token=token,
             role=str(args.role or "worker"),
             tags=tags,
             profile_id=getattr(args, "profile_id", None) or None,
+            host_key_line=str(getattr(args, "host_key_line", None) or ""),
         )
         st = store.upsert_host(host)
         print(json.dumps({"ok": True, "primary_host_id": st.primary_host_id, "n": len(st.hosts)}))
@@ -1421,6 +1537,9 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
         print(json.dumps({"ok": True, "n_profiles": len(st.profiles)}))
         return 0
     if action == "profile-apply":
+        denied = _fleet_require_yes(args, "profile-apply")
+        if denied is not None:
+            return denied
         print(
             json.dumps(
                 apply_profile(
@@ -1433,6 +1552,58 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
                 ensure_ascii=False,
             )
         )
+        return 0
+    if action == "pin-host":
+        st = store.load()
+        hid = str(args.id)
+        line = str(getattr(args, "host_key_line", "") or "").strip()
+        if not line:
+            print(json.dumps({"ok": False, "error": "--host-key-line required"}))
+            return 2
+        host = next((h for h in st.hosts if h.id == hid), None)
+        if host is None:
+            print(json.dumps({"ok": False, "error": "unknown host id"}))
+            return 2
+        host.host_key_line = line
+        store.upsert_host(host)
+        print(json.dumps({"ok": True, "id": hid, "pinned": True}))
+        return 0
+    if action == "pair-start":
+        print(
+            json.dumps(
+                pair_start(
+                    ssh=str(args.ssh),
+                    home_path=str(getattr(args, "home", None) or ""),
+                    label=str(getattr(args, "label", None) or "device"),
+                    identity=identity,
+                    host_key_line=str(getattr(args, "host_key_line", None) or ""),
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if action == "pair-finish":
+        print(
+            json.dumps(
+                pair_finish(
+                    store,
+                    ssh=str(args.ssh),
+                    home_path=str(getattr(args, "home", None) or ""),
+                    code=str(args.code),
+                    host_id=str(args.id),
+                    label=str(getattr(args, "label", None) or ""),
+                    role=str(getattr(args, "role", None) or "worker"),
+                    identity=identity,
+                    host_key_line=str(getattr(args, "host_key_line", None) or ""),
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if action == "keyscan":
+        print(json.dumps(suggest_keyscan(str(args.ssh)), indent=2, ensure_ascii=False))
         return 0
     if action == "group-set":
         host_ids = [x.strip() for x in str(args.hosts or "").split(",") if x.strip()]
@@ -1495,9 +1666,15 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
         print(json.dumps(status_many(store, scope, identity=identity), indent=2, ensure_ascii=False))
         return 0
     if action == "unlock-locked":
+        denied = _fleet_require_yes(args, "unlock-locked")
+        if denied is not None:
+            return denied
         print(json.dumps(unlock_locked(store, scope, identity=identity), indent=2, ensure_ascii=False))
         return 0
     if action == "attack":
+        denied = _fleet_require_yes(args, "attack")
+        if denied is not None:
+            return denied
         level = str(getattr(args, "level", "L2") or "L2")
         deps = bool(getattr(args, "deps", False))
         print(
@@ -1509,9 +1686,15 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
         )
         return 0
     if action == "release":
+        denied = _fleet_require_yes(args, "release")
+        if denied is not None:
+            return denied
         print(json.dumps(release(store, scope, identity=identity), indent=2, ensure_ascii=False))
         return 0
     if action == "ban":
+        denied = _fleet_require_yes(args, "ban")
+        if denied is not None:
+            return denied
         ip = str(getattr(args, "ip", "") or "")
         if not ip:
             print(json.dumps({"ok": False, "error": "--ip required"}))
@@ -1582,9 +1765,14 @@ def asdict_profile(p: object) -> dict:
 def _cmd_home_warmup(args: argparse.Namespace) -> int:
     import json
 
+    from sysspectogram.admin_ip import seed_never_ban
     from sysspectogram.fleet.warmup import warmup_checklist
 
-    print(json.dumps(warmup_checklist(), indent=2, ensure_ascii=False))
+    # Detect-only hint; writing never_ban requires explicit home seed-never-ban.
+    seed = seed_never_ban(write=False)
+    out = warmup_checklist()
+    out["never_ban_detect"] = seed
+    print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -2311,6 +2499,9 @@ def build_parser() -> argparse.ArgumentParser:
     hm_set.set_defaults(func=_cmd_home_settings)
     hm_warm = hm_sub.add_parser("warmup", help="shield readiness checklist (never_ban, labels, …)")
     hm_warm.set_defaults(func=_cmd_home_warmup)
+    hm_snb = hm_sub.add_parser("seed-never-ban", help="detect public IP and merge into never_ban")
+    hm_snb.add_argument("--dry-run", action="store_true", help="detect only, do not write")
+    hm_snb.set_defaults(func=_cmd_home_seed_never_ban)
     hm_feed = hm_sub.add_parser("feed-tail", help="tail alerts/incidents JSONL (fleet aggregation)")
     hm_feed.add_argument("--limit", type=int, default=40)
     hm_feed.add_argument("--host-id", default=None)
@@ -2375,12 +2566,45 @@ def build_parser() -> argparse.ArgumentParser:
     fl_add.add_argument("--ssh", default="")
     fl_add.add_argument("--home", default="")
     fl_add.add_argument("--device-id", default="")
-    fl_add.add_argument("--device-token", default="")
+    fl_add.add_argument("--device-token", default="", help="prefer --device-token-stdin")
+    fl_add.add_argument(
+        "--device-token-stdin",
+        action="store_true",
+        help="read device_token from stdin (avoids argv/ps leak)",
+    )
     fl_add.add_argument("--role", default="worker")
     fl_add.add_argument("--tags", default="", help="comma-separated tags")
     fl_add.add_argument("--profile-id", default=None)
+    fl_add.add_argument("--host-key-line", default="")
     fl_add.add_argument("--path", default=None)
     fl_add.set_defaults(func=_cmd_fleet)
+    fl_pin = fleet_sub.add_parser("pin-host", help="set host_key_line (required for mutating SSH)")
+    fl_pin.add_argument("--id", required=True)
+    fl_pin.add_argument("--host-key-line", required=True, help="OpenSSH known_hosts line or 'type key'")
+    fl_pin.add_argument("--path", default=None)
+    fl_pin.set_defaults(func=_cmd_fleet)
+    fl_ps0 = fleet_sub.add_parser("pair-start", help="SSH: home pair-remote on VPS → pair_code")
+    fl_ps0.add_argument("--ssh", required=True)
+    fl_ps0.add_argument("--home", default="")
+    fl_ps0.add_argument("--label", default="device")
+    fl_ps0.add_argument("--host-key-line", default="")
+    fl_ps0.add_argument("--path", default=None)
+    fl_ps0.add_argument("--identity", "-i", default=None)
+    fl_ps0.set_defaults(func=_cmd_fleet)
+    fl_pf = fleet_sub.add_parser("pair-finish", help="SSH: pair-complete + fleet add (token once)")
+    fl_pf.add_argument("--ssh", required=True)
+    fl_pf.add_argument("--home", default="")
+    fl_pf.add_argument("--code", required=True)
+    fl_pf.add_argument("--id", required=True, help="fleet host id")
+    fl_pf.add_argument("--label", default="")
+    fl_pf.add_argument("--role", default="worker")
+    fl_pf.add_argument("--host-key-line", default="")
+    fl_pf.add_argument("--path", default=None)
+    fl_pf.add_argument("--identity", "-i", default=None)
+    fl_pf.set_defaults(func=_cmd_fleet)
+    fl_ks = fleet_sub.add_parser("keyscan", help="ssh-keyscan suggestion for pin-host")
+    fl_ks.add_argument("--ssh", required=True, help="user@host or host")
+    fl_ks.set_defaults(func=_cmd_fleet)
     fl_prim = fleet_sub.add_parser("primary", help="mark host as fleet primary")
     fl_prim.add_argument("--id", required=True)
     fl_prim.add_argument("--path", default=None)
@@ -2401,6 +2625,7 @@ def build_parser() -> argparse.ArgumentParser:
     fl_pa.add_argument("--scope", default="all")
     fl_pa.add_argument("--path", default=None)
     fl_pa.add_argument("--identity", "-i", default=None)
+    fl_pa.add_argument("--yes", action="store_true", help="confirm mass apply (required non-TTY)")
     fl_pa.set_defaults(func=_cmd_fleet)
     fl_gs = fleet_sub.add_parser("group-set", help="upsert a host group")
     fl_gs.add_argument("--id", required=True)
@@ -2455,6 +2680,8 @@ def build_parser() -> argparse.ArgumentParser:
             fp.add_argument("--limit", type=int, default=40)
         if fname == "mark-fp":
             fp.add_argument("--label", default="host_fp")
+        if fname in ("unlock-locked", "attack", "release", "ban"):
+            fp.add_argument("--yes", action="store_true", help="confirm destructive op (required non-TTY)")
         fp.set_defaults(func=_cmd_fleet)
 
     ev = sub.add_parser("eval", help="offline ML eval report / schema_version")
@@ -2481,6 +2708,23 @@ def build_parser() -> argparse.ArgumentParser:
     met_srv.add_argument("--host", default="127.0.0.1")
     met_srv.add_argument("--port", type=int, default=9108)
     met_srv.set_defaults(func=_cmd_metrics)
+
+    edge_p = sub.add_parser("edge", help="CDN/WAF edge (Cloudflare Under Attack) — not a scrubber")
+    edge_sub = edge_p.add_subparsers(dest="edge_action", required=True)
+    edge_st = edge_sub.add_parser("status", help="show CF link + security_level")
+    edge_st.add_argument("--lang", choices=["en", "ru"], default="en")
+    edge_st.set_defaults(func=_cmd_edge)
+    edge_ua = edge_sub.add_parser("under-attack", help="set security_level=under_attack")
+    edge_ua.add_argument("--yes", action="store_true")
+    edge_ua.set_defaults(func=_cmd_edge)
+    edge_cl = edge_sub.add_parser("clear", help="restore security_level (default high)")
+    edge_cl.add_argument("--level", default="high")
+    edge_cl.add_argument("--yes", action="store_true")
+    edge_cl.set_defaults(func=_cmd_edge)
+    edge_pb = edge_sub.add_parser("playbook", help="print playbook M (volumetric)")
+    edge_pb.add_argument("--lang", choices=["en", "ru"], default="en")
+    edge_pb.add_argument("--json", action="store_true")
+    edge_pb.set_defaults(func=_cmd_edge)
 
     protect_p = sub.add_parser("protect", help="user systemd protect service (survives CC exit)")
     protect_sub = protect_p.add_subparsers(dest="protect_action", required=True)

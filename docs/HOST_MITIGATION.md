@@ -18,7 +18,7 @@ Defaults: `response.mode: observe` — alerts only, no ban.
 
 1. Set **never-ban** (your SSH admin IP) before soft/full/isolate or Under-scan.
 2. Lockdown **refuses** empty allow list (would drop new SSH SYN).
-3. Volumetric floods that saturate the NIC/uplink cannot be fixed in userspace nft alone — use the provider.
+3. Volumetric floods that saturate the NIC/uplink cannot be fixed in userspace nft alone — use the provider / CDN. Hub: [EDGE.md](EDGE.md) (`edge under-attack`).
 
 ## Integrity (rootkit track)
 

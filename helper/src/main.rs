@@ -74,7 +74,7 @@ pub fn authorize(action: &str, caller: Caller) -> Result<(), String> {
     }
     let start = process_start_time(caller.pid).ok_or("caller process vanished")?;
     let subject = format!("{},{}", caller.pid, start);
-    let status = Command::new(PKCHECK)
+    let output = Command::new(PKCHECK)
         .args([
             "--action-id",
             action,
@@ -82,12 +82,20 @@ pub fn authorize(action: &str, caller: Caller) -> Result<(), String> {
             subject.as_str(),
             "--allow-user-interaction",
         ])
-        .status()
+        .output()
         .map_err(|e| format!("pkcheck failed to start: {e}"))?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        Err(format!("not authorized: {action}"))
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim();
+        if detail.is_empty() {
+            Err(format!(
+                "not authorized: {action} (polkit denied — need a desktop session with a polkit agent and admin password; after helper install, log out/in so group sysspectogram applies)"
+            ))
+        } else {
+            Err(format!("not authorized: {action}: {detail}"))
+        }
     }
 }
 

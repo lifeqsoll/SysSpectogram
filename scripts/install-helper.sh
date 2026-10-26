@@ -46,7 +46,12 @@ systemctl restart sysspectogram-helper.service
 # Add the invoking user (not root) to the group that may use the socket.
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
     usermod -aG sysspectogram "${SUDO_USER}"
-    echo "added ${SUDO_USER} to group sysspectogram: log out and back in before using the Control Center"
+    if command -v setfacl >/dev/null 2>&1; then
+        setfacl -m "u:${SUDO_USER}:rwx" /run/sysspectogram 2>/dev/null || true
+        setfacl -m "u:${SUDO_USER}:rw" /run/sysspectogram/helper.sock 2>/dev/null || true
+    fi
+    echo "added ${SUDO_USER} to group sysspectogram — log out/in recommended; ACL applied for this boot"
+    echo "  Start/Restart still needs polkit admin password (desktop agent)."
 fi
 
 systemctl --no-pager --full status sysspectogram-helper.service || true

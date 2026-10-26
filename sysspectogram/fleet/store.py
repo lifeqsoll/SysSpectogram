@@ -4,12 +4,31 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 
 def default_fleet_path() -> Path:
+    """Admin-PC fleet registry path (portable across Linux / macOS / Windows).
+
+    Resolution:
+    1. ``SYSSPECTOGRAM_FLEET_PATH``
+    2. Windows: ``%APPDATA%/sysspectogram/fleet.json``
+    3. macOS: ``~/Library/Application Support/sysspectogram/fleet.json``
+    4. Linux / other: ``$XDG_CONFIG_HOME/sysspectogram/fleet.json`` or ``~/.config/…``
+    """
+    override = os.environ.get("SYSSPECTOGRAM_FLEET_PATH")
+    if override:
+        return Path(override)
+    # Prefer sys.platform so tests can monkeypatch without flipping os.name
+    # (pathlib.Path follows os.name and cannot build WindowsPath on Linux).
+    if sys.platform == "win32" or os.name == "nt":
+        base = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
+        return base / "sysspectogram" / "fleet.json"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "sysspectogram" / "fleet.json"
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg) if xdg else Path.home() / ".config"
     return base / "sysspectogram" / "fleet.json"
@@ -30,9 +49,10 @@ class FleetHost:
     host_key_line: str = ""
 
     def public_dict(self) -> dict[str, Any]:
+        """Safe for CLI/UI — never expose raw device_token."""
         d = asdict(self)
-        if d.get("device_token"):
-            d["device_token"] = "***"
+        token = str(d.pop("device_token", "") or "")
+        d["token_set"] = bool(token.strip())
         return d
 
 
