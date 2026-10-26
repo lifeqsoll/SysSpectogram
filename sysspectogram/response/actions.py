@@ -94,7 +94,7 @@ class NftBackend:
         return None
 
     def ban_ip(self, ip: str, ttl_sec: float | None = 3600.0, dry_run: bool = False) -> str:
-        from sysspectogram.net_ip import nft_saddr_family, parse_ban_ip
+        from sysspectogram.net_ip import nft_saddr_family
 
         try:
             family, ip = nft_saddr_family(ip)

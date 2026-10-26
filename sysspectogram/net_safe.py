@@ -7,7 +7,6 @@ import ipaddress
 import socket
 import ssl
 import urllib.parse
-from typing import Any
 
 
 def _blocked_ip(ip_str: str) -> bool:

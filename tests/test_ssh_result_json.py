@@ -1,6 +1,8 @@
-"""SshResult.json must find the last JSON object across stdout/stderr (ssh -tt)."""
+"""SshResult.json must parse pretty JSON without merging stdout+stderr."""
 
 from __future__ import annotations
+
+import json
 
 from sysspectogram.fleet.ssh import SshResult
 
@@ -23,3 +25,30 @@ def test_json_from_stderr_when_stdout_noisy():
         returncode=0,
     )
     assert r.json() == {"ok": True, "pair_code": "ZZZZ"}
+
+
+def test_pretty_json_stdout_survives_ssh_tt_stderr():
+    # home pair-remote prints indent=2; ssh -tt adds Connection closed on stderr.
+    payload = {
+        "ok": True,
+        "pair_code": "WXYZ",
+        "ttl_sec": 300,
+        "label": "laptop",
+        "hint": "Enter this code on the admin PC within ttl_sec.",
+    }
+    stdout = json.dumps(payload, indent=2).replace("\n", "\r\n") + "\r\n"
+    stderr = "Warning: Permanently added '203.0.113.9' (ED25519) to the list of known hosts.\n"
+    stderr += "Connection to 203.0.113.9 closed.\n"
+    r = SshResult(ok=True, stdout=stdout, stderr=stderr, returncode=0)
+    assert r.json() == payload
+
+
+def test_does_not_merge_streams_into_invalid_json():
+    # Merging would break; stdout-only loads must win.
+    r = SshResult(
+        ok=True,
+        stdout='{\n  "ok": true,\n  "pair_code": "AAAA"\n}\n',
+        stderr="Connection to h closed.\n",
+        returncode=0,
+    )
+    assert r.json() == {"ok": True, "pair_code": "AAAA"}

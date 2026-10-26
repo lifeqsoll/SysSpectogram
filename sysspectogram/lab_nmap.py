@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 import subprocess
-import sys
-from pathlib import Path
 
 from sysspectogram.config import load_config
 

@@ -73,3 +73,19 @@ def test_reject_zero_slash8_hosts():
     # Leading-zero IPv4 is rejected by ip_network (invalid) or as special.
     assert validate_never_ban_cidr("000.0.0.0/32")[1] in {"special_address", "invalid_ip"}
     assert validate_never_ban_cidr("127.0.0.0/24")[1] == "special_address"
+
+
+def test_allow_ssh_cidrs_yaml_string_not_chars(tmp_path: Path, monkeypatch):
+    """String form in YAML must not be iterated as characters."""
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    cfg_path = tmp_path / "default.yaml"
+    cfg_path.write_text(
+        "kirk:\n  allow_ssh_cidrs: \"203.0.113.10/32, 198.51.100.0/24\"\n"
+        "response:\n  mode: observe\n",
+        encoding="utf-8",
+    )
+    from sysspectogram.config import load_config
+
+    cfg = load_config(cfg_path)
+    allows = list((cfg.get("kirk") or {}).get("allow_ssh_cidrs") or [])
+    assert allows == ["203.0.113.10/32", "198.51.100.0/24"]

@@ -1446,7 +1446,6 @@ class TelegramBot:
             try:
                 from collections import deque
 
-                import numpy as np
 
                 from sysspectogram.collect.daemon import CollectDaemon
                 from sysspectogram.collect.metrics import MetricsCollector

@@ -729,7 +729,6 @@ def _cmd_home_model(args: argparse.Namespace) -> int:
 def _cmd_home_env(args: argparse.Namespace) -> int:
     """Write or update Telegram keys in project .env (gitignored)."""
     import json
-    from pathlib import Path
 
     env_path = ROOT / ".env"
     lines: list[str] = []
@@ -761,7 +760,6 @@ def _cmd_home_env(args: argparse.Namespace) -> int:
 def _cmd_home_onboarding(args: argparse.Namespace) -> int:
     """Mark onboarding complete (or report status)."""
     import json
-    from pathlib import Path
 
 
     marker = state_root() / "state" / "onboarding.done"
@@ -888,7 +886,6 @@ def _cmd_home_digest(args: argparse.Namespace) -> int:
     import json
     import time
     from collections import Counter
-    from pathlib import Path
 
 
     root = state_root()
@@ -1320,7 +1317,6 @@ def _cmd_menu(args: argparse.Namespace) -> int:
 def _cmd_home_settings(args: argparse.Namespace) -> int:
     """Write allowlisted keys to state/user-settings.json (no root helper required)."""
     import json
-    from pathlib import Path
 
     from sysspectogram.config import OVERLAY_ALLOWED, user_settings_path
 

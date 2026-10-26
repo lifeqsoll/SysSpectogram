@@ -26,6 +26,7 @@ def parse_ban_ip(raw: Any) -> str:
         or addr.is_multicast
         or addr.is_loopback
         or addr.is_link_local
+        or getattr(addr, "ipv4_mapped", None) is not None
     ):
         raise ValueError(f"refusing ban of special address: {addr}")
     return str(addr)

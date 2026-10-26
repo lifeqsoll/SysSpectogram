@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sysspectogram.preprocess.heatmap import save_npy, save_png, tabular_features
+from sysspectogram.preprocess.heatmap import save_npy, save_png
 from sysspectogram.preprocess.scaler import WindowScaler
 from sysspectogram.preprocess.window import dataframe_to_matrix, feature_columns, iter_windows
 

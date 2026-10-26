@@ -292,7 +292,8 @@ def _scrub_yaml_cidrs(data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(kirk, dict) and kirk.get("allow_ssh_cidrs") is not None:
         from sysspectogram.net_ip import validate_allow_ssh_cidr
 
-        raw = list(kirk.get("allow_ssh_cidrs") or [])
+        # YAML may be a list or a comma-separated string — never iterate a str as chars.
+        raw = _parse_cidr_list(kirk.get("allow_ssh_cidrs"))
         keep2: list[str] = []
         drop2: list[str] = []
         for item in raw:

@@ -24,26 +24,53 @@ class SshResult:
     returncode: int
 
     def json(self) -> dict[str, Any] | None:
-        # With ``ssh -tt``, motd/banners and remote stderr can land in either
-        # stream (and lines may carry ``\\r``). Scan both, last JSON object wins.
-        chunks: list[str] = []
-        for part in (self.stdout, self.stderr):
-            if part:
-                chunks.append(part.replace("\r\n", "\n").replace("\r", "\n"))
-        text = "\n".join(chunks).strip()
-        if not text:
-            return None
-        for line in reversed(text.splitlines()):
-            line = line.strip()
-            if line.startswith("{"):
+        """Parse CLI JSON from SSH output without merging streams.
+
+        Prefer whole-stream ``json.loads`` on stdout, then stderr (pretty-printed
+        ``indent=2`` objects). Fall back to reverse line scan + ``raw_decode`` so
+        ``ssh -tt`` banners like ``Connection to h closed.`` on stderr cannot
+        break a multi-line JSON payload on stdout.
+        """
+
+        def _normalize(raw: str) -> str:
+            return (raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        def _loads_whole(text: str) -> dict[str, Any] | None:
+            if not text:
+                return None
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                return None
+            return obj if isinstance(obj, dict) else None
+
+        def _loads_raw_decode(text: str) -> dict[str, Any] | None:
+            if not text:
+                return None
+            decoder = json.JSONDecoder()
+            lines = text.splitlines()
+            for i in range(len(lines) - 1, -1, -1):
+                if not lines[i].strip().startswith("{"):
+                    continue
+                chunk = "\n".join(lines[i:]).lstrip()
                 try:
-                    return json.loads(line)
+                    obj, _end = decoder.raw_decode(chunk)
                 except json.JSONDecodeError:
                     continue
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
+                if isinstance(obj, dict):
+                    return obj
             return None
+
+        for part in (self.stdout, self.stderr):
+            text = _normalize(part)
+            got = _loads_whole(text)
+            if got is not None:
+                return got
+        for part in (self.stdout, self.stderr):
+            got = _loads_raw_decode(_normalize(part))
+            if got is not None:
+                return got
+        return None
 
 
 @dataclass(frozen=True)
