@@ -86,7 +86,7 @@ fn try_minisign(pub_key: &Path, file: &Path, sig: &Path) -> Result<(), String> {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => Err(format!("minisign verify failed ({s})")),
         Err(e) => Err(format!(
-            "minisign not available ({e}); install minisign or rely on sha256 only"
+            "minisign not available ({e}); install minisign (signatures are mandatory)"
         )),
     }
 }
@@ -105,22 +105,47 @@ fn release_json(tag: &str) -> Result<Value, String> {
     serde_json::from_str(&text).map_err(|e| format!("GitHub JSON: {e}"))
 }
 
-fn asset_url(release: &Value, name_substr: &str) -> Result<String, String> {
+fn asset_url(release: &Value, name: &str) -> Result<String, String> {
+    let assets = release
+        .get("assets")
+        .and_then(Value::as_array)
+        .ok_or("release has no assets")?;
+    // Exact name first (avoid `.whl.minisig` matching `.whl`).
+    for a in assets {
+        let n = a.get("name").and_then(Value::as_str).unwrap_or("");
+        if n == name {
+            return a
+                .get("browser_download_url")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| format!("no url for {n}"));
+        }
+    }
+    Err(format!("no release asset named {name:?}"))
+}
+
+fn asset_url_wheel(release: &Value, tag: &str) -> Result<(String, String), String> {
+    let ver = tag.trim().trim_start_matches('v');
+    let exact = format!("sysspectogram-{ver}-py3-none-any.whl");
+    if let Ok(url) = asset_url(release, &exact) {
+        return Ok((url, exact));
+    }
     let assets = release
         .get("assets")
         .and_then(Value::as_array)
         .ok_or("release has no assets")?;
     for a in assets {
-        let name = a.get("name").and_then(Value::as_str).unwrap_or("");
-        if name.contains(name_substr) {
-            return a
+        let n = a.get("name").and_then(Value::as_str).unwrap_or("");
+        if n.ends_with(".whl") && !n.ends_with(".whl.minisig") {
+            let url = a
                 .get("browser_download_url")
                 .and_then(Value::as_str)
-                .map(str::to_string)
-                .ok_or_else(|| format!("no url for {name}"));
+                .ok_or_else(|| format!("no url for {n}"))?
+                .to_string();
+            return Ok((url, n.to_string()));
         }
     }
-    Err(format!("no release asset matching {name_substr:?}"))
+    Err("no .whl on release".into())
 }
 
 fn version_tuple(ver: &str) -> Vec<u32> {
@@ -171,15 +196,14 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
     let release = release_json(tag)?;
     log.push(json!({"step": "release", "ok": true, "tag": tag}));
 
-    // Prefer a wheel; fall back to sdist name patterns from python -m build.
-    let wheel_url = asset_url(&release, ".whl")
-        .or_else(|_| asset_url(&release, "sysspectogram-"))
+    let (wheel_url, wheel_name) = asset_url_wheel(&release, tag)
         .map_err(|e| format!("{e}. Publish a wheel on the GitHub release."))?;
-    let wheel_name = wheel_url
-        .rsplit('/')
-        .next()
-        .unwrap_or("package.whl")
-        .to_string();
+    let ver = tag.trim().trim_start_matches('v');
+    if !wheel_name.contains(ver) {
+        return Err(format!(
+            "wheel name {wheel_name} does not match release tag {tag}"
+        ));
+    }
     let wheel_path = cache.join(&wheel_name);
     download(&wheel_url, &wheel_path)?;
     log.push(json!({"step": "download_wheel", "ok": true, "file": wheel_name}));
@@ -306,6 +330,46 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
         "steps": log,
         "hint": "Next: Start protection. Helper (polkit) is optional — Install helper from Settings if you need system overlays.",
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{asset_url, asset_url_wheel};
+    use serde_json::json;
+
+    #[test]
+    fn asset_url_prefers_exact_not_minisig() {
+        let release = json!({
+            "assets": [
+                {
+                    "name": "sysspectogram-1.3.0-py3-none-any.whl.minisig",
+                    "browser_download_url": "https://example/bad"
+                },
+                {
+                    "name": "sysspectogram-1.3.0-py3-none-any.whl",
+                    "browser_download_url": "https://example/good"
+                }
+            ]
+        });
+        let (url, name) = asset_url_wheel(&release, "v1.3.0").unwrap();
+        assert_eq!(url, "https://example/good");
+        assert_eq!(name, "sysspectogram-1.3.0-py3-none-any.whl");
+        assert!(asset_url(&release, "sysspectogram-1.3.0-py3-none-any.whl.minisig").is_ok());
+    }
+
+    #[test]
+    fn asset_url_wheel_rejects_other_version_name() {
+        let release = json!({
+            "assets": [{
+                "name": "sysspectogram-1.2.0-py3-none-any.whl",
+                "browser_download_url": "https://example/old"
+            }]
+        });
+        // Falls back to the only .whl; install_stack then checks tag contains.
+        let (url, name) = asset_url_wheel(&release, "v1.3.0").unwrap();
+        assert!(url.contains("old"));
+        assert!(!name.contains("1.3.0"));
+    }
 }
 
 pub fn status() -> Value {

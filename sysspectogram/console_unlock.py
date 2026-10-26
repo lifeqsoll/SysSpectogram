@@ -47,6 +47,13 @@ class ConsoleUnlock:
         self._deadline = 0.0
         self._fails: list[float] = []
         if enabled:
+            if self.ttl_sec <= 0:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "console unlock ttl_sec=0: session persists via control.unlocked; "
+                    "same-UID processes can clear the gate (see SECURITY.md)"
+                )
             if self.ttl_sec <= 0 and self._load_persisted():
                 self._unlocked = True
                 self._code = None
@@ -157,9 +164,10 @@ class ConsoleUnlock:
         if not self.persist_path or self.ttl_sec > 0:
             return
         try:
-            self.persist_path.parent.mkdir(parents=True, exist_ok=True)
-            self.persist_path.write_text("1\n", encoding="utf-8")
-            self.persist_path.chmod(0o600)
+            from sysspectogram.secret_file import write_secret_file
+
+            # Marker is intentional "1" only — arbitrary file content must not unlock (I-03).
+            write_secret_file(self.persist_path, "1\n")
         except OSError:
             pass
 
@@ -172,12 +180,18 @@ class ConsoleUnlock:
             pass
 
     def _load_persisted(self) -> bool:
-        if not self.persist_path or not self.persist_path.is_file():
+        if not self.persist_path:
+            return False
+        path = self.persist_path
+        # Symlink or non-regular → refuse (same-UID malware could point at attacker file).
+        if path.is_symlink() or not path.is_file():
             return False
         try:
-            return self.persist_path.read_text(encoding="utf-8").strip() == "1"
+            raw = path.read_text(encoding="utf-8")
         except OSError:
             return False
+        # Exact marker only — "pwned", empty, or padded values do not unlock.
+        return raw == "1\n" or raw.strip() == "1"
 
     @property
     def fail_count(self) -> int:

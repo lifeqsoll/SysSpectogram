@@ -1510,9 +1510,21 @@ class TelegramBot:
         if not self.model_dir:
             self.client.send_message(self.prefix("no model on guard"), chat_id=chat_id)
             return
-        path = Path(csv_rel)
-        if not path.is_absolute():
-            path = self.project_root / path
+        # Only under project_root/data (L-03) — refuse absolute paths and escapes.
+        data_root = (self.project_root / "data").resolve()
+        raw = Path(csv_rel)
+        if raw.is_absolute() or ".." in raw.parts:
+            self.client.send_message(
+                self.prefix("analyze: path must be relative under data/"),
+                chat_id=chat_id,
+            )
+            return
+        path = (data_root / raw).resolve()
+        try:
+            path.relative_to(data_root)
+        except ValueError:
+            self.client.send_message(self.prefix("analyze: path escapes data/"), chat_id=chat_id)
+            return
         if not path.exists():
             self.client.send_message(self.prefix(f"csv not found: {path}"), chat_id=chat_id)
             return

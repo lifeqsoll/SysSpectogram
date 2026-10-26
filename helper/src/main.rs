@@ -67,13 +67,28 @@ pub fn process_start_time(pid: i32) -> Option<u64> {
     after_comm.split_whitespace().nth(19)?.parse().ok()
 }
 
+/// Build pkcheck `--process` subject: `pid,start-time,uid` (CVE-2013-4288 class).
+pub fn pkcheck_subject(caller: Caller, start: u64) -> String {
+    format!("{},{},{}", caller.pid, start, caller.uid)
+}
+
+fn proc_real_uid(pid: i32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            return rest.split_whitespace().next()?.parse().ok();
+        }
+    }
+    None
+}
+
 /// Ask polkit whether the calling process may perform `action`. Root is trusted.
 pub fn authorize(action: &str, caller: Caller) -> Result<(), String> {
     if caller.uid == 0 {
         return Ok(());
     }
     let start = process_start_time(caller.pid).ok_or("caller process vanished")?;
-    let subject = format!("{},{}", caller.pid, start);
+    let subject = pkcheck_subject(caller, start);
     let output = Command::new(PKCHECK)
         .args([
             "--action-id",
@@ -84,6 +99,15 @@ pub fn authorize(action: &str, caller: Caller) -> Result<(), String> {
         ])
         .output()
         .map_err(|e| format!("pkcheck failed to start: {e}"))?;
+    // Re-check identity after pkcheck so a mid-flight exec/setuid cannot race us.
+    let start_after = process_start_time(caller.pid).ok_or("caller process vanished after pkcheck")?;
+    if start_after != start {
+        return Err("caller process start-time changed during authorization".into());
+    }
+    match proc_real_uid(caller.pid) {
+        Some(uid) if uid == caller.uid => {}
+        _ => return Err("caller uid changed during authorization".into()),
+    }
     if output.status.success() {
         Ok(())
     } else {
@@ -198,5 +222,25 @@ fn main() {
             Ok(stream) => handle(stream),
             Err(e) => eprintln!("sysspectogram-helper: accept: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pkcheck_subject, Caller};
+
+    #[test]
+    fn pkcheck_subject_includes_uid() {
+        let s = pkcheck_subject(
+            Caller {
+                uid: 1000,
+                pid: 4242,
+            },
+            99_001,
+        );
+        assert_eq!(s, "4242,99001,1000");
+        let parts: Vec<_> = s.split(',').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[2], "1000");
     }
 }

@@ -11,13 +11,30 @@ import urllib.parse
 
 def _blocked_ip(ip_str: str) -> bool:
     ip = ipaddress.ip_address(ip_str)
-    return bool(
+    if (
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
-    )
+        or ip.is_unspecified
+    ):
+        return True
+    # IPv4 site-local is covered by is_private; IPv6 unique-local / site-local.
+    if getattr(ip, "is_site_local", False):
+        return True
+    if ip.version == 6:
+        # NAT64 well-known prefix → check embedded IPv4.
+        nat64 = ipaddress.IPv6Network("64:ff9b::/96")
+        if ip in nat64:
+            embedded = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+            return _blocked_ip(str(embedded))
+        # 6to4 embeds IPv4 in bits 16..48.
+        sixto4 = ipaddress.IPv6Network("2002::/16")
+        if ip in sixto4:
+            embedded = ipaddress.IPv4Address((int(ip) >> 80) & 0xFFFFFFFF)
+            return _blocked_ip(str(embedded))
+    return False
 
 
 def resolve_public_host(host: str, *, allow_private: bool = False) -> str:

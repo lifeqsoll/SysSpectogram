@@ -143,15 +143,14 @@ fn detect_public_ip() -> Result<Value, String> {
     Err(format!("detect public IP failed: {last}"))
 }
 
-/// Download release asset `install-helper-from-release.sh`, verify against
-/// `friend-scripts.sha256`, then run via pkexec (no unsigned raw.githubusercontent).
+/// Download signed `install-helper-from-release.sh`, verify minisign with the
+/// embedded release pubkey, then feed the verified bytes to `pkexec … bash -s`
+/// on stdin (never a user-writable path in pkexec argv — closes TOCTOU).
 #[tauri::command]
 fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
-    use sha2::{Digest, Sha256};
     use std::fs;
-    use std::io::Read;
-    use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
 
     let t = tag.unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
     let t = if t.starts_with('v') {
@@ -176,7 +175,7 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
         .and_then(|a| a.as_array())
         .ok_or_else(|| "release has no assets".to_string())?;
     let mut script_url: Option<String> = None;
-    let mut sums_url: Option<String> = None;
+    let mut sig_url: Option<String> = None;
     for a in assets {
         let name = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
         let url = a
@@ -186,20 +185,17 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
         if name == "install-helper-from-release.sh" {
             script_url = url.clone();
         }
-        if name == "friend-scripts.sha256" {
-            sums_url = url;
+        if name == "install-helper-from-release.sh.minisig" {
+            sig_url = url;
         }
     }
     let script_url = script_url
         .ok_or_else(|| "release missing install-helper-from-release.sh".to_string())?;
-    let sums_url =
-        sums_url.ok_or_else(|| "release missing friend-scripts.sha256".to_string())?;
+    let sig_url = sig_url.ok_or_else(|| {
+        "release missing install-helper-from-release.sh.minisig (minisign required)".to_string()
+    })?;
 
-    let cache = paths::user_data_root().join("state").join("bootstrap-cache");
-    fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-    let script = cache.join("install-helper-from-release.sh");
-    let sums_path = cache.join("friend-scripts.sha256");
-    for (url, dest) in [(&script_url, &script), (&sums_url, &sums_path)] {
+    let download = |url: &str| -> Result<Vec<u8>, String> {
         let mut reader = ureq::get(url)
             .set("User-Agent", "SysSpectogram-CC/1.1")
             .call()
@@ -209,38 +205,74 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
         reader
             .read_to_end(&mut buf)
             .map_err(|e| e.to_string())?;
-        fs::write(dest, buf).map_err(|e| e.to_string())?;
-    }
-    let sums = fs::read_to_string(&sums_path).map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    hasher.update(fs::read(&script).map_err(|e| e.to_string())?);
-    let got = format!("{:x}", hasher.finalize());
-    let mut ok = false;
-    for line in sums.lines() {
-        if line.contains("install-helper-from-release.sh") {
-            let exp = line.split_whitespace().next().unwrap_or("").to_lowercase();
-            if exp != got {
-                return Err(format!("script sha256 mismatch {got} != {exp}"));
-            }
-            ok = true;
-            break;
-        }
-    }
-    if !ok {
-        return Err("friend-scripts.sha256 has no install-helper-from-release.sh line".into());
-    }
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).ok();
+        Ok(buf)
+    };
+    let script_bytes = download(&script_url)?;
+    let sig_bytes = download(&sig_url)?;
 
-    // GUI path: only pkexec (graphical polkit). Never sudo — it needs /dev/tty and
-    // fails with "textual authentication agent" when Control Center has no TTY.
+    // Staging under system temp (not $HOME): only used for minisign -Vm; pkexec never sees these paths.
+    let stage = std::env::temp_dir().join(format!(
+        "ss-helper-install-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+    let script_path = stage.join("install-helper-from-release.sh");
+    let sig_path = stage.join("install-helper-from-release.sh.minisig");
+    let pub_path = stage.join("SysSpectogram.minisign.pub");
+    let cleanup = |dir: &std::path::Path| {
+        let _ = fs::remove_dir_all(dir);
+    };
+    if let Err(e) = (|| -> Result<(), String> {
+        fs::write(&script_path, &script_bytes).map_err(|e| e.to_string())?;
+        fs::write(&sig_path, &sig_bytes).map_err(|e| e.to_string())?;
+        fs::write(
+            &pub_path,
+            include_str!("../keys/SysSpectogram.minisign.pub"),
+        )
+        .map_err(|e| e.to_string())?;
+        let status = Command::new("minisign")
+            .args([
+                "-Vm",
+                script_path.to_str().unwrap_or(""),
+                "-p",
+                pub_path.to_str().unwrap_or(""),
+                "-x",
+                sig_path.to_str().unwrap_or(""),
+            ])
+            .status()
+            .map_err(|e| {
+                format!(
+                    "minisign not available ({e}); install minisign to verify helper install script"
+                )
+            })?;
+        if !status.success() {
+            return Err("minisign verify failed for install-helper-from-release.sh".into());
+        }
+        Ok(())
+    })() {
+        cleanup(&stage);
+        return Err(e);
+    }
+    cleanup(&stage);
+
+    // GUI path: only pkexec (graphical polkit). Feed verified script on stdin
+    // (`bash -s`) so a same-UID TOCTOU on any cache path cannot swap the payload.
     let pkexec = std::path::Path::new("/usr/bin/pkexec");
     let term_hint = format!(
-        "Open a normal terminal (not this window) and run:\n  curl -fsSL https://raw.githubusercontent.com/{repo}/{t}/scripts/install-helper-from-release.sh | sudo bash -s -- {t}\nThen log out/in so group sysspectogram applies."
+        "Open a normal terminal (not this window) and run:\n  \
+         curl -fsSL -o /tmp/ss-helper-install.sh https://github.com/{repo}/releases/download/{t}/install-helper-from-release.sh && \\\n  \
+         curl -fsSL -o /tmp/ss-helper-install.sh.minisig https://github.com/{repo}/releases/download/{t}/install-helper-from-release.sh.minisig && \\\n  \
+         minisign -Vm /tmp/ss-helper-install.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F' && \\\n  \
+         sudo bash /tmp/ss-helper-install.sh {t}\n\
+         Then log out/in so group sysspectogram applies."
     );
     if !pkexec.is_file() {
         return Err(format!("pkexec not found (install polkit). {term_hint}"));
     }
-    // Keep session vars so the polkit agent can show a password dialog.
     let mut env_args: Vec<String> = vec!["env".into()];
     for key in [
         "DISPLAY",
@@ -254,11 +286,39 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
         }
     }
     env_args.push("bash".into());
-    env_args.push(script.to_string_lossy().into_owned());
+    env_args.push("-s".into());
+    env_args.push("--".into());
     env_args.push(t.clone());
-    let out = Command::new(pkexec)
+
+    // Refuse if any pkexec arg looks like a home/XDG path (defense in depth).
+    let home = std::env::var("HOME").unwrap_or_default();
+    for a in &env_args {
+        if !home.is_empty() && a.starts_with(&home) {
+            return Err("refusing pkexec argv under $HOME".into());
+        }
+        if a.contains("/.local/") || a.contains("/bootstrap-cache/") {
+            return Err("refusing pkexec argv under user cache".into());
+        }
+    }
+
+    let mut child = Command::new(pkexec)
         .args(&env_args)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("run helper install: {e}"))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "pkexec stdin unavailable".to_string())?;
+        stdin
+            .write_all(&script_bytes)
+            .map_err(|e| format!("write install script to pkexec: {e}"))?;
+    }
+    let out = child
+        .wait_with_output()
         .map_err(|e| format!("run helper install: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -777,18 +837,12 @@ fn home_import_model(source: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn home_write_env(bot_token: Option<String>, chat_id: Option<String>) -> Result<Value, String> {
-    let mut args = vec!["home".to_string(), "env".to_string()];
-    if let Some(t) = bot_token.filter(|s| !s.is_empty()) {
-        args.push("--bot-token".into());
-        args.push(t);
-    }
-    if let Some(c) = chat_id.filter(|s| !s.is_empty()) {
-        args.push("--chat-id".into());
-        args.push(c);
-    }
-    let owned: Vec<String> = args;
-    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
-    cli::run_json(&refs)
+    // Secrets on stdin — never argv (/proc cmdline).
+    let payload = json!({
+        "bot_token": bot_token.filter(|s| !s.is_empty()),
+        "chat_id": chat_id.filter(|s| !s.is_empty()),
+    });
+    cli::run_json_stdin(&["home", "env", "--from-stdin"], &payload.to_string())
 }
 
 #[tauri::command]

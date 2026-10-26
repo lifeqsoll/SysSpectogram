@@ -171,6 +171,8 @@ def push_artifacts(
         check=True,
     )
 
+    # Feed scripts on stdin (`python3 -`). OpenSSH joins remote argv with spaces,
+    # so multi-line `python3 -c <script>` never ran as intended (L-05).
     verify_script = (
         "import json, hashlib, pathlib, sys\n"
         f"root = pathlib.Path({staging!r})\n"
@@ -185,7 +187,12 @@ def push_artifacts(
         "        bad.append(rel)\n"
         "sys.exit(1 if bad else 0)\n"
     )
-    subprocess.run(["ssh", ssh, "--", "python3", "-c", verify_script], check=True)
+    subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", ssh, "--", "python3", "-"],
+        input=verify_script,
+        text=True,
+        check=True,
+    )
 
     swap_script = (
         "import pathlib, shutil\n"
@@ -198,7 +205,12 @@ def push_artifacts(
         "    remote.rename(bak)\n"
         "staging.rename(remote)\n"
     )
-    subprocess.run(["ssh", ssh, "--", "python3", "-c", swap_script], check=True)
+    subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", ssh, "--", "python3", "-"],
+        input=swap_script,
+        text=True,
+        check=True,
+    )
 
     if restart_unit:
         unit = _validate_unit(restart_unit)

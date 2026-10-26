@@ -460,13 +460,16 @@ fn validate_never_ban_cidr(raw: &str) -> Result<(), String> {
         .map_err(|_| format!("invalid_ip in {token}"))?;
     let (max_wide, host_pref) = match addr {
         IpAddr::V4(v4) => {
-            // 0.0.0.0/8 + 127.0.0.0/8 (covers 0.0.0.1, 000.0.0.0 via parse, 127.0.0.0/24).
-            let o0 = v4.octets()[0];
+            // 0.0.0.0/8 + 127.0.0.0/8 + Class E/reserved 240/4 + broadcast (Python is_reserved).
+            let o = v4.octets();
+            let o0 = o[0];
             if v4.is_unspecified()
                 || v4.is_loopback()
                 || v4.is_multicast()
+                || v4.is_broadcast()
                 || o0 == 0
                 || o0 == 127
+                || o0 >= 240
             {
                 return Err("special_address".into());
             }
@@ -694,7 +697,11 @@ mod tests {
         assert!(validate_change("response.never_ban_cidrs", &json!("127.0.0.0/24")).is_err());
         assert!(validate_change("response.never_ban_cidrs", &json!("0.0.0.1/32")).is_err());
         assert!(validate_change("response.never_ban_cidrs", &json!("000.0.0.0/32")).is_err());
+        assert!(validate_change("response.never_ban_cidrs", &json!("240.0.0.1/32")).is_err());
+        assert!(validate_change("response.never_ban_cidrs", &json!("255.255.255.255/32")).is_err());
         assert!(validate_change("response.never_ban_cidrs", &json!([1, 2])).is_err());
+        assert!(validate_never_ban_cidr("203.0.113.10/32").is_ok());
+        assert!(validate_never_ban_cidr("240.0.0.0/24").is_err());
         assert!(validate_change("ui.lang", &json!("ru")).is_ok());
         assert!(validate_change("web.enabled", &json!(true)).is_ok());
         assert!(validate_change("telegram.enabled", &json!(true)).is_ok());

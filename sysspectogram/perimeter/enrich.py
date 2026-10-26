@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -26,8 +27,12 @@ def reverse_dns(ip: str, timeout: float = 2.0) -> str | None:
 
 def enrich_ip_http(ip: str, timeout: float = 4.0) -> IpEnrichment:
     """Best-effort free enrichment via ipapi.co (soft-fail)."""
+    from sysspectogram.net_ip import parse_ban_ip
+
+    ip = parse_ban_ip(ip)
     info = IpEnrichment(ip=ip, ptr=reverse_dns(ip))
-    url = f"https://ipapi.co/{ip}/json/"
+    # Path-safe: parse_ban_ip already rejected ../ and metacharacters.
+    url = f"https://ipapi.co/{urllib.parse.quote(ip, safe=':')}/json/"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "sysspectogram/0.2"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:

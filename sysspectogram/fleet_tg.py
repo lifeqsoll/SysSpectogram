@@ -446,17 +446,16 @@ class FleetTelegramBot:
     def poll_forever(self) -> None:
         code_path = Path.home() / ".config" / "sysspectogram" / "fleet.hub_unlock.code"
         if self.unlock.pending_code:
-            code_path.parent.mkdir(parents=True, exist_ok=True)
-            code_path.write_text(self.unlock.pending_code + "\n", encoding="utf-8")
-            try:
-                code_path.chmod(0o600)
-            except OSError:
-                pass
+            from sysspectogram.secret_file import write_secret_file
+
+            write_secret_file(code_path, self.unlock.pending_code + "\n")
             print(f"FLEET HUB UNLOCK CODE saved to {code_path} (not Telegram)", flush=True)
 
         def on_code(c: str | None) -> None:
             if c:
-                code_path.write_text(c + "\n", encoding="utf-8")
+                from sysspectogram.secret_file import write_secret_file
+
+                write_secret_file(code_path, c + "\n")
             elif code_path.exists():
                 code_path.unlink(missing_ok=True)
 

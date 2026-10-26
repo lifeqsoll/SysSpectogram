@@ -31,12 +31,9 @@ def _pending_path(root: Path | None = None) -> Path:
 
 
 def _write_private(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    from sysspectogram.secret_file import write_secret_file
+
+    write_secret_file(path, text)
 
 
 def _hash_token(token: str) -> str:

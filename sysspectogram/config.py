@@ -48,6 +48,18 @@ def load_dotenv(path: Path | None = None) -> None:
         _DOTENV_LOADED = True
         return
     try:
+        from sysspectogram.secret_file import ensure_secret_mode
+
+        mode = env_path.stat().st_mode & 0o777
+        if mode & 0o077:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "%s mode is %04o (expected 0600); tightening permissions",
+                env_path,
+                mode,
+            )
+            ensure_secret_mode(env_path)
         for raw in env_path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:

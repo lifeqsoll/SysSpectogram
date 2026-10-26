@@ -443,9 +443,15 @@ def _cmd_artifacts(args: argparse.Namespace) -> int:
         from sysspectogram.supply_chain import write_manifest
 
         model = _resolve(args.model)
-        done = migrate_artifacts_dir(
-            model, delete_legacy=bool(getattr(args, "delete_legacy", False))
-        )
+        try:
+            done = migrate_artifacts_dir(
+                model,
+                delete_legacy=bool(getattr(args, "delete_legacy", False)),
+                i_trust_this_pickle=bool(getattr(args, "i_trust_this_pickle", False)),
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]migrate refused[/]: {exc}")
+            return 2
         write_manifest(model)
         console.print(f"[green]migrated[/] {model}: {done}")
         return 0
@@ -729,14 +735,46 @@ def _cmd_home_model(args: argparse.Namespace) -> int:
 def _cmd_home_env(args: argparse.Namespace) -> int:
     """Write or update Telegram keys in project .env (gitignored)."""
     import json
+    import sys
+
+    from sysspectogram.secret_file import (
+        validate_bot_token,
+        validate_chat_id,
+        write_secret_file,
+    )
+
+    bot_token = getattr(args, "bot_token", None)
+    chat_id = getattr(args, "chat_id", None)
+    if getattr(args, "from_stdin", False):
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except json.JSONDecodeError as exc:
+            print(json.dumps({"ok": False, "error": f"bad stdin json: {exc}"}))
+            return 2
+        if not isinstance(payload, dict):
+            print(json.dumps({"ok": False, "error": "stdin must be a JSON object"}))
+            return 2
+        if payload.get("bot_token"):
+            bot_token = str(payload["bot_token"])
+        if payload.get("chat_id"):
+            chat_id = str(payload["chat_id"])
+
+    try:
+        if bot_token is not None:
+            bot_token = validate_bot_token(str(bot_token))
+        if chat_id is not None:
+            chat_id = validate_chat_id(str(chat_id))
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 2
 
     env_path = ROOT / ".env"
     lines: list[str] = []
-    if env_path.is_file():
+    if env_path.is_file() and not env_path.is_symlink():
         lines = env_path.read_text(encoding="utf-8").splitlines()
     mapping = {
-        "TELEGRAM_BOT_TOKEN": getattr(args, "bot_token", None),
-        "TELEGRAM_CHAT_ID": getattr(args, "chat_id", None),
+        "TELEGRAM_BOT_TOKEN": bot_token,
+        "TELEGRAM_CHAT_ID": chat_id,
     }
     for key, val in mapping.items():
         if val is None:
@@ -752,7 +790,11 @@ def _cmd_home_env(args: argparse.Namespace) -> int:
         if not found:
             out.append(f"{key}={val}")
         lines = out
-    env_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    try:
+        write_secret_file(env_path, "\n".join(lines).rstrip() + "\n")
+    except OSError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 1
     print(json.dumps({"ok": True, "path": str(env_path)}))
     return 0
 
@@ -2351,6 +2393,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="remove .joblib files after successful migrate",
     )
+    apm.add_argument(
+        "--i-trust-this-pickle",
+        action="store_true",
+        dest="i_trust_this_pickle",
+        help="acknowledge that joblib/pickle can execute code (required for migrate)",
+    )
     apm.set_defaults(func=_cmd_artifacts)
 
     st = sub.add_parser("setup", help="interactive .env / Telegram setup (legacy)")
@@ -2554,6 +2602,11 @@ def build_parser() -> argparse.ArgumentParser:
     hm_env = hm_sub.add_parser("env", help="write Telegram keys into .env")
     hm_env.add_argument("--bot-token", default=None)
     hm_env.add_argument("--chat-id", default=None)
+    hm_env.add_argument(
+        "--from-stdin",
+        action="store_true",
+        help="read JSON {bot_token,chat_id} from stdin (avoids secrets in argv)",
+    )
     hm_env.set_defaults(func=_cmd_home_env)
     hm_ob = hm_sub.add_parser("onboarding", help="onboarding marker")
     hm_ob_sub = hm_ob.add_subparsers(dest="onboarding_action", required=True)

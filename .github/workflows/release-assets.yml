@@ -166,6 +166,46 @@ jobs:
             scripts/install-helper-from-release.sh
           sha256sum install-helper-from-release.sh friend-day0.sh sysspectogram-helper-packaging.tgz \
             | tee friend-scripts.sha256
+      - name: Sign helper packaging + install scripts
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "${MINISIGN_SECRET_KEY:-}"
+          test -n "${MINISIGN_PUBLIC_KEY:-}"
+          command -v minisign
+          # Key file already written by "Sign helper" into RUNNER_TEMP/minisign.key
+          if [[ ! -f "$RUNNER_TEMP/minisign.key" ]]; then
+            python3 - <<'PY'
+            import os
+            from pathlib import Path
+            raw = os.environ["MINISIGN_SECRET_KEY"].replace("\r\n", "\n").strip("\n") + "\n"
+            if "\\n" in raw and raw.count("\n") < 2:
+                raw = raw.replace("\\n", "\n")
+            path = Path(os.environ["RUNNER_TEMP"]) / "minisign.key"
+            path.write_text(raw)
+            path.chmod(0o600)
+            PY
+          fi
+          PUB_B64="$(printf '%s\n' "$MINISIGN_PUBLIC_KEY" | awk 'NF{line=$0} END{print line}')"
+          EMBED="$(grep -oE "MINISIGN_PUB_B64='[^']+'" scripts/install-helper-from-release.sh | head -1 | cut -d= -f2 | tr -d "'")"
+          EMBED2="$(grep -oE "MINISIGN_PUB_B64='[^']+'" scripts/friend-day0.sh | head -1 | cut -d= -f2 | tr -d "'")"
+          test -n "$PUB_B64" && test "$PUB_B64" = "$EMBED" && test "$EMBED" = "$EMBED2"
+          KEY_FILE="$(awk 'NR==2{print; exit}' control-center/src-tauri/keys/SysSpectogram.minisign.pub)"
+          test "$PUB_B64" = "$KEY_FILE"
+          KEY_PKG="$(awk 'NR==2{print; exit}' sysspectogram/resources/keys/SysSpectogram.minisign.pub)"
+          test "$PUB_B64" = "$KEY_PKG"
+          for asset in \
+            sysspectogram-helper-packaging.tgz \
+            install-helper-from-release.sh \
+            friend-day0.sh \
+            friend-scripts.sha256
+          do
+            printf '%s\n' "${MINISIGN_PASSWORD-}" | minisign -S \
+              -s "$RUNNER_TEMP/minisign.key" -m "$asset" -x "$asset.minisig"
+          done
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
         with:
@@ -177,9 +217,13 @@ jobs:
             sysspectogram-helper-x86_64-linux.minisig
             sysspectogram-helper-x86_64-linux.sha256.minisig
             install-helper-from-release.sh
+            install-helper-from-release.sh.minisig
             friend-day0.sh
+            friend-day0.sh.minisig
             sysspectogram-helper-packaging.tgz
+            sysspectogram-helper-packaging.tgz.minisig
             friend-scripts.sha256
+            friend-scripts.sha256.minisig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -269,6 +313,112 @@ jobs:
           fail_on_unmatched_files: false
           files: |
             dist/desktop/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Thin hub-only Fleet Center: Linux AppImage/deb + macOS DMG + Windows NSIS.
+  # Unsigned macOS/Windows (no Apple/Microsoft certs) — Gatekeeper/SmartScreen may warn.
+  fleet-center:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            bundles: appimage,deb
+          - platform: macos-latest
+            bundles: dmg
+          - platform: windows-latest
+            bundles: nsis
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev build-essential file wget \
+            xdg-utils librsvg2-bin libgtk-3-bin
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fleet-center/src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: fleet-center/package-lock.json
+      - name: Build Fleet Center
+        working-directory: fleet-center
+        run: |
+          npm ci
+          npm run tauri build -- --bundles ${{ matrix.bundles }}
+      - name: Collect Fleet Center bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/fleet-center
+          shopt -s nullglob
+          for f in \
+            fleet-center/src-tauri/target/release/bundle/appimage/*.AppImage \
+            fleet-center/src-tauri/target/release/bundle/deb/*.deb \
+            fleet-center/src-tauri/target/release/bundle/dmg/*.dmg \
+            fleet-center/src-tauri/target/release/bundle/nsis/*.exe \
+            fleet-center/src-tauri/target/release/bundle/msi/*.msi; do
+            base="$(basename "$f")"
+            safe="${base// /_}"
+            cp -v "$f" "dist/fleet-center/$safe"
+          done
+          test -n "$(ls -A dist/fleet-center)" || { echo "no Fleet Center bundles produced"; exit 1; }
+          (cd dist/fleet-center && sha256sum * 2>/dev/null | sort -k2 > SHA256SUMS.fleet-center) \
+            || (cd dist/fleet-center && sha256sum.exe * 2>/dev/null | sort -k2 > SHA256SUMS.fleet-center) \
+            || (cd dist/fleet-center && shasum -a 256 * | sort -k2 > SHA256SUMS.fleet-center)
+          ls -la dist/fleet-center
+      - name: Sign Fleet Center bundles (minisign)
+        if: runner.os == 'Linux'
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "${MINISIGN_SECRET_KEY:-}"
+          test -n "${MINISIGN_PUBLIC_KEY:-}"
+          if ! command -v minisign >/dev/null 2>&1; then
+            sudo apt-get update -qq || true
+            if ! sudo apt-get install -y -qq minisign; then
+              curl -fsSL -o /tmp/minisign.tgz \
+                "https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz"
+              tar -xzf /tmp/minisign.tgz -C /tmp
+              sudo install -m755 /tmp/minisign-linux/x86_64/minisign /usr/local/bin/minisign
+            fi
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          raw = os.environ["MINISIGN_SECRET_KEY"].replace("\r\n", "\n").strip("\n") + "\n"
+          if "\\n" in raw and raw.count("\n") < 2:
+              raw = raw.replace("\\n", "\n")
+          path = Path(os.environ["RUNNER_TEMP"]) / "minisign.key"
+          path.write_text(raw)
+          path.chmod(0o600)
+          PY
+          printf '%s\n' "$MINISIGN_PUBLIC_KEY" > dist/fleet-center/SysSpectogram.minisign.pub
+          for asset in dist/fleet-center/*; do
+            case "$asset" in
+              *.minisig|*.pub) continue ;;
+            esac
+            printf '%s\n' "${MINISIGN_PASSWORD-}" | minisign -S \
+              -s "$RUNNER_TEMP/minisign.key" -m "$asset" -x "$asset.minisig"
+          done
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          fail_on_unmatched_files: false
+          files: |
+            dist/fleet-center/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -34,9 +34,15 @@ class AgentAlert:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentAlert:
+        sev = str(data.get("severity") or "medium").lower()
+        if sev not in {"info", "low", "medium", "high", "critical"}:
+            sev = "medium"
+        kind = str(data.get("kind") or "agent").lower()
+        if kind not in {"agent", "host"}:
+            kind = "agent"
         return cls(
             rule_id=str(data.get("rule_id") or "agent_unknown"),
-            severity=str(data.get("severity") or "medium"),
+            severity=sev,
             message=str(data.get("message") or ""),
             host_id=str(data.get("host_id") or ""),
             ts=float(data.get("ts") or time.time()),
@@ -45,7 +51,7 @@ class AgentAlert:
             comm=data.get("comm"),
             path=data.get("path"),
             extras={},
-            kind=str(data.get("kind") or "agent"),
+            kind=kind,
         )
 
 

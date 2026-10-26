@@ -233,12 +233,13 @@ def _cmd_telegram() -> None:
             if "=" in line and not line.strip().startswith("#"):
                 k, _, v = line.partition("=")
                 lines[k.strip()] = v.strip()
+    from sysspectogram.secret_file import validate_bot_token, validate_chat_id, write_secret_file
+
     if token:
-        lines["TELEGRAM_BOT_TOKEN"] = token
+        lines["TELEGRAM_BOT_TOKEN"] = validate_bot_token(token)
     if chat:
-        lines["TELEGRAM_CHAT_ID"] = chat
-    env_path.write_text("\n".join(f"{k}={v}" for k, v in lines.items()) + "\n", encoding="utf-8")
-    os.chmod(env_path, 0o600)
+        lines["TELEGRAM_CHAT_ID"] = validate_chat_id(chat)
+    write_secret_file(env_path, "\n".join(f"{k}={v}" for k, v in lines.items()) + "\n")
     _write_overlay({"telegram.enabled": True})
     console.print(f"[green]wrote {env_path}[/]")
 

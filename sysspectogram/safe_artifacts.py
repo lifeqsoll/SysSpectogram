@@ -286,21 +286,39 @@ def migrate_artifacts_dir(
     *,
     enforce: bool = False,
     delete_legacy: bool = False,
+    i_trust_this_pickle: bool = False,
 ) -> dict[str, str]:
     """Convert legacy joblib scaler/iforest into safe formats in-place.
 
-    This is the only supported joblib read path.
+    This is the only supported joblib read path. Requires
+    ``i_trust_this_pickle=True`` (CLI ``--i-trust-this-pickle``) because
+    joblib deserializes pickle (I-04).
     """
     del enforce
+    model_dir = Path(model_dir)
+    joblib_scaler = model_dir / SCALER_JOBLIB
+    joblib_if = model_dir / IFOREST_JOBLIB
+    needs_joblib = (joblib_scaler.is_file() and not (model_dir / SCALER_JSON).is_file()) or (
+        joblib_if.is_file() and not (model_dir / IFOREST_SSF).is_file()
+    )
+    if needs_joblib and not i_trust_this_pickle:
+        raise RuntimeError(
+            "legacy joblib migrate refused: pass --i-trust-this-pickle "
+            "(pickle can execute code). Print sha256 of *.joblib first."
+        )
+
+    import hashlib
     import joblib
     from sklearn.preprocessing import MinMaxScaler, RobustScaler
 
     from sysspectogram.ml.forest import ForestDetector
     from sysspectogram.preprocess.scaler import WindowScaler
 
-    model_dir = Path(model_dir)
     done: dict[str, str] = {}
-    joblib_scaler = model_dir / SCALER_JOBLIB
+    for legacy in (joblib_scaler, joblib_if):
+        if legacy.is_file():
+            digest = hashlib.sha256(legacy.read_bytes()).hexdigest()
+            done[f"sha256:{legacy.name}"] = digest
     json_scaler = model_dir / SCALER_JSON
     if joblib_scaler.is_file() and not json_scaler.is_file():
         payload = joblib.load(joblib_scaler)
@@ -317,7 +335,6 @@ def migrate_artifacts_dir(
     elif json_scaler.is_file():
         done["scaler"] = "already_present"
 
-    joblib_if = model_dir / IFOREST_JOBLIB
     ssf = model_dir / IFOREST_SSF
     if joblib_if.is_file() and not ssf.is_file():
         obj = ForestDetector()

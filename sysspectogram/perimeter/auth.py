@@ -16,7 +16,8 @@ from pathlib import Path
 # Optional classic syslog or RFC3339 prefix + ``sshd`` / ``sshd-session`` tag
 # (journalctl -o cat may strip both). End-anchored ``from <ip> port N`` so a forged
 # CIDR earlier in the line cannot win. Accepted publickey may append
-# ``ssh2: ED25519 SHA256:…``.
+# ``ssh2: ED25519 SHA256:…`` or certificate
+# ``ssh2: ED25519-CERT SHA256:… ID user@corp (serial N) CA ED25519 SHA256:…``.
 _AUTH_RE = re.compile(
     r"^(?:"
     r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+"
@@ -27,7 +28,9 @@ _AUTH_RE = re.compile(
     r"(?P<kind>Failed password for invalid user |Failed password for |Invalid user |Accepted \S+ for )"
     r"(?P<user>\S+)"
     r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
-    r"(?: ssh2(?:: \S+ SHA256:\S+)?)?\s*$",
+    r"(?: ssh2(?:: \S+ SHA256:\S+"
+    r"(?: ID (?P<cert_id>\S+) \(serial (?P<cert_serial>\d+)\) CA \S+ SHA256:\S+)?"
+    r")?)?\s*$",
     re.I,
 )
 
@@ -39,6 +42,8 @@ class AuthEvent:
     user: str
     raw: str
     ts: float
+    cert_id: str | None = None
+    cert_serial: str | None = None
 
 
 def _normalize_auth_ip(raw: str) -> str | None:
@@ -75,7 +80,15 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
     ip = _normalize_auth_ip(m.group("ip"))
     if ip is None:
         return None
-    return AuthEvent(_kind_from_match(m.group("kind")), ip, m.group("user"), text, ts)
+    return AuthEvent(
+        _kind_from_match(m.group("kind")),
+        ip,
+        m.group("user"),
+        text,
+        ts,
+        cert_id=m.groupdict().get("cert_id"),
+        cert_serial=m.groupdict().get("cert_serial"),
+    )
 
 
 def parse_auth_lines(lines: list[str]) -> list[AuthEvent]:

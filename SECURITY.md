@@ -79,6 +79,8 @@ Defaults are intentionally cautious.
 - Local SOAR uses `state/control.sock` with the **same** unlock gate as Telegram.
 - Multi-VPS fleet control uses **SSH + device tokens** (host pair code); see [docs/FLEET.md](docs/FLEET.md). No public HTTPS control plane.
 
+**Same-UID ceiling for unlock (I-03):** the unlock gate protects a stolen Telegram bot token / Mini App session — **not** malware running as the same Unix user as the guard. That process can already read `state/unlock.code` (mode 0600, owner-only) or the `.env` bot token. Persisted `state/control.unlocked` (only when unlock TTL is 0) accepts the exact marker `1` and refuses symlinks / arbitrary content; it is still same-UID writable by design. Treat same-UID compromise as full control of the guard process.
+
 ### Single guard
 
 - Only one guard may hold `state/guard.lock`. A second instance would unlink/rebind the agent socket, miss heartbeats, and flood false `agent_kirk_agent_down` alerts. Control Center refuses to start a second guard when the pidfile is alive.

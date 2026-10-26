@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import secrets
 import threading
@@ -16,6 +17,12 @@ from sysspectogram.console_unlock import ConsoleUnlock
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+# L-01: cap concurrent handler threads + SSE fan-out.
+MAX_WEB_CONNECTIONS = 32
+MAX_SSE_STREAMS = 4
+SSE_MAX_LIFE_SEC = 30 * 60
+HANDLER_SOCKET_TIMEOUT = 15.0
+
 
 class WebAppState:
     def __init__(
@@ -28,6 +35,7 @@ class WebAppState:
         bind_host: str,
         controllers: WebControllers | None = None,
         unlock: ConsoleUnlock | None = None,
+        launch_token: str | None = None,
     ) -> None:
         self.bus = bus
         self.bot_token = bot_token or ""
@@ -36,8 +44,10 @@ class WebAppState:
         self.bind_host = bind_host
         self.controllers = controllers
         self.unlock = unlock
+        self.launch_token = (launch_token or "").strip() or None
         self._sessions: dict[str, float] = {}
         self._lock = threading.Lock()
+        self._sse_slots = threading.BoundedSemaphore(MAX_SSE_STREAMS)
 
     def issue_session(self) -> str:
         tok = secrets.token_urlsafe(24)
@@ -57,7 +67,16 @@ class WebAppState:
                 return False
             return True
 
+    def bearer_ok(self, header: str | None) -> bool:
+        if not self.launch_token or not header:
+            return False
+        raw = header.strip()
+        if raw.lower().startswith("bearer "):
+            raw = raw[7:].strip()
+        return hmac.compare_digest(raw, self.launch_token)
+
     def allow_local_unauth(self, client_ip: str) -> bool:
+        # Read-only local convenience only. Mutations need session/Bearer (M-01).
         # Never treat tunnel→localhost as trusted when a public Mini App URL is configured.
         if self.public_url:
             return False
@@ -113,6 +132,7 @@ def _host_header_name(raw: str) -> str:
 def _make_handler(app: WebAppState):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        timeout = HANDLER_SOCKET_TIMEOUT
 
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
             return
@@ -129,7 +149,15 @@ def _make_handler(app: WebAppState):
             return None
 
         def _authorized(self) -> bool:
+            """Mutating / privileged: session cookie or launch Bearer only."""
             if app.session_ok(self._cookie("ss_session")):
+                return True
+            if app.bearer_ok(self.headers.get("Authorization")):
+                return True
+            return False
+
+        def _authorized_read(self) -> bool:
+            if self._authorized():
                 return True
             if app.allow_local_unauth(self._client_ip()):
                 return True
@@ -213,6 +241,9 @@ def _make_handler(app: WebAppState):
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            # Host check first for every path (DNS rebinding / M-05).
+            if not self._host_ok():
+                return self._json(403, {"ok": False, "error": "bad host"})
             if path in {"/", "/index.html"}:
                 return self._static("index.html", "text/html; charset=utf-8")
             if path == "/styles.css":
@@ -220,18 +251,15 @@ def _make_handler(app: WebAppState):
             if path == "/app.js":
                 return self._static("app.js", "application/javascript; charset=utf-8")
             if path == "/api/health":
-                return self._json(
-                    200,
-                    {
-                        "ok": True,
-                        "public_url": app.public_url or None,
-                        "actions": app.controllers is not None,
-                    },
-                )
-            # Host check on data APIs (DNS rebinding).
-            if path in {"/api/snapshot", "/api/status", "/api/stream"} and not self._host_ok():
-                return self._json(403, {"ok": False, "error": "bad host"})
-            if not self._authorized():
+                body: dict[str, Any] = {"ok": True}
+                if self._authorized():
+                    body["public_url"] = app.public_url or None
+                    body["actions"] = app.controllers is not None
+                return self._json(200, body)
+            if path in {"/api/snapshot", "/api/status", "/api/stream"}:
+                if not self._authorized_read():
+                    return self._json(401, {"ok": False, "error": "unauthorized"})
+            elif not self._authorized():
                 return self._json(401, {"ok": False, "error": "unauthorized"})
             if path == "/api/snapshot":
                 return self._json(200, app.enriched_snapshot())
@@ -248,9 +276,10 @@ def _make_handler(app: WebAppState):
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
 
+            if not self._host_ok():
+                return self._json(403, {"ok": False, "error": "bad host"})
+
             if path in {"/api/auth/telegram", "/api/unlock", "/api/action"}:
-                if not self._host_ok():
-                    return self._json(403, {"ok": False, "error": "bad host"})
                 if not self._require_json_ctype():
                     return self._json(415, {"ok": False, "error": "Content-Type must be application/json"})
 
@@ -295,12 +324,38 @@ def _make_handler(app: WebAppState):
                 if app.public_url and not self._authorized():
                     return self._json(401, {"ok": False, "error": "unauthorized"})
                 if app.unlock is None or not app.unlock.enabled:
-                    return self._json(200, {"ok": True, "unlocked": True, "note": "gate off"})
-                code = str(payload.get("code") or "")
-                if app.unlock.try_unlock(code):
+                    sess = app.issue_session()
+                    cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
                     return self._json(
                         200,
-                        {"ok": True, "unlocked": True, "status": app.controllers.status() if app.controllers else {}},
+                        {"ok": True, "unlocked": True, "note": "gate off"},
+                        extra={"Set-Cookie": cookie},
+                    )
+                # Already unlocked (e.g. via Telegram): mint a web session without re-entry.
+                if app.unlock.unlocked():
+                    sess = app.issue_session()
+                    cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                    return self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "unlocked": True,
+                            "status": app.controllers.status() if app.controllers else {},
+                        },
+                        extra={"Set-Cookie": cookie},
+                    )
+                code = str(payload.get("code") or "")
+                if app.unlock.try_unlock(code):
+                    sess = app.issue_session()
+                    cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                    return self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "unlocked": True,
+                            "status": app.controllers.status() if app.controllers else {},
+                        },
+                        extra={"Set-Cookie": cookie},
                     )
                 return self._json(
                     403,
@@ -339,13 +394,16 @@ def _make_handler(app: WebAppState):
             self._send(200, path.read_bytes(), ctype)
 
         def _sse(self) -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.end_headers()
+            if not app._sse_slots.acquire(blocking=False):
+                return self._json(503, {"ok": False, "error": "too many streams"})
             try:
-                while True:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                deadline = time.time() + SSE_MAX_LIFE_SEC
+                while time.time() < deadline:
                     snap = app.enriched_snapshot()
                     line = f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
                     self.wfile.write(line.encode("utf-8"))
@@ -353,8 +411,52 @@ def _make_handler(app: WebAppState):
                     time.sleep(1.0)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
+            finally:
+                app._sse_slots.release()
 
     return Handler
+
+
+class LimitedThreadingHTTPServer(ThreadingHTTPServer):
+    """Threading HTTP server with a hard cap on concurrent connections (L-01)."""
+
+    allow_reuse_address = True
+
+    def __init__(self, server_address, RequestHandlerClass, *, max_connections: int = MAX_WEB_CONNECTIONS):
+        self._conn_sem = threading.BoundedSemaphore(max(1, int(max_connections)))
+        super().__init__(server_address, RequestHandlerClass)
+
+    def process_request(self, request, client_address) -> None:  # noqa: ANN001
+        if not self._conn_sem.acquire(blocking=False):
+            try:
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Connection: close\r\nContent-Length: 0\r\n\r\n"
+                )
+            except OSError:
+                pass
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+        t = threading.Thread(
+            target=self._process_request_release,
+            args=(request, client_address),
+            daemon=True,
+        )
+        t.start()
+
+    def _process_request_release(self, request, client_address) -> None:  # noqa: ANN001
+        try:
+            self.finish_request(request, client_address)
+        except Exception:
+            self.handle_error(request, client_address)
+        finally:
+            try:
+                self.shutdown_request(request)
+            finally:
+                self._conn_sem.release()
 
 
 def start_web_server(
@@ -367,7 +469,31 @@ def start_web_server(
     public_url: str | None = None,
     controllers: WebControllers | None = None,
     unlock: ConsoleUnlock | None = None,
+    token_path: Path | None | bool = True,
+    max_connections: int = MAX_WEB_CONNECTIONS,
 ) -> ThreadingHTTPServer:
+    launch_token = secrets.token_urlsafe(32)
+    # token_path=True → default state/web.token; Path → that path; False/None → memory only.
+    write_path: Path | None
+    if token_path is True:
+        try:
+            from sysspectogram.config import state_root
+
+            write_path = state_root() / "state" / "web.token"
+        except Exception:
+            write_path = None
+    elif isinstance(token_path, Path):
+        write_path = token_path
+    else:
+        write_path = None
+    if write_path is not None:
+        try:
+            from sysspectogram.secret_file import write_secret_file
+
+            write_secret_file(write_path, launch_token + "\n")
+        except OSError:
+            pass
+
     app = WebAppState(
         bus,
         bot_token=bot_token,
@@ -376,13 +502,15 @@ def start_web_server(
         bind_host=host,
         controllers=controllers,
         unlock=unlock,
+        launch_token=launch_token,
     )
 
-    class ReusableServer(ThreadingHTTPServer):
-        allow_reuse_address = True
-
     try:
-        httpd = ReusableServer((host, port), _make_handler(app))
+        httpd = LimitedThreadingHTTPServer(
+            (host, port),
+            _make_handler(app),
+            max_connections=max_connections,
+        )
     except OSError as exc:
         raise OSError(
             f"web dashboard cannot bind {host}:{port} ({exc}). "

@@ -87,10 +87,9 @@ def _resolve(path: str | Path) -> Path:
 
 def _write_private(path: Path, text: str) -> None:
     """Write a secret readable by the owner only (0600)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(text + "\n")
+    from sysspectogram.secret_file import write_secret_file
+
+    write_secret_file(path, text if text.endswith("\n") else text + "\n")
 
 
 def _drop_file(path: Path) -> None:

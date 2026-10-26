@@ -4,18 +4,34 @@
 # Friend one-liner (pinned tag — never main):
 #   curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.3.0
 #
-# Or after download:
+# Prefer the signed asset from the release (not raw.githubusercontent):
+#   curl -fsSL -O https://github.com/lifeqsoll/SysSpectogram/releases/download/v1.3.0/install-helper-from-release.sh
+#   curl -fsSL -O https://github.com/lifeqsoll/SysSpectogram/releases/download/v1.3.0/install-helper-from-release.sh.minisig
+#   minisign -Vm install-helper-from-release.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
 #   sudo bash install-helper-from-release.sh v1.3.0
 #
-# Env: SYSSPECTOGRAM_GITHUB_REPO (default lifeqsoll/SysSpectogram)
+# Requires: curl, sha256sum, install, systemctl, minisign, python3, tar
+# Env: SYSSPECTOGRAM_DEV=1 + SYSSPECTOGRAM_GITHUB_REPO to allow a non-default repo
 set -euo pipefail
 
 TAG="${1:-v1.3.0}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
-REPO="${SYSSPECTOGRAM_GITHUB_REPO:-lifeqsoll/SysSpectogram}"
-UA="SysSpectogram-HelperInstall/1.1"
+
+REPO="lifeqsoll/SysSpectogram"
+if [[ -n "${SYSSPECTOGRAM_GITHUB_REPO:-}" ]]; then
+  if [[ "${SYSSPECTOGRAM_DEV:-}" != "1" ]]; then
+    echo "refusing SYSSPECTOGRAM_GITHUB_REPO without SYSSPECTOGRAM_DEV=1" >&2
+    exit 1
+  fi
+  echo "WARNING: SYSSPECTOGRAM_DEV=1 using alternate repo ${SYSSPECTOGRAM_GITHUB_REPO}" >&2
+  REPO="${SYSSPECTOGRAM_GITHUB_REPO}"
+fi
+
+UA="SysSpectogram-HelperInstall/1.2"
 API="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
-RAW="https://raw.githubusercontent.com/${REPO}/${TAG}"
+
+# Embedded minisign pubkey (same as friend-day0 / Control Center / ADR 0005).
+MINISIGN_PUB_B64='RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "run as root: sudo $0 ${TAG}" >&2
@@ -27,49 +43,59 @@ need curl
 need sha256sum
 need install
 need systemctl
+need minisign
+need python3
+need tar
 
 WORKDIR="$(mktemp -d)"
+chmod 700 "${WORKDIR}"
 trap 'rm -rf "${WORKDIR}"' EXIT
+
+PUB_PATH="${WORKDIR}/SysSpectogram.minisign.pub"
+{
+  echo "untrusted comment: minisign public key: SysSpectogram"
+  echo "${MINISIGN_PUB_B64}"
+} > "${PUB_PATH}"
+
+asset_url() {
+  local want="$1"
+  REL_JSON="${JSON}" WANT="${want}" python3 -c '
+import json, os, sys
+rel = json.loads(os.environ["REL_JSON"])
+want = os.environ["WANT"]
+for a in rel.get("assets") or []:
+    if a.get("name") == want:
+        print(a["browser_download_url"]); break
+else:
+    sys.exit("no asset on release: " + want)
+'
+}
 
 echo "==> release ${TAG}"
 JSON="$(curl -fsSL -H "User-Agent: ${UA}" -H "Accept: application/vnd.github+json" "${API}")"
-BIN_URL="$(REL_JSON="${JSON}" TAG="${TAG}" python3 -c '
-import json, os, sys
-rel = json.loads(os.environ["REL_JSON"])
-want = "sysspectogram-helper-x86_64-linux"
-for a in rel.get("assets") or []:
-    if a.get("name") == want:
-        print(a["browser_download_url"]); break
-else:
-    sys.exit("no helper binary on release " + os.environ.get("TAG", ""))
-')"
-SUM_URL="$(REL_JSON="${JSON}" python3 -c '
-import json, os, sys
-rel = json.loads(os.environ["REL_JSON"])
-want = "sysspectogram-helper-x86_64-linux.sha256"
-for a in rel.get("assets") or []:
-    if a.get("name") == want:
-        print(a["browser_download_url"]); break
-else:
-    sys.exit("no helper .sha256 on release")
-')"
-PACK_URL="$(REL_JSON="${JSON}" python3 -c '
-import json, os, sys
-rel = json.loads(os.environ["REL_JSON"])
-want = "sysspectogram-helper-packaging.tgz"
-for a in rel.get("assets") or []:
-    if a.get("name") == want:
-        print(a["browser_download_url"]); break
-else:
-    sys.exit("no helper-packaging.tgz on release (required; unsigned raw packaging refused)")
-')"
 
-BIN="${WORKDIR}/sysspectogram-helper"
-echo "==> download helper + sha256 + packaging.tgz"
-curl -fsSL -H "User-Agent: ${UA}" -o "${BIN}" "${BIN_URL}"
-chmod +x "${BIN}"
+BIN_NAME="sysspectogram-helper-x86_64-linux"
+PACK_NAME="sysspectogram-helper-packaging.tgz"
+BIN_URL="$(asset_url "${BIN_NAME}")"
+BIN_SIG_URL="$(asset_url "${BIN_NAME}.minisig")"
+SUM_URL="$(asset_url "${BIN_NAME}.sha256")"
+PACK_URL="$(asset_url "${PACK_NAME}")"
+PACK_SIG_URL="$(asset_url "${PACK_NAME}.minisig")"
+
+BIN="${WORKDIR}/${BIN_NAME}"
+BIN_SIG="${BIN}.minisig"
 SUM_FILE="${WORKDIR}/helper.sha256"
+PACK_TGZ="${WORKDIR}/${PACK_NAME}"
+PACK_SIG="${PACK_TGZ}.minisig"
+
+echo "==> download helper + signatures + packaging.tgz"
+curl -fsSL -H "User-Agent: ${UA}" -o "${BIN}" "${BIN_URL}"
+curl -fsSL -H "User-Agent: ${UA}" -o "${BIN_SIG}" "${BIN_SIG_URL}"
 curl -fsSL -H "User-Agent: ${UA}" -o "${SUM_FILE}" "${SUM_URL}"
+curl -fsSL -H "User-Agent: ${UA}" -o "${PACK_TGZ}" "${PACK_URL}"
+curl -fsSL -H "User-Agent: ${UA}" -o "${PACK_SIG}" "${PACK_SIG_URL}"
+chmod 0755 "${BIN}"
+
 EXP="$(awk '{print tolower($1)}' "${SUM_FILE}" | head -1)"
 GOT="$(sha256sum "${BIN}" | awk '{print $1}')"
 if [[ -z "${EXP}" || "${EXP}" != "${GOT}" ]]; then
@@ -78,28 +104,68 @@ if [[ -z "${EXP}" || "${EXP}" != "${GOT}" ]]; then
 fi
 echo "==> sha256 ok"
 
-PACK_TGZ="${WORKDIR}/sysspectogram-helper-packaging.tgz"
-curl -fsSL -H "User-Agent: ${UA}" -o "${PACK_TGZ}" "${PACK_URL}"
-tar -xzf "${PACK_TGZ}" -C "${WORKDIR}"
-UNIT="${WORKDIR}/packaging/helper/sysspectogram-helper.service"
-POLICY="${WORKDIR}/packaging/polkit/org.sysspectogram.helper.policy"
-SYSUSERS="${WORKDIR}/packaging/helper/sysusers.conf"
-# tarball may be flat or nested; fall back to extracted names
-[[ -f "${UNIT}" ]] || UNIT="$(find "${WORKDIR}" -name 'sysspectogram-helper.service' | head -1)"
-[[ -f "${POLICY}" ]] || POLICY="$(find "${WORKDIR}" -name 'org.sysspectogram.helper.policy' | head -1)"
-[[ -f "${SYSUSERS}" ]] || SYSUSERS="$(find "${WORKDIR}" -name 'sysusers.conf' | head -1)"
+echo "==> minisign verify"
+minisign -Vm "${BIN}" -p "${PUB_PATH}" -x "${BIN_SIG}"
+minisign -Vm "${PACK_TGZ}" -p "${PUB_PATH}" -x "${PACK_SIG}"
+echo "==> minisign ok"
+
+PACK_DIR="${WORKDIR}/pack"
+mkdir -m 700 "${PACK_DIR}"
+
+# Refuse absolute paths, .., and symlinks before extract.
+python3 - "${PACK_TGZ}" "${PACK_DIR}" <<'PY'
+import sys, tarfile
+from pathlib import Path
+
+tgz, dest = sys.argv[1], Path(sys.argv[2])
+allowed = {
+    "packaging/helper/sysspectogram-helper.service",
+    "packaging/helper/sysusers.conf",
+    "packaging/polkit/org.sysspectogram.helper.policy",
+    "scripts/install-helper-from-release.sh",
+}
+with tarfile.open(tgz, "r:gz") as tf:
+    members = []
+    for m in tf.getmembers():
+        name = m.name.lstrip("./")
+        if not name or name.endswith("/"):
+            continue
+        if name.startswith("/") or ".." in Path(name).parts:
+            sys.exit(f"refusing unsafe tar entry: {m.name}")
+        if m.issym() or m.islnk():
+            sys.exit(f"refusing link in packaging.tgz: {m.name}")
+        if not m.isfile():
+            sys.exit(f"refusing non-file in packaging.tgz: {m.name}")
+        if name not in allowed:
+            sys.exit(f"unexpected packaging entry: {name}")
+        m.name = name
+        members.append(m)
+    for m in members:
+        out = dest / m.name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        src = tf.extractfile(m)
+        if src is None:
+            sys.exit(f"cannot extract {m.name}")
+        data = src.read()
+        out.write_bytes(data)
+        out.chmod(0o644)
+PY
+
+UNIT="${PACK_DIR}/packaging/helper/sysspectogram-helper.service"
+POLICY="${PACK_DIR}/packaging/polkit/org.sysspectogram.helper.policy"
+SYSUSERS="${PACK_DIR}/packaging/helper/sysusers.conf"
 if [[ ! -f "${UNIT}" || ! -f "${POLICY}" || ! -f "${SYSUSERS}" ]]; then
   echo "packaging.tgz missing unit/policy/sysusers" >&2
   exit 1
 fi
-# silence unused RAW when packaging comes from release asset
-: "${RAW}"
 
-install -d -m 0755 /etc/sysspectogram /opt/sysspectogram /var/lib/sysspectogram /usr/lib/sysspectogram
+install -d -m 0755 /etc/sysspectogram /opt/sysspectogram /var/lib/sysspectogram \
+  /usr/lib/sysspectogram /usr/share/sysspectogram
 install -Dm755 "${BIN}" /usr/lib/sysspectogram/sysspectogram-helper
 install -Dm644 "${UNIT}" /etc/systemd/system/sysspectogram-helper.service
 install -Dm644 "${POLICY}" /usr/share/polkit-1/actions/org.sysspectogram.helper.policy
 install -Dm644 "${SYSUSERS}" /usr/lib/sysusers.d/sysspectogram.conf
+install -Dm644 "${PUB_PATH}" /usr/share/sysspectogram/minisign.pub
 
 if command -v systemd-sysusers >/dev/null 2>&1; then
   systemd-sysusers /usr/lib/sysusers.d/sysspectogram.conf
@@ -110,15 +176,11 @@ systemctl restart sysspectogram-helper.service
 
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
   usermod -aG sysspectogram "${SUDO_USER}" || true
-  # Group membership needs a new login; ACL covers this boot so CC can talk to the socket now.
-  if command -v setfacl >/dev/null 2>&1; then
-    setfacl -m "u:${SUDO_USER}:rwx" /run/sysspectogram 2>/dev/null || true
-    setfacl -m "u:${SUDO_USER}:rw" /run/sysspectogram/helper.sock 2>/dev/null || true
-  fi
   echo "added ${SUDO_USER} to group sysspectogram — log out/in (or reboot) so the group sticks;"
   echo "  Start/Restart still asks for an admin password via polkit (desktop agent required)."
 fi
 
 systemctl --no-pager --full status sysspectogram-helper.service || true
 echo "helper socket: /run/sysspectogram/helper.sock"
+echo "minisign.pub: /usr/share/sysspectogram/minisign.pub"
 echo "done (tag ${TAG})"

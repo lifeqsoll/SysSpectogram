@@ -70,7 +70,7 @@ def test_migrate_artifacts_dir(tmp_path):
     rng = np.random.default_rng(1)
     model = IsolationForest(n_estimators=50, random_state=1).fit(rng.normal(size=(40, 16)))
     joblib.dump(model, tmp_path / "iforest.joblib")
-    done = migrate_artifacts_dir(tmp_path, delete_legacy=True)
+    done = migrate_artifacts_dir(tmp_path, delete_legacy=True, i_trust_this_pickle=True)
     assert (tmp_path / "scaler.json").is_file()
     assert (tmp_path / "iforest.ssf.npz").is_file()
     assert not (tmp_path / "scaler.joblib").exists()
@@ -88,7 +88,7 @@ def test_migrate_minmax_scaler_joblib(tmp_path):
     x = np.random.rand(30, 5).astype(np.float64)
     ms.fit(x)
     joblib.dump({"scaler": ms, "n_features": 5}, tmp_path / "scaler.joblib")
-    done = migrate_artifacts_dir(tmp_path)
+    done = migrate_artifacts_dir(tmp_path, i_trust_this_pickle=True)
     assert "scaler" in done
     loaded = WindowScaler.load(tmp_path / "scaler.json")
     assert isinstance(loaded.scaler, MinMaxScaler)

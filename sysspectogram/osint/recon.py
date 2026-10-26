@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import urllib.parse
@@ -12,6 +13,19 @@ from pathlib import Path
 from sysspectogram.perimeter.enrich import enrich_ip_http
 
 _TOOLS_BIN = Path(__file__).resolve().parents[2] / "tools" / "bin"
+
+# DNS labels only — no leading hyphen, no empty labels (L-03).
+_DNS_NAME_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?\.)*"
+    r"[A-Za-z0-9-]{1,63}\.?$"
+)
+
+
+def valid_dns_name(name: str) -> bool:
+    n = (name or "").strip().rstrip(".")
+    if not n or n.startswith("-") or "/" in n or "\\" in n:
+        return False
+    return bool(_DNS_NAME_RE.match(n + "."))
 
 
 def _path_with_tools() -> str:
@@ -82,14 +96,17 @@ class ReconReport:
 
 
 def _dns_lookup(name: str) -> dict:
+    if not valid_dns_name(name):
+        return {}
     out: dict[str, list[str]] = {}
     dig = _which("dig")
     for rtype in ("A", "AAAA", "MX", "NS", "TXT"):
         vals: list[str] = []
         if dig:
             try:
+                # -q/-t keeps the name out of option position (L-03).
                 proc = subprocess.run(
-                    [dig, "+short", rtype, name],
+                    [dig, "+short", "-q", name, "-t", rtype],
                     capture_output=True,
                     text=True,
                     timeout=4,
@@ -113,6 +130,8 @@ def _dns_lookup(name: str) -> dict:
 
 
 def ct_lookup(domain: str, timeout: float = 6.0, limit: int = 20) -> list[str]:
+    if not valid_dns_name(domain):
+        return []
     url = "https://crt.sh/?" + urllib.parse.urlencode({"q": domain, "output": "json"})
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "sysspectogram/0.2"})
@@ -154,6 +173,12 @@ def passive_dns_lookup(ip: str, api_url: str | None = None, timeout: float = 5.0
 
 
 def nmap_fast(ip: str, timeout_sec: int = 60) -> dict:
+    from sysspectogram.net_ip import parse_ban_ip
+
+    try:
+        ip = parse_ban_ip(ip)
+    except ValueError as exc:
+        return {"skipped": True, "reason": str(exc), "open_ports": []}
     nmap = _which("nmap")
     if nmap is None:
         # flatpak Zenmap fallback
@@ -166,7 +191,7 @@ def nmap_fast(ip: str, timeout_sec: int = 60) -> dict:
     try:
         # -sT: TCP connect (no root). Prefer over SYN when unprivileged.
         proc = subprocess.run(
-            [*nmap_cmd, "-sT", "-Pn", "-F", "--max-retries", "1", "-T3", "-oG", "-", ip],
+            [*nmap_cmd, "-sT", "-Pn", "-F", "--max-retries", "1", "-T3", "-oG", "-", "--", ip],
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -202,12 +227,13 @@ def nmap_fast(ip: str, timeout_sec: int = 60) -> dict:
 
 
 def _nmap_lab_allowed(ip: str, lab_targets: list[str] | None) -> bool:
-    allowed = set(lab_targets or ["127.0.0.1", "::1"])
-    if ip in allowed:
+    from sysspectogram.lab_nmap import target_allowed
+
+    allowed = list(lab_targets or ["127.0.0.1", "::1"])
+    if target_allowed(ip, allowed):
         return True
-    if ip in {"127.0.0.1", "::1"}:
-        return True
-    return False
+    # Exact match still OK for literals listed without being a subnet_of edge case.
+    return ip in set(allowed) or ip in {"127.0.0.1", "::1"}
 
 
 def run_full_recon(
@@ -220,6 +246,15 @@ def run_full_recon(
     require_lab_for_nmap: bool = True,
     canary_hit: bool = False,
 ) -> ReconReport:
+    from sysspectogram.net_ip import parse_ban_ip
+
+    try:
+        ip = parse_ban_ip(ip)
+    except ValueError as exc:
+        report = ReconReport(ip=str(ip or ""))
+        report.errors.append(f"bad_ip:{exc}")
+        return report
+
     report = ReconReport(ip=ip)
     try:
         enrich = enrich_ip_http(ip)
@@ -230,17 +265,21 @@ def run_full_recon(
         report.errors.append(f"enrich:{exc}")
 
     domain = report.ptr
-    if domain:
+    if domain and valid_dns_name(domain.split(":")[0]):
+        domain = domain.split(":")[0]
         try:
             report.dns_records = _dns_lookup(domain)
         except Exception as exc:
             report.errors.append(f"dns:{exc}")
         if include_ct:
-            ct = ct_lookup(domain.split(":")[0])
+            ct = ct_lookup(domain)
             report.ct_names = [x for x in ct if not x.startswith("ct_error:")]
             for x in ct:
                 if x.startswith("ct_error:"):
                     report.errors.append(x)
+    elif domain:
+        report.errors.append("ptr_rejected")
+        report.ptr = None
 
     try:
         report.passive_dns = passive_dns_lookup(ip, api_url=passive_dns_url)

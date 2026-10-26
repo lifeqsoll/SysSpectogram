@@ -226,12 +226,18 @@
     box.innerHTML = "";
     alerts.slice(0, 8).forEach((a) => {
       const el = document.createElement("article");
-      el.className = `alert ${a.severity || "medium"}`;
+      const sev = ["info", "low", "medium", "high", "critical"].includes(a.severity)
+        ? a.severity
+        : "medium";
+      el.className = `alert ${sev}`;
       const t = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "";
       const ip = (a.extras && a.extras.ip) || "";
-      el.innerHTML = `<div class="alert-meta"><span>${(a.severity || "").toUpperCase()} · ${a.kind || ""}</span><span>${t}</span></div>
+      el.innerHTML = `<div class="alert-meta"><span></span><span></span></div>
         <h4 class="alert-title"></h4><p class="alert-body"></p>
         <div class="alert-actions"></div>`;
+      const meta = el.querySelector(".alert-meta");
+      meta.children[0].textContent = `${sev.toUpperCase()} · ${a.kind || ""}`;
+      meta.children[1].textContent = t;
       el.querySelector(".alert-title").textContent = a.title || a.rule_id || "alert";
       el.querySelector(".alert-body").textContent = a.body || "";
       const actions = el.querySelector(".alert-actions");

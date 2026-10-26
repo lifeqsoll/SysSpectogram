@@ -35,17 +35,26 @@ def _dump_yaml(path: Path, data: dict[str, Any]) -> None:
 
 
 def _update_env(env_path: Path, updates: dict[str, str]) -> None:
+    from sysspectogram.secret_file import validate_bot_token, validate_chat_id, write_secret_file
+
     kv: dict[str, str] = {}
-    if env_path.exists():
+    if env_path.exists() and not env_path.is_symlink():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.strip().startswith("#"):
                 k, _, v = line.partition("=")
                 kv[k.strip()] = v.strip()
     for k, v in updates.items():
-        if v:
+        if not v:
+            continue
+        if k == "TELEGRAM_BOT_TOKEN":
+            kv[k] = validate_bot_token(v)
+        elif k == "TELEGRAM_CHAT_ID":
+            kv[k] = validate_chat_id(v)
+        else:
+            if any(c in v for c in ("\n", "\r", "\0")):
+                raise ValueError(f"{k} must not contain newlines or NUL")
             kv[k] = v
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text("\n".join(f"{k}={v}" for k, v in kv.items()) + "\n", encoding="utf-8")
+    write_secret_file(env_path, "\n".join(f"{k}={v}" for k, v in kv.items()) + "\n")
 
 
 def _show_recs(rec: Recommendations) -> None:

@@ -43,13 +43,15 @@ def run_setup(
         if "=" in line and not line.strip().startswith("#"):
             k, _, v = line.partition("=")
             kv[k.strip()] = v.strip()
+    from sysspectogram.secret_file import validate_bot_token, validate_chat_id, write_secret_file
+
     if token:
-        kv["TELEGRAM_BOT_TOKEN"] = token
+        kv["TELEGRAM_BOT_TOKEN"] = validate_bot_token(token)
     if chat:
-        kv["TELEGRAM_CHAT_ID"] = chat
+        kv["TELEGRAM_CHAT_ID"] = validate_chat_id(chat)
     kv["SYSSPECTOGRAM_ROLE"] = role
     out = [f"{k}={v}" for k, v in kv.items()]
-    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    write_secret_file(env_path, "\n".join(out) + "\n")
 
     cfg = prefix / "configs" / "default.yaml"
     if cfg.exists() and role and role != "generic-linux":
