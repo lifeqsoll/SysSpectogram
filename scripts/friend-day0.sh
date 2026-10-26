@@ -11,7 +11,27 @@
 #      SYSSPECTOGRAM_HOME (default ~/.local/share/sysspectogram)
 set -euo pipefail
 
-TAG="${1:-v1.3.2}"
+NO_MENU=0
+TAG=""
+for arg in "$@"; do
+  case "${arg}" in
+    --no-menu) NO_MENU=1 ;;
+    -h|--help)
+      echo "Usage: friend-day0.sh [TAG] [--no-menu]"
+      echo "  TAG        release tag (default v1.3.2)"
+      echo "  --no-menu  install only; do not exec interactive menu (also default when stdin is not a TTY)"
+      exit 0
+      ;;
+    -*)
+      echo "unknown option: ${arg}" >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z "${TAG}" ]]; then TAG="${arg}"; else echo "unexpected arg: ${arg}" >&2; exit 2; fi
+      ;;
+  esac
+done
+TAG="${TAG:-v1.3.2}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
 REPO="${SYSSPECTOGRAM_GITHUB_REPO:-lifeqsoll/SysSpectogram}"
 HOME_DIR="${SYSSPECTOGRAM_HOME:-${HOME}/.local/share/sysspectogram}"
@@ -131,5 +151,13 @@ if command -v loginctl >/dev/null 2>&1; then
 fi
 
 echo "==> ready. SYSSPECTOGRAM_HOME=${HOME_DIR}"
+echo "    export SYSSPECTOGRAM_HOME=${HOME_DIR}"
+echo "    ${VENV}/bin/python -m sysspectogram …"
+
+if [[ "${NO_MENU}" -eq 1 ]] || [[ ! -t 0 ]]; then
+  echo "==> skipping menu (non-interactive / --no-menu)"
+  exit 0
+fi
+
 echo "    ${VENV}/bin/python -m sysspectogram menu"
 exec "${VENV}/bin/python" -m sysspectogram menu

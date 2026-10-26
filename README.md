@@ -44,17 +44,21 @@ cd control-center && npm install && npm run tauri dev
 
 ### 2. Headless VPS (SSH, no git)
 
+Full steps: **[docs/INSTALL.md](docs/INSTALL.md)**. Short version (signed release assets only — never pipe raw git):
+
 ```bash
-# python3 + python3-venv + curl; replace tag if needed
-# prefer the tagged script (not floating main); or download friend-day0.sh from the release
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.2/scripts/friend-day0.sh | bash -s -- v1.3.2
+TAG=<LATEST_TAG>   # from https://github.com/lifeqsoll/SysSpectogram/releases/latest
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh.minisig"
+minisign -Vm friend-day0.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
+bash friend-day0.sh "$TAG"
 loginctl enable-linger $USER   # else protect stops on logout
 ```
 
 Optional privileged helper (polkit; no local checkout):
 
 ```bash
-TAG=v1.3.2
+TAG=<LATEST_TAG>
 curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh"
 curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh.minisig"
 minisign -Vm install-helper-from-release.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'

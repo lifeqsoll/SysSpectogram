@@ -768,7 +768,9 @@ def _cmd_home_env(args: argparse.Namespace) -> int:
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 2
 
-    env_path = ROOT / ".env"
+    from sysspectogram.config import dotenv_path
+
+    env_path = dotenv_path()
     lines: list[str] = []
     if env_path.is_file() and not env_path.is_symlink():
         lines = env_path.read_text(encoding="utf-8").splitlines()

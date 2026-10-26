@@ -44,17 +44,21 @@ cd control-center && npm install && npm run tauri dev
 
 ### 2. VPS по SSH (без git на сервере)
 
+Полный гайд: **[docs/INSTALL_RU.md](docs/INSTALL_RU.md)**. Кратко (только ассеты релиза + minisign — не pipe raw git):
+
 ```bash
-# нужны python3, python3-venv, curl; тег при необходимости замените
-# берите скрипт с тега релиза, не с плавающего main
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.2/scripts/friend-day0.sh | bash -s -- v1.3.2
+TAG=<LATEST_TAG>   # со страницы releases/latest
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh.minisig"
+minisign -Vm friend-day0.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
+bash friend-day0.sh "$TAG"
 loginctl enable-linger $USER   # иначе защита остановится после выхода из SSH
 ```
 
 Отдельный привилегированный helper (polkit), если нужен:
 
 ```bash
-TAG=v1.3.2
+TAG=<LATEST_TAG>
 curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh"
 curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh.minisig"
 minisign -Vm install-helper-from-release.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'

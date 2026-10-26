@@ -98,8 +98,18 @@ def apply_overlay(
     overlay: dict[str, Any],
     *,
     role: str | None = None,
+    base_path: Path | None = None,
 ) -> dict[str, Any]:
-    base = _load_yaml(config_path)
+    # Seed from bundled defaults when the writable config does not exist yet.
+    if config_path.is_file():
+        base = _load_yaml(config_path)
+    elif base_path is not None and base_path.is_file():
+        base = _load_yaml(base_path)
+    else:
+        from sysspectogram.config import default_config_path
+
+        bundled = default_config_path()
+        base = _load_yaml(bundled) if bundled.is_file() else {}
     merged = _deep_merge(base, overlay)
     if role:
         merged["role"] = role
@@ -118,10 +128,16 @@ def run_configure(
     seed_fp: bool = True,
 ) -> dict[str, Any]:
     """Interactive or accept-recommended configure. Returns applied overlay summary."""
+    from sysspectogram.config import default_config_path, dotenv_path, state_root, writable_config_path
+
     prefix = Path(prefix)
-    config_path = Path(config_path or (prefix / "configs" / "default.yaml"))
-    env_path = Path(env_path or (prefix / ".env"))
+    # Friend/wheel installs must not write into site-packages; use SYSSPECTOGRAM_HOME.
+    if prefix.resolve() == Path(".").resolve() or str(prefix) in (".", ""):
+        prefix = state_root()
+    config_path = Path(config_path or writable_config_path())
+    env_path = Path(env_path or dotenv_path())
     probe_path = prefix / "state" / "host_probe.json"
+    bundled = default_config_path()
 
     rec = recommend()
     save_probe(probe_path, rec)
@@ -131,13 +147,13 @@ def run_configure(
         overlay = copy.deepcopy(rec.overlay)
         if role:
             overlay["role"] = role
-        apply_overlay(config_path, overlay, role=role)
+        apply_overlay(config_path, overlay, role=role, base_path=bundled)
         if seed_fp and role:
             _seed_labels(prefix, role)
         console.print(f"[green]Applied recommended config → {config_path}[/]")
         console.print(f"Probe saved → {probe_path}")
-        console.print("Next: set TELEGRAM_* in .env (or re-run configure interactive), then:")
-        console.print("  python -m sysspectogram guard --model artifacts/real_v3 --telegram")
+        console.print("Next: set TELEGRAM_* via home env (or re-run configure interactive), then:")
+        console.print("  python -m sysspectogram protect enable")
         return {"config": str(config_path), "overlay": overlay, "mode": "accept-recommended"}
 
     # Interactive
@@ -253,7 +269,7 @@ def run_configure(
             "signature_name": "artifacts.manifest.json.minisig",
         },
     }
-    apply_overlay(config_path, overlay, role=role_in)
+    apply_overlay(config_path, overlay, role=role_in, base_path=bundled)
     env_updates = {"SYSSPECTOGRAM_ROLE": role_in}
     if token:
         env_updates["TELEGRAM_BOT_TOKEN"] = token

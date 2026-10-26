@@ -21,7 +21,23 @@ def configs_dir() -> Path:
 
 
 def default_config_path() -> Path:
+    """Bundled read-only defaults (wheel resources or source tree configs/)."""
     return configs_dir() / "default.yaml"
+
+
+def writable_config_path() -> Path:
+    """Operator-writable config under SYSSPECTOGRAM_HOME (or source tree)."""
+    return state_root() / "configs" / "default.yaml"
+
+
+def resolve_config_path(path: str | Path | None = None) -> Path:
+    """Prefer an explicit path, then HOME overlay, then bundled defaults."""
+    if path is not None:
+        return Path(path)
+    home_cfg = writable_config_path()
+    if home_cfg.is_file():
+        return home_cfg
+    return default_config_path()
 
 
 DEFAULT_CONFIG = default_config_path()
@@ -38,38 +54,55 @@ def state_root() -> Path:
     return Path(env) if env else ROOT
 
 
+def dotenv_path() -> Path:
+    """Telegram / Cloudflare secrets — always under state_root, never site-packages."""
+    return state_root() / ".env"
+
+
 def load_dotenv(path: Path | None = None) -> None:
     """Load KEY=VALUE from .env into os.environ (does not override existing)."""
     global _DOTENV_LOADED
     if _DOTENV_LOADED:
         return
-    env_path = path or (ROOT / ".env")
-    if not env_path.exists():
-        _DOTENV_LOADED = True
-        return
+    candidates: list[Path]
+    if path is not None:
+        candidates = [Path(path)]
+    else:
+        # Prefer install home; fall back to legacy source-tree .env for dev checkouts.
+        candidates = [dotenv_path()]
+        legacy = ROOT / ".env"
+        if legacy.resolve() != candidates[0].resolve():
+            candidates.append(legacy)
+    loaded_any = False
     try:
         from sysspectogram.secret_file import ensure_secret_mode
 
-        mode = env_path.stat().st_mode & 0o777
-        if mode & 0o077:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "%s mode is %04o (expected 0600); tightening permissions",
-                env_path,
-                mode,
-            )
-            ensure_secret_mode(env_path)
-        for raw in env_path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
+        for env_path in candidates:
+            if not env_path.exists():
                 continue
-            key, _, val = line.partition("=")
-            key = key.strip()
-            val = val.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = val
+            loaded_any = True
+            mode = env_path.stat().st_mode & 0o777
+            if mode & 0o077:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "%s mode is %04o (expected 0600); tightening permissions",
+                    env_path,
+                    mode,
+                )
+                ensure_secret_mode(env_path)
+            for raw in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = val
     except OSError:
+        pass
+    if not loaded_any:
         pass
     _DOTENV_LOADED = True
 
@@ -321,7 +354,7 @@ def _scrub_yaml_cidrs(data: dict[str, Any]) -> dict[str, Any]:
 
 def load_config(path: str | Path | None = None) -> dict[str, Any]:
     load_dotenv()
-    cfg_path = Path(path) if path else DEFAULT_CONFIG
+    cfg_path = resolve_config_path(path)
     with cfg_path.open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     data = _scrub_yaml_cidrs(data if isinstance(data, dict) else {})
