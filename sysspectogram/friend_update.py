@@ -13,8 +13,35 @@ from typing import Any
 
 from sysspectogram.config import state_root
 
-DEFAULT_REPO = os.environ.get("SYSSPECTOGRAM_GITHUB_REPO", "lifeqsoll/SysSpectogram")
+DEFAULT_REPO = "lifeqsoll/SysSpectogram"
 UA = "SysSpectogram-FriendUpdate/1.1"
+
+
+def _github_repo() -> str:
+    alt = (os.environ.get("SYSSPECTOGRAM_GITHUB_REPO") or "").strip()
+    if alt:
+        if os.environ.get("SYSSPECTOGRAM_DEV") != "1":
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "refusing SYSSPECTOGRAM_GITHUB_REPO without SYSSPECTOGRAM_DEV=1; using %s",
+                DEFAULT_REPO,
+            )
+            return DEFAULT_REPO
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "SYSSPECTOGRAM_DEV=1 using alternate GitHub repo %s", alt
+        )
+        return alt
+    return DEFAULT_REPO
+
+
+def _minisign_bin() -> str:
+    for path in ("/usr/bin/minisign", "/usr/local/bin/minisign"):
+        if Path(path).is_file():
+            return path
+    raise RuntimeError("minisign not found at /usr/bin/minisign (or /usr/local/bin)")
 
 
 def _home() -> Path:
@@ -40,9 +67,26 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _verify_minisign(pub: Path, data: Path, sig: Path) -> None:
+def _trusted_comment_ok(output: str, tag: str, asset_name: str) -> bool:
+    want = f"sysspectogram {tag.strip()} {asset_name.strip()}"
+    for line in output.splitlines():
+        if line.strip().startswith("Trusted comment:"):
+            got = line.split(":", 1)[1].strip()
+            return got == want
+    return False
+
+
+def _verify_minisign(pub: Path, data: Path, sig: Path, *, tag: str, asset_name: str) -> None:
     r = subprocess.run(
-        ["minisign", "-Vm", str(data), "-p", str(pub), "-x", str(sig)],
+        [
+            _minisign_bin(),
+            "-Vm",
+            str(data),
+            "-p",
+            str(pub),
+            "-x",
+            str(sig),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -50,6 +94,11 @@ def _verify_minisign(pub: Path, data: Path, sig: Path) -> None:
     if r.returncode != 0:
         err = (r.stderr or r.stdout or "minisign failed").strip()
         raise RuntimeError(err)
+    combined = (r.stdout or "") + (r.stderr or "")
+    if not _trusted_comment_ok(combined, tag, asset_name):
+        raise RuntimeError(
+            f"minisign trusted comment mismatch for {asset_name} (tag {tag})"
+        )
 
 
 def _version_tuple(ver: str) -> tuple[int, ...]:
@@ -106,8 +155,9 @@ def update_stack(tag: str) -> dict[str, Any]:
     cache.mkdir(parents=True, exist_ok=True)
     steps: list[dict[str, Any]] = []
 
+    repo = _github_repo()
     release = json.loads(
-        _get(f"https://api.github.com/repos/{DEFAULT_REPO}/releases/tags/{tag}").decode()
+        _get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}").decode()
     )
     assets = {a["name"]: a["browser_download_url"] for a in release.get("assets") or []}
     steps.append({"step": "release", "ok": True, "tag": tag})
@@ -191,14 +241,14 @@ def update_stack(tag: str) -> dict[str, Any]:
     sig_agent = cache / "agent.minisig"
     _download(assets[agent_sig_name], sig_agent)
     try:
-        _verify_minisign(pub, agent_path, sig_agent)
+        _verify_minisign(pub, agent_path, sig_agent, tag=tag, asset_name=agent_key)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"minisign agent: {exc}", "steps": steps}
     steps.append({"step": "minisign_agent", "ok": True})
     sig_wheel = cache / "wheel.minisig"
     _download(assets[wheel_sig_name], sig_wheel)
     try:
-        _verify_minisign(pub, wheel_path, sig_wheel)
+        _verify_minisign(pub, wheel_path, sig_wheel, tag=tag, asset_name=wheel_name)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"minisign wheel: {exc}", "steps": steps}
     steps.append({"step": "minisign_wheel", "ok": True})

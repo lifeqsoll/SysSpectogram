@@ -14,6 +14,16 @@
     </defaults>
   </action>
 
+  <action id="org.sysspectogram.install-helper">
+    <description>Install the SysSpectogram privileged helper from a signed release</description>
+    <message>Authentication is required to install the SysSpectogram helper</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
   <action id="org.sysspectogram.helper.bundle-install">
     <description>Install a signed SysSpectogram release bundle</description>
     <message>Authentication is required to install a SysSpectogram release</message>

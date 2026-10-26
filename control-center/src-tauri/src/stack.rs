@@ -144,7 +144,7 @@ impl Stack {
         if helper::request("status", json!({})).is_ok() {
             return step(true, "helper already running");
         }
-        let out = Command::new("pkexec")
+        let out = Command::new("/usr/bin/pkexec")
             .args(["systemctl", "start", HELPER_UNIT])
             .output();
         let out = match out {

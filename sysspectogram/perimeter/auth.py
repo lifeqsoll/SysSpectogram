@@ -27,7 +27,7 @@ _AUTH_RE = re.compile(
     r"(?:sshd(?:-session)?\[\d+\]:\s+)?"
     r"(?P<kind>Failed password for invalid user |Failed password for |Invalid user |Accepted \S+ for )"
     r"(?P<user>\S+)"
-    r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
+    r".*? from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
     r"(?: ssh2(?:: \S+ SHA256:\S+"
     r"(?: ID (?P<cert_id>.+?) \(serial (?P<cert_serial>\d+)\) CA \S+ SHA256:\S+)?"
     r")?)?\s*$",
@@ -43,7 +43,7 @@ _ACCEPTED_LOOSE_RE = re.compile(
     r")?"
     r"(?:sshd(?:-session)?\[\d+\]:\s+)?"
     r"Accepted \S+ for (?P<user>\S+)"
-    r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)",
+    r".*? from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)",
     re.I,
 )
 
@@ -92,13 +92,16 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
         ip = _normalize_auth_ip(m.group("ip"))
         if ip is None:
             return None
+        cert_id = m.groupdict().get("cert_id")
+        if cert_id is not None:
+            cert_id = cert_id.strip().strip('"')
         return AuthEvent(
             _kind_from_match(m.group("kind")),
             ip,
             m.group("user"),
             text,
             ts,
-            cert_id=m.groupdict().get("cert_id"),
+            cert_id=cert_id,
             cert_serial=m.groupdict().get("cert_serial"),
         )
     # Accepted with unusual cert ID (spaces / quotes) that broke the strict tail.

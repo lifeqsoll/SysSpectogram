@@ -233,36 +233,13 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
             include_str!("../keys/SysSpectogram.minisign.pub"),
         )
         .map_err(|e| e.to_string())?;
-        // Absolute path only — never PATH (same-UID fake minisign, H-02).
-        let minisign = if std::path::Path::new("/usr/bin/minisign").is_file() {
-            "/usr/bin/minisign"
-        } else if std::path::Path::new("/usr/local/bin/minisign").is_file() {
-            "/usr/local/bin/minisign"
-        } else {
-            return Err(
-                "minisign not found at /usr/bin/minisign (or /usr/local/bin)".into(),
-            );
-        };
-        let status = Command::new(minisign)
-            .args([
-                "-Vm",
-                script_path.to_str().unwrap_or(""),
-                "-p",
-                pub_path.to_str().unwrap_or(""),
-                "-x",
-                sig_path.to_str().unwrap_or(""),
-            ])
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .status()
-            .map_err(|e| {
-                format!(
-                    "minisign not available ({e}); install minisign to verify helper install script"
-                )
-            })?;
-        if !status.success() {
-            return Err("minisign verify failed for install-helper-from-release.sh".into());
-        }
+        crate::bootstrap::try_minisign(
+            &pub_path,
+            &script_path,
+            &sig_path,
+            &t,
+            "install-helper-from-release.sh",
+        )?;
         Ok(())
     })() {
         cleanup(&stage);
@@ -313,6 +290,8 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
     }
 
     let mut child = Command::new(pkexec)
+        .arg("--action")
+        .arg("org.sysspectogram.install-helper")
         .args(&env_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

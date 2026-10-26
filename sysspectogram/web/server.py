@@ -5,6 +5,7 @@ import json
 import secrets
 import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,19 @@ MAX_WEB_CONNECTIONS = 32
 MAX_SSE_STREAMS = 4
 SSE_MAX_LIFE_SEC = 30 * 60
 HANDLER_SOCKET_TIMEOUT = 15.0
+SECURITY_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://telegram.org; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'"
+)
+UNLOCK_RATE_MAX = 5
+UNLOCK_RATE_WINDOW_SEC = 60.0
 
 
 class WebAppState:
@@ -48,6 +62,26 @@ class WebAppState:
         self._sessions: dict[str, float] = {}
         self._lock = threading.Lock()
         self._sse_slots = threading.BoundedSemaphore(MAX_SSE_STREAMS)
+        self._unlock_fails: dict[str, deque[float]] = {}
+        self._unlock_rl_lock = threading.Lock()
+
+    def _unlock_rate_status(self, ip: str) -> tuple[bool, float, int]:
+        """Return (allowed, backoff_sec, recent_fail_count)."""
+        now = time.time()
+        with self._unlock_rl_lock:
+            q = self._unlock_fails.setdefault(ip, deque())
+            while q and now - q[0] >= UNLOCK_RATE_WINDOW_SEC:
+                q.popleft()
+            n = len(q)
+            if n >= UNLOCK_RATE_MAX:
+                backoff = min(2.0, 0.25 * (2 ** min(n - UNLOCK_RATE_MAX, 4)))
+                return False, backoff, n
+            backoff = min(1.5, 0.08 * (2 ** n)) if n else 0.0
+            return True, backoff, n
+
+    def _unlock_record_fail(self, ip: str) -> None:
+        with self._unlock_rl_lock:
+            self._unlock_fails.setdefault(ip, deque()).append(time.time())
 
     def issue_session(self) -> str:
         tok = secrets.token_urlsafe(24)
@@ -207,6 +241,7 @@ def _make_handler(app: WebAppState):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Security-Policy", SECURITY_CSP)
             if extra:
                 for k, v in extra.items():
                     self.send_header(k, v)
@@ -250,6 +285,8 @@ def _make_handler(app: WebAppState):
                 return self._static("styles.css", "text/css; charset=utf-8")
             if path == "/app.js":
                 return self._static("app.js", "application/javascript; charset=utf-8")
+            if path == "/chart.umd.min.js":
+                return self._static("chart.umd.min.js", "application/javascript; charset=utf-8")
             if path == "/api/health":
                 body: dict[str, Any] = {"ok": True}
                 if self._authorized():
@@ -363,7 +400,17 @@ def _make_handler(app: WebAppState):
                 # Unauthenticated callers: only a correct code mints a session.
                 # Wrong guesses must not burn fail_count (local uid lockout DoS).
                 if not authed:
+                    ip = self._client_ip()
+                    allowed, backoff, _n = app._unlock_rate_status(ip)
+                    if backoff > 0:
+                        time.sleep(backoff)
+                    if not allowed:
+                        return self._json(
+                            429,
+                            {"ok": False, "error": "rate limited", "unlocked": False},
+                        )
                     if not app.unlock.code_matches(code):
+                        app._unlock_record_fail(ip)
                         return self._json(
                             403,
                             {"ok": False, "error": "bad unlock code", "unlocked": False},

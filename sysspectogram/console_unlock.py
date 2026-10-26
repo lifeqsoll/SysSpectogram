@@ -38,7 +38,18 @@ class ConsoleUnlock:
         self.enabled = enabled
         self.ttl_sec = float(ttl_sec)
         self.code_ttl_sec = float(code_ttl_sec)
-        self.code_len = max(6, int(code_len))
+        # Non-expiring codes must stay long enough that unauth rate-limited
+        # brute force stays impractical (audit R-04).
+        want_len = max(6, int(code_len))
+        if self.code_ttl_sec <= 0 and want_len < 10:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "unlock_code_len=%s with unlock_code_ttl_sec<=0 raised to 10",
+                want_len,
+            )
+            want_len = 10
+        self.code_len = want_len
         self.on_code = on_code
         self.persist_path = Path(persist_path) if persist_path else None
         self._code: str | None = None

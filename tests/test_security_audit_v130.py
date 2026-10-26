@@ -38,38 +38,62 @@ def test_h01_install_helper_mentions_minisign():
     assert 'releases/download/${TAG}/install-helper-from-release.sh' in readme
 
 
-@pytest.mark.skipif(shutil.which("minisign") is None, reason="minisign unavailable")
-def test_h01_install_helper_refuses_unsigned(tmp_path: Path, monkeypatch):
-    """Mock curl: helper+sha256 present but no .minisig → non-zero before install."""
-    script = ROOT / "scripts" / "install-helper-from-release.sh"
-    bin_path = tmp_path / "sysspectogram-helper-x86_64-linux"
-    bin_path.write_bytes(b"#!/bin/sh\necho PWNED\n")
+def _h01_pack_tgz(tmp_path: Path) -> Path:
+    import tarfile
+
+    allowed = [
+        "packaging/helper/sysspectogram-helper.service",
+        "packaging/helper/sysusers.conf",
+        "packaging/polkit/org.sysspectogram.helper.policy",
+        "scripts/install-helper-from-release.sh",
+    ]
+    root = tmp_path / "packroot"
+    for rel in allowed:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"{rel}\n", encoding="utf-8")
+    pack = tmp_path / "sysspectogram-helper-packaging.tgz"
+    with tarfile.open(pack, "w:gz") as tf:
+        for rel in allowed:
+            tf.add(root / rel, arcname=rel)
+    return pack
+
+
+def _h01_mock_curl(tmp_path: Path, *, bin_path: Path, pack: Path, sig_mode: str) -> Path:
+    """sig_mode: missing | bad | stale_comment"""
     sha = subprocess.check_output(["sha256sum", str(bin_path)], text=True).split()[0]
     (tmp_path / "helper.sha256").write_text(f"{sha}  helper\n", encoding="utf-8")
-    pack = tmp_path / "sysspectogram-helper-packaging.tgz"
-    # minimal empty-ish tgz with wrong content — verification fails on missing sig first
-    subprocess.check_call(
-        ["tar", "-czf", str(pack), "-C", str(tmp_path), bin_path.name],
-    )
+    bin_sig = tmp_path / "bin.minisig"
+    pack_sig = tmp_path / "pack.minisig"
+    if sig_mode == "missing":
+        bin_sig.write_text("", encoding="utf-8")
+        pack_sig.write_text("", encoding="utf-8")
+    else:
+        bin_sig.write_text("sig\n", encoding="utf-8")
+        pack_sig.write_text("sig\n", encoding="utf-8")
 
     mock_curl = tmp_path / "curl"
     mock_curl.write_text(
         f"""#!/bin/bash
-# very small mock: last -o dest wins
+set -euo pipefail
 dest=""
+url=""
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "-o" ]]; then dest="$2"; shift 2; continue; fi
+  url="$1"
   shift
 done
-url="${{@: -1}}"
 case "$url" in
-  *releases/tags*) echo '{{"assets":[
-    {{"name":"sysspectogram-helper-x86_64-linux","browser_download_url":"file://{bin_path}"}},
-    {{"name":"sysspectogram-helper-x86_64-linux.minisig","browser_download_url":"file://{tmp_path}/missing.minisig"}},
-    {{"name":"sysspectogram-helper-x86_64-linux.sha256","browser_download_url":"file://{tmp_path}/helper.sha256"}},
-    {{"name":"sysspectogram-helper-packaging.tgz","browser_download_url":"file://{pack}"}},
-    {{"name":"sysspectogram-helper-packaging.tgz.minisig","browser_download_url":"file://{tmp_path}/missing.minisig"}}
-  ]}}'; ;;
+  *releases/tags*) cat <<JSON
+{{"assets":[
+  {{"name":"sysspectogram-helper-x86_64-linux","browser_download_url":"file://{bin_path}"}},
+  {{"name":"sysspectogram-helper-x86_64-linux.minisig","browser_download_url":"file://{bin_sig}"}},
+  {{"name":"sysspectogram-helper-x86_64-linux.sha256","browser_download_url":"file://{tmp_path}/helper.sha256"}},
+  {{"name":"sysspectogram-helper-packaging.tgz","browser_download_url":"file://{pack}"}},
+  {{"name":"sysspectogram-helper-packaging.tgz.minisig","browser_download_url":"file://{pack_sig}"}}
+]}}
+JSON
+    ;;
   file://*) cp "${{url#file://}}" "$dest" ;;
   *) echo "unexpected $url" >&2; exit 1 ;;
 esac
@@ -77,20 +101,93 @@ esac
         encoding="utf-8",
     )
     mock_curl.chmod(0o755)
+    return mock_curl
+
+
+def _h01_mock_minisign(tmp_path: Path, *, mode: str) -> Path:
+    mock = tmp_path / "minisign"
+    mock.write_text(
+        """#!/bin/bash
+set -euo pipefail
+file=""
+sig=""
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "-Vm" ]]; then file="$arg"; fi
+  if [[ "$prev" == "-x" ]]; then sig="$arg"; fi
+  prev="$arg"
+done
+mode="${MOCK_MINISIGN_MODE:-ok}"
+if [[ "$mode" == "missing_sig" ]]; then
+  echo "invalid signature" >&2
+  exit 1
+fi
+if [[ "$mode" == "bad_key" ]]; then
+  echo "invalid signature" >&2
+  exit 1
+fi
+if [[ ! -s "$sig" ]]; then
+  echo "signature file missing" >&2
+  exit 1
+fi
+base="$(basename "$file")"
+comment="${MOCK_TRUSTED_COMMENT:-sysspectogram v1.3.3 $base}"
+echo "Signature and comment signature verified"
+echo "Trusted comment: $comment"
+exit 0
+""",
+        encoding="utf-8",
+    )
+    mock.chmod(0o755)
+    return mock
+
+
+def _run_h01_install(tmp_path: Path, monkeypatch, *, tag: str, minisign_mode: str, comment: str | None):
+    script = ROOT / "scripts" / "install-helper-from-release.sh"
+    bin_path = tmp_path / "sysspectogram-helper-x86_64-linux"
+    bin_path.write_bytes(b"#!/bin/sh\necho ok\n")
+    pack = _h01_pack_tgz(tmp_path)
+    sig_mode = "missing" if minisign_mode == "missing_sig" else "ok"
+    _h01_mock_curl(tmp_path, bin_path=bin_path, pack=pack, sig_mode=sig_mode)
+    _h01_mock_minisign(tmp_path, mode=minisign_mode)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH','')}")
-    # Script requires root; run the download/verify section via bash with EUID spoof hard —
-    # instead invoke and expect "run as root" OR run under fake root via unshare if available.
-    # We only assert the script would call minisign: extract verify path with SYSSPECTOGRAM_DEV.
-    proc = subprocess.run(
-        ["bash", str(script), "v1.3.0"],
+    monkeypatch.setenv("SYSSPECTOGRAM_HELPER_INSTALL_TEST", "1")
+    monkeypatch.setenv("MOCK_MINISIGN_MODE", minisign_mode)
+    if comment is not None:
+        monkeypatch.setenv("MOCK_TRUSTED_COMMENT", comment)
+    else:
+        monkeypatch.delenv("MOCK_TRUSTED_COMMENT", raising=False)
+    return subprocess.run(
+        ["bash", str(script), tag],
         capture_output=True,
         text=True,
+        env=os.environ.copy(),
     )
-    # Non-root → exit 1 before any install path.
+
+
+def test_h01_install_helper_refuses_missing_minisig(tmp_path: Path, monkeypatch):
+    proc = _run_h01_install(tmp_path, monkeypatch, tag="v1.3.3", minisign_mode="missing_sig", comment=None)
     assert proc.returncode != 0
-    assert "run as root" in (proc.stderr + proc.stdout).lower() or "need " in (
-        proc.stderr + proc.stdout
-    ).lower()
+    out = proc.stderr + proc.stdout
+    assert "signature" in out.lower() or "minisign" in out.lower()
+
+
+def test_h01_install_helper_refuses_bad_minisig(tmp_path: Path, monkeypatch):
+    proc = _run_h01_install(tmp_path, monkeypatch, tag="v1.3.3", minisign_mode="bad_key", comment=None)
+    assert proc.returncode != 0
+    assert "invalid signature" in (proc.stderr + proc.stdout).lower()
+
+
+def test_h01_install_helper_refuses_stale_trusted_comment(tmp_path: Path, monkeypatch):
+    proc = _run_h01_install(
+        tmp_path,
+        monkeypatch,
+        tag="v1.3.3",
+        minisign_mode="ok",
+        comment="sysspectogram v1.3.0 sysspectogram-helper-x86_64-linux",
+    )
+    assert proc.returncode != 0
+    assert "trusted comment mismatch" in (proc.stderr + proc.stdout).lower()
 
 
 def test_m03_ssh_cert_accepted():
@@ -128,6 +225,8 @@ def test_m03_ssh_cert_accepted():
     assert len(evs4) == 1
     assert evs4[0].kind in {"accepted", "accepted_unparsed"}
     assert evs4[0].ip == "203.0.113.50"
+    if evs4[0].kind == "accepted":
+        assert evs4[0].cert_id == "John Doe"
     # ID containing a forged from-ip must not change the source IP.
     inject = (
         "sshd[1]: Accepted publickey for alice from 203.0.113.51 port 22 "
@@ -217,6 +316,27 @@ def test_m01_unlock_already_unlocked_requires_bearer(tmp_path: Path):
         st2, data2, cookie2 = _post_unlock(port, {}, bearer=token)
         assert st2 == 200 and data2.get("unlocked") is True
         assert "ss_session=" in cookie2
+    finally:
+        httpd.shutdown()
+
+
+def test_r04_unauth_unlock_rate_limited(tmp_path: Path):
+    from sysspectogram.console_unlock import ConsoleUnlock
+
+    bus = LiveBus()
+    unlock = ConsoleUnlock(enabled=True, ttl_sec=3600)
+    httpd = start_web_server(
+        bus, host="127.0.0.1", port=0, unlock=unlock, token_path=False
+    )
+    port = httpd.server_address[1]
+    try:
+        statuses: list[int] = []
+        for _ in range(6):
+            st, data, _cookie = _post_unlock(port, {"code": "WRONGWRONG"})
+            statuses.append(st)
+            assert "ss_session" not in _cookie
+        assert statuses[-1] == 429, statuses
+        assert unlock.fail_count == 0
     finally:
         httpd.shutdown()
 
@@ -402,28 +522,29 @@ def test_i04_migrate_requires_trust_flag(tmp_path: Path):
 
 
 def test_l01_connection_cap():
+    import socket
+
     bus = LiveBus()
     httpd = start_web_server(bus, host="127.0.0.1", port=0, token_path=False, max_connections=2)
     port = httpd.server_address[1]
-    socks = []
+    socks: list[socket.socket] = []
     try:
-        import socket
-
-        for _ in range(8):
-            s = socket.create_connection(("127.0.0.1", port), timeout=1)
+        for _ in range(2):
+            s = socket.create_connection(("127.0.0.1", port), timeout=2)
             socks.append(s)
-        time.sleep(0.05)
+        s3 = socket.create_connection(("127.0.0.1", port), timeout=2)
+        body = s3.recv(256)
+        s3.close()
+        assert b"503" in body or b"Service Unavailable" in body
         for s in socks:
-            try:
-                s.close()
-            except OSError:
-                pass
+            s.close()
         socks.clear()
-        # Retry health until the semaphore has drained (handlers finish closing).
+
+        deadline = time.time() + 2.0
         last = b""
-        for _ in range(40):
+        while time.time() < deadline:
             try:
-                conn = HTTPConnection("127.0.0.1", port, timeout=2)
+                conn = HTTPConnection("127.0.0.1", port, timeout=1)
                 conn.putrequest("GET", "/api/health", skip_host=True)
                 conn.putheader("Host", "127.0.0.1")
                 conn.endheaders()
@@ -436,7 +557,7 @@ def test_l01_connection_cap():
             except OSError:
                 pass
             time.sleep(0.05)
-        raise AssertionError(f"health never recovered: {last!r}")
+        raise AssertionError(f"health never recovered within 2s: {last!r}")
     finally:
         for s in socks:
             try:

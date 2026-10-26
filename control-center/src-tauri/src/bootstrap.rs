@@ -87,20 +87,52 @@ fn verify_sha256(path: &Path, expected_line: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn try_minisign(pub_key: &Path, file: &Path, sig: &Path) -> Result<(), String> {
-    // Absolute path only — never PATH (same-UID fake ~/.local/bin/minisign).
+fn minisign_bin() -> Result<&'static str, String> {
     const MINISIGN: &str = "/usr/bin/minisign";
-    let bin = if Path::new(MINISIGN).is_file() {
-        MINISIGN
+    if Path::new(MINISIGN).is_file() {
+        Ok(MINISIGN)
     } else if Path::new("/usr/local/bin/minisign").is_file() {
-        "/usr/local/bin/minisign"
+        Ok("/usr/local/bin/minisign")
     } else {
-        return Err(
+        Err(
             "minisign not found at /usr/bin/minisign (or /usr/local/bin); install minisign"
                 .into(),
-        );
-    };
-    let status = Command::new(bin)
+        )
+    }
+}
+
+fn trusted_comment_from_output(out: &str) -> Option<String> {
+    for line in out.lines() {
+        if let Some(rest) = line.trim().strip_prefix("Trusted comment:") {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+fn verify_trusted_comment(comment: &str, tag: &str, filename: &str) -> Result<(), String> {
+    let want = format!(
+        "sysspectogram {} {}",
+        tag.trim(),
+        filename.trim()
+    );
+    if comment.trim() != want {
+        return Err(format!(
+            "minisign trusted comment mismatch: got {comment:?}, want {want:?}"
+        ));
+    }
+    Ok(())
+}
+
+pub fn try_minisign(
+    pub_key: &Path,
+    file: &Path,
+    sig: &Path,
+    tag: &str,
+    asset_name: &str,
+) -> Result<(), String> {
+    let bin = minisign_bin()?;
+    let output = Command::new(bin)
         .args([
             "-Vm",
             file.to_str().unwrap_or(""),
@@ -109,14 +141,19 @@ fn try_minisign(pub_key: &Path, file: &Path, sig: &Path) -> Result<(), String> {
             "-x",
             sig.to_str().unwrap_or(""),
         ])
-        .status();
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!("minisign verify failed ({s})")),
-        Err(e) => Err(format!(
-            "minisign not available ({e}); install minisign (signatures are mandatory)"
-        )),
+        .output()
+        .map_err(|e| format!("minisign not available ({e}); install minisign (signatures are mandatory)"))?;
+    if !output.status.success() {
+        return Err(format!("minisign verify failed ({})", output.status));
     }
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let tc = trusted_comment_from_output(&text)
+        .ok_or_else(|| "minisign verify ok but missing trusted comment".to_string())?;
+    verify_trusted_comment(&tc, tag, asset_name)
 }
 
 fn release_json(tag: &str) -> Result<Value, String> {
@@ -281,14 +318,20 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
         .map_err(|_| "release missing agent .minisig (required)".to_string())?;
     let sig_path = cache.join("agent.minisig");
     download(&agent_sig_url, &sig_path)?;
-    try_minisign(&pub_path, &agent_path, &sig_path)?;
+    try_minisign(
+        &pub_path,
+        &agent_path,
+        &sig_path,
+        tag,
+        "sysspectogram-agent-x86_64-linux-musl",
+    )?;
     log.push(json!({"step": "minisign_agent", "ok": true}));
     let wheel_sig_name = format!("{wheel_name}.minisig");
     let wheel_sig_url = asset_url(&release, &wheel_sig_name)
         .map_err(|_| "release missing wheel .minisig (required)".to_string())?;
     let wheel_sig_path = cache.join("wheel.minisig");
     download(&wheel_sig_url, &wheel_sig_path)?;
-    try_minisign(&pub_path, &wheel_path, &wheel_sig_path)?;
+    try_minisign(&pub_path, &wheel_path, &wheel_sig_path, tag, &wheel_name)?;
     log.push(json!({"step": "minisign_wheel", "ok": true}));
 
     // venv + pip install wheel (no heavy torch)

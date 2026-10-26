@@ -289,7 +289,7 @@ class PerimeterWatcher:
                 if a:
                     self.emit(a)
                     emitted.append(a)
-            elif ev.kind == "accepted":
+            elif ev.kind in {"accepted", "accepted_unparsed"}:
                 a = self.engine.on_auth_accepted(ev.ip, ev.user)
                 if a:
                     self.emit(a)

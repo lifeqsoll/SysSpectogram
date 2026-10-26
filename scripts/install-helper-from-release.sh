@@ -31,9 +31,13 @@ API="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
 # Embedded minisign pubkey (same as friend-day0 / Control Center / ADR 0005).
 MINISIGN_PUB_B64='RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
 
+INSTALL_TEST="${SYSSPECTOGRAM_HELPER_INSTALL_TEST:-}"
+
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "run as root: sudo $0 ${TAG}" >&2
-  exit 1
+  if [[ "${INSTALL_TEST}" != "1" ]]; then
+    echo "run as root: sudo $0 ${TAG}" >&2
+    exit 1
+  fi
 fi
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "need $1" >&2; exit 1; }; }
@@ -102,10 +106,58 @@ if [[ -z "${EXP}" || "${EXP}" != "${GOT}" ]]; then
 fi
 echo "==> sha256 ok"
 
+refuse_downgrade() {
+  local want="$1" have="$2"
+  [[ -z "${have}" ]] && return 0
+  WANT="${want}" HAVE="${have}" python3 -c '
+import os, sys
+def tup(v):
+    return tuple(int("".join(c for c in x if c.isdigit()) or "0") for x in v.strip().lstrip("v").split("."))
+w, h = tup(os.environ["WANT"]), tup(os.environ["HAVE"])
+sys.exit(0 if w >= h else 1)
+'
+}
+
+verify_minisign_asset() {
+  local file="$1" sig="$2" asset_name="$3"
+  local out tc want installed
+  if ! out="$(minisign -Vm "${file}" -p "${PUB_PATH}" -x "${sig}" 2>&1)"; then
+    echo "${out}" >&2
+    exit 1
+  fi
+  tc=""
+  while IFS= read -r line; do
+    if [[ "${line}" == Trusted\ comment:* ]]; then
+      tc="${line#Trusted comment:}"
+      tc="${tc#"${tc%%[![:space:]]*}"}"
+    fi
+  done <<< "${out}"
+  want="sysspectogram ${TAG} ${asset_name}"
+  if [[ -z "${tc}" || "${tc}" != "${want}" ]]; then
+    echo "minisign trusted comment mismatch: got '${tc}', want '${want}'" >&2
+    exit 1
+  fi
+  installed=""
+  if [[ -f /etc/sysspectogram/helper-release-tag ]]; then
+    installed="$(tr -d '[:space:]' < /etc/sysspectogram/helper-release-tag)"
+  elif [[ -n "${SYSSPECTOGRAM_INSTALLED_HELPER_TAG:-}" ]]; then
+    installed="${SYSSPECTOGRAM_INSTALLED_HELPER_TAG}"
+  fi
+  if [[ -n "${installed}" ]] && ! refuse_downgrade "${TAG}" "${installed}"; then
+    echo "refuse helper downgrade: installed ${installed}, requested ${TAG}" >&2
+    exit 1
+  fi
+}
+
 echo "==> minisign verify"
-minisign -Vm "${BIN}" -p "${PUB_PATH}" -x "${BIN_SIG}"
-minisign -Vm "${PACK_TGZ}" -p "${PUB_PATH}" -x "${PACK_SIG}"
+verify_minisign_asset "${BIN}" "${BIN_SIG}" "${BIN_NAME}"
+verify_minisign_asset "${PACK_TGZ}" "${PACK_SIG}" "${PACK_NAME}"
 echo "==> minisign ok"
+
+if [[ "${INSTALL_TEST}" == "1" ]]; then
+  echo "verify-only ok (tag ${TAG})"
+  exit 0
+fi
 
 PACK_DIR="${WORKDIR}/pack"
 mkdir -m 700 "${PACK_DIR}"
@@ -178,6 +230,7 @@ if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
   echo "  Start/Restart still asks for an admin password via polkit (desktop agent required)."
 fi
 
+install -Dm644 /dev/stdin /etc/sysspectogram/helper-release-tag <<< "${TAG}"
 systemctl --no-pager --full status sysspectogram-helper.service || true
 echo "helper socket: /run/sysspectogram/helper.sock"
 echo "minisign.pub: /usr/share/sysspectogram/minisign.pub"
