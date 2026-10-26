@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 # Install privileged helper from a GitHub Release (no local git / cargo).
 #
-# Friend one-liner (pinned tag — never main):
-#   curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.3.0
-#
-# Prefer the signed asset from the release (not raw.githubusercontent):
-#   curl -fsSL -O https://github.com/lifeqsoll/SysSpectogram/releases/download/v1.3.0/install-helper-from-release.sh
-#   curl -fsSL -O https://github.com/lifeqsoll/SysSpectogram/releases/download/v1.3.0/install-helper-from-release.sh.minisig
+# Prefer the signed release asset (raw.githubusercontent skips .minisig — do not use it):
+#   TAG=v1.3.1
+#   curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh"
+#   curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh.minisig"
 #   minisign -Vm install-helper-from-release.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
-#   sudo bash install-helper-from-release.sh v1.3.0
+#   sudo bash install-helper-from-release.sh "$TAG"
 #
 # Requires: curl, sha256sum, install, systemctl, minisign, python3, tar
 # Env: SYSSPECTOGRAM_DEV=1 + SYSSPECTOGRAM_GITHUB_REPO to allow a non-default repo
 set -euo pipefail
 
-TAG="${1:-v1.3.0}"
+TAG="${1:-v1.3.1}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
 
 REPO="lifeqsoll/SysSpectogram"

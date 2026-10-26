@@ -18,7 +18,7 @@ Update later: Settings → **Update stack from GitHub**, or re-run Install stack
 
 ```bash
 # python3 + python3-venv + curl + minisign  (use the *tag*, never main)
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/friend-day0.sh | bash -s -- v1.3.0
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.1/scripts/friend-day0.sh | bash -s -- v1.3.1
 
 # once per user (otherwise user systemd dies on logout):
 loginctl enable-linger $USER
@@ -46,13 +46,17 @@ export SYSSPECTOGRAM_HOME=~/.local/share/sysspectogram
 source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
 python -m sysspectogram protect enable
 python -m sysspectogram home settings --changes '{"response.never_ban_cidrs":"x.x.x.x/32"}'
-python -m sysspectogram home update --tag v1.3.0
+python -m sysspectogram home update --tag v1.3.1
 ```
 
 ## Privileged helper (optional, no git)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.3.0
+TAG=v1.3.1
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh.minisig"
+minisign -Vm install-helper-from-release.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
+sudo bash install-helper-from-release.sh "$TAG"
 ```
 
 Or from Control Center Settings (pkexec). Downloads `sysspectogram-helper-x86_64-linux` + unit/polkit from the tag.

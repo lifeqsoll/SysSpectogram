@@ -15,7 +15,23 @@ use crate::paths;
 const DEFAULT_REPO: &str = "lifeqsoll/SysSpectogram";
 
 pub fn github_repo() -> String {
-    std::env::var("SYSSPECTOGRAM_GITHUB_REPO").unwrap_or_else(|_| DEFAULT_REPO.into())
+    // Alternate repo only with explicit SYSSPECTOGRAM_DEV=1 (H-02 / N-01).
+    match std::env::var("SYSSPECTOGRAM_GITHUB_REPO") {
+        Ok(repo) if !repo.is_empty() => {
+            if std::env::var("SYSSPECTOGRAM_DEV").ok().as_deref() == Some("1") {
+                eprintln!(
+                    "WARNING: SYSSPECTOGRAM_DEV=1 using alternate GitHub repo {repo}"
+                );
+                repo
+            } else {
+                eprintln!(
+                    "refusing SYSSPECTOGRAM_GITHUB_REPO without SYSSPECTOGRAM_DEV=1; using {DEFAULT_REPO}"
+                );
+                DEFAULT_REPO.into()
+            }
+        }
+        _ => DEFAULT_REPO.into(),
+    }
 }
 
 fn cache_dir(root: &Path) -> PathBuf {
@@ -72,7 +88,19 @@ fn verify_sha256(path: &Path, expected_line: &str) -> Result<(), String> {
 }
 
 fn try_minisign(pub_key: &Path, file: &Path, sig: &Path) -> Result<(), String> {
-    let status = Command::new("minisign")
+    // Absolute path only — never PATH (same-UID fake ~/.local/bin/minisign).
+    const MINISIGN: &str = "/usr/bin/minisign";
+    let bin = if Path::new(MINISIGN).is_file() {
+        MINISIGN
+    } else if Path::new("/usr/local/bin/minisign").is_file() {
+        "/usr/local/bin/minisign"
+    } else {
+        return Err(
+            "minisign not found at /usr/bin/minisign (or /usr/local/bin); install minisign"
+                .into(),
+        );
+    };
+    let status = Command::new(bin)
         .args([
             "-Vm",
             file.to_str().unwrap_or(""),

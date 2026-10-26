@@ -118,6 +118,17 @@ class ConsoleUnlock:
     def normalize(code: str) -> str:
         return str(code).strip().upper().replace(" ", "").replace("-", "")
 
+    def code_matches(self, code: str) -> bool:
+        """Constant-time check without recording failures (for unauth web probes)."""
+        if not self.enabled:
+            return True
+        if self._code_expired() or not self._code:
+            return False
+        got = self.normalize(code)
+        if len(got) != len(self._code):
+            return False
+        return secrets.compare_digest(got, self._code)
+
     def try_unlock(self, code: str) -> bool:
         if not self.enabled:
             self._unlocked = True

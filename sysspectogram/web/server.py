@@ -317,24 +317,36 @@ def _make_handler(app: WebAppState):
                     extra["Vary"] = "Origin"
                 return self._json(200, {"ok": True, "user": user}, extra=extra)
 
-            # Console unlock via Mini App / local UI (code never in .env)
+            # Console unlock via Mini App / local UI (code never in .env).
+            # M-01: never mint ss_session for an unauthenticated loopback client —
+            # require Bearer (state/web.token) / existing session, OR a correct code
+            # in this request. Gate-off / already-unlocked alone is not enough.
             if path == "/api/unlock":
                 if not self._csrf_ok():
                     return self._json(403, {"ok": False, "error": "csrf"})
-                if app.public_url and not self._authorized():
+                authed = self._authorized()
+                if app.public_url and not authed:
                     return self._json(401, {"ok": False, "error": "unauthorized"})
-                if app.unlock is None or not app.unlock.enabled:
+
+                def _session_extra() -> dict[str, str]:
                     sess = app.issue_session()
                     cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                    if app.public_url and str(app.public_url).startswith("https"):
+                        cookie += "; Secure"
+                    return {"Set-Cookie": cookie}
+
+                if app.unlock is None or not app.unlock.enabled:
+                    if not authed:
+                        return self._json(401, {"ok": False, "error": "unauthorized"})
                     return self._json(
                         200,
                         {"ok": True, "unlocked": True, "note": "gate off"},
-                        extra={"Set-Cookie": cookie},
+                        extra=_session_extra(),
                     )
-                # Already unlocked (e.g. via Telegram): mint a web session without re-entry.
+
                 if app.unlock.unlocked():
-                    sess = app.issue_session()
-                    cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                    if not authed:
+                        return self._json(401, {"ok": False, "error": "unauthorized"})
                     return self._json(
                         200,
                         {
@@ -342,12 +354,21 @@ def _make_handler(app: WebAppState):
                             "unlocked": True,
                             "status": app.controllers.status() if app.controllers else {},
                         },
-                        extra={"Set-Cookie": cookie},
+                        extra=_session_extra(),
                     )
+
                 code = str(payload.get("code") or "")
+                if not code.strip():
+                    return self._json(401, {"ok": False, "error": "unauthorized"})
+                # Unauthenticated callers: only a correct code mints a session.
+                # Wrong guesses must not burn fail_count (local uid lockout DoS).
+                if not authed:
+                    if not app.unlock.code_matches(code):
+                        return self._json(
+                            403,
+                            {"ok": False, "error": "bad unlock code", "unlocked": False},
+                        )
                 if app.unlock.try_unlock(code):
-                    sess = app.issue_session()
-                    cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
                     return self._json(
                         200,
                         {
@@ -355,7 +376,7 @@ def _make_handler(app: WebAppState):
                             "unlocked": True,
                             "status": app.controllers.status() if app.controllers else {},
                         },
-                        extra={"Set-Cookie": cookie},
+                        extra=_session_extra(),
                     )
                 return self._json(
                     403,

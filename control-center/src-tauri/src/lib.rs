@@ -158,8 +158,7 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
     } else {
         format!("v{t}")
     };
-    let repo = std::env::var("SYSSPECTOGRAM_GITHUB_REPO")
-        .unwrap_or_else(|_| "lifeqsoll/SysSpectogram".into());
+    let repo = crate::bootstrap::github_repo();
     let api = format!("https://api.github.com/repos/{repo}/releases/tags/{t}");
     let release_text = ureq::get(&api)
         .set("User-Agent", "SysSpectogram-CC/1.1")
@@ -234,7 +233,17 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
             include_str!("../keys/SysSpectogram.minisign.pub"),
         )
         .map_err(|e| e.to_string())?;
-        let status = Command::new("minisign")
+        // Absolute path only — never PATH (same-UID fake minisign, H-02).
+        let minisign = if std::path::Path::new("/usr/bin/minisign").is_file() {
+            "/usr/bin/minisign"
+        } else if std::path::Path::new("/usr/local/bin/minisign").is_file() {
+            "/usr/local/bin/minisign"
+        } else {
+            return Err(
+                "minisign not found at /usr/bin/minisign (or /usr/local/bin)".into(),
+            );
+        };
+        let status = Command::new(minisign)
             .args([
                 "-Vm",
                 script_path.to_str().unwrap_or(""),
@@ -243,6 +252,8 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
                 "-x",
                 sig_path.to_str().unwrap_or(""),
             ])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
             .status()
             .map_err(|e| {
                 format!(

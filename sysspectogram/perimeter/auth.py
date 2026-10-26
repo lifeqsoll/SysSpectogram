@@ -29,8 +29,21 @@ _AUTH_RE = re.compile(
     r"(?P<user>\S+)"
     r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
     r"(?: ssh2(?:: \S+ SHA256:\S+"
-    r"(?: ID (?P<cert_id>\S+) \(serial (?P<cert_serial>\d+)\) CA \S+ SHA256:\S+)?"
+    r"(?: ID (?P<cert_id>.+?) \(serial (?P<cert_serial>\d+)\) CA \S+ SHA256:\S+)?"
     r")?)?\s*$",
+    re.I,
+)
+
+# Loose Accepted line when the strict cert/fingerprint tail fails (spaces in cert ID, etc.).
+_ACCEPTED_LOOSE_RE = re.compile(
+    r"^(?:"
+    r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+"
+    r"|"
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+\S+\s+"
+    r")?"
+    r"(?:sshd(?:-session)?\[\d+\]:\s+)?"
+    r"Accepted \S+ for (?P<user>\S+)"
+    r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)",
     re.I,
 )
 
@@ -75,20 +88,33 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
     if not text:
         return None
     m = _AUTH_RE.match(text)
-    if not m:
-        return None
-    ip = _normalize_auth_ip(m.group("ip"))
-    if ip is None:
-        return None
-    return AuthEvent(
-        _kind_from_match(m.group("kind")),
-        ip,
-        m.group("user"),
-        text,
-        ts,
-        cert_id=m.groupdict().get("cert_id"),
-        cert_serial=m.groupdict().get("cert_serial"),
-    )
+    if m:
+        ip = _normalize_auth_ip(m.group("ip"))
+        if ip is None:
+            return None
+        return AuthEvent(
+            _kind_from_match(m.group("kind")),
+            ip,
+            m.group("user"),
+            text,
+            ts,
+            cert_id=m.groupdict().get("cert_id"),
+            cert_serial=m.groupdict().get("cert_serial"),
+        )
+    # Accepted with unusual cert ID (spaces / quotes) that broke the strict tail.
+    if re.search(r"(?i)\bAccepted \S+ for ", text):
+        loose = _ACCEPTED_LOOSE_RE.search(text)
+        if loose:
+            ip = _normalize_auth_ip(loose.group("ip"))
+            if ip is not None:
+                return AuthEvent(
+                    "accepted_unparsed",
+                    ip,
+                    loose.group("user"),
+                    text,
+                    ts,
+                )
+    return None
 
 
 def parse_auth_lines(lines: list[str]) -> list[AuthEvent]:

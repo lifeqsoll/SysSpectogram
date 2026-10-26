@@ -29,6 +29,13 @@ def test_h01_install_helper_mentions_minisign():
     assert 'PACK_NAME="sysspectogram-helper-packaging.tgz"' in script
     assert "need minisign" in script
     assert "/usr/share/sysspectogram/minisign.pub" in script
+    assert 'TAG="${1:-v1.3.1}"' in script
+    header = script.split("set -euo pipefail", 1)[0]
+    assert "releases/download/" in header
+    assert "| sudo bash" not in header
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "install-helper-from-release.sh.minisig" in readme
+    assert 'releases/download/${TAG}/install-helper-from-release.sh' in readme
 
 
 @pytest.mark.skipif(shutil.which("minisign") is None, reason="minisign unavailable")
@@ -113,6 +120,22 @@ def test_m03_ssh_cert_accepted():
     evs3 = parse_auth_lines([forged])
     assert len(evs3) == 1 and evs3[0].ip == "203.0.113.8"
 
+    spaced = (
+        "sshd[1]: Accepted publickey for alice from 203.0.113.50 port 22 "
+        'ssh2: ECDSA-CERT SHA256:abc ID "John Doe" (serial 3) CA ECDSA SHA256:zzz'
+    )
+    evs4 = parse_auth_lines([spaced])
+    assert len(evs4) == 1
+    assert evs4[0].kind in {"accepted", "accepted_unparsed"}
+    assert evs4[0].ip == "203.0.113.50"
+    # ID containing a forged from-ip must not change the source IP.
+    inject = (
+        "sshd[1]: Accepted publickey for alice from 203.0.113.51 port 22 "
+        "ssh2: ECDSA-CERT SHA256:abc ID from 9.9.9.9 port 1 x (serial 3) CA ECDSA SHA256:zzz"
+    )
+    evs5 = parse_auth_lines([inject])
+    assert len(evs5) == 1 and evs5[0].ip == "203.0.113.51"
+
 
 def test_m01_action_requires_auth():
     bus = LiveBus()
@@ -131,6 +154,88 @@ def test_m01_action_requires_auth():
         resp = conn.getresponse()
         assert resp.status == 401, resp.read()
         conn.close()
+    finally:
+        httpd.shutdown()
+
+
+def _post_unlock(port: int, body: dict, *, bearer: str | None = None) -> tuple[int, dict, str]:
+    raw = json.dumps(body).encode()
+    conn = HTTPConnection("127.0.0.1", port, timeout=2)
+    conn.putrequest("POST", "/api/unlock", skip_host=True)
+    conn.putheader("Host", "127.0.0.1")
+    conn.putheader("Content-Type", "application/json")
+    conn.putheader("Content-Length", str(len(raw)))
+    conn.putheader("X-SS-CSRF", "1")
+    if bearer:
+        conn.putheader("Authorization", f"Bearer {bearer}")
+    conn.endheaders()
+    conn.send(raw)
+    resp = conn.getresponse()
+    headers = {k.lower(): v for k, v in resp.getheaders()}
+    data = json.loads(resp.read().decode() or "{}")
+    conn.close()
+    return resp.status, data, headers.get("set-cookie", "")
+
+
+def test_m01_unlock_gate_off_requires_bearer(tmp_path: Path):
+    """Gate off must not mint ss_session for unauthenticated loopback clients."""
+    bus = LiveBus()
+    token_path = tmp_path / "web.token"
+    httpd = start_web_server(bus, host="127.0.0.1", port=0, unlock=None, token_path=token_path)
+    port = httpd.server_address[1]
+    token = token_path.read_text(encoding="utf-8").strip()
+    try:
+        st, data, cookie = _post_unlock(port, {})
+        assert st == 401, data
+        assert "ss_session" not in cookie
+
+        st2, data2, cookie2 = _post_unlock(port, {}, bearer=token)
+        assert st2 == 200, data2
+        assert "ss_session=" in cookie2
+    finally:
+        httpd.shutdown()
+
+
+def test_m01_unlock_already_unlocked_requires_bearer(tmp_path: Path):
+    from sysspectogram.console_unlock import ConsoleUnlock
+
+    bus = LiveBus()
+    token_path = tmp_path / "web.token"
+    unlock = ConsoleUnlock(enabled=True, ttl_sec=3600)
+    assert unlock.try_unlock(unlock.pending_code or "")
+    assert unlock.unlocked()
+    httpd = start_web_server(
+        bus, host="127.0.0.1", port=0, unlock=unlock, token_path=token_path
+    )
+    port = httpd.server_address[1]
+    token = token_path.read_text(encoding="utf-8").strip()
+    try:
+        st, data, cookie = _post_unlock(port, {})
+        assert st == 401, data
+        assert "ss_session" not in cookie
+
+        st2, data2, cookie2 = _post_unlock(port, {}, bearer=token)
+        assert st2 == 200 and data2.get("unlocked") is True
+        assert "ss_session=" in cookie2
+    finally:
+        httpd.shutdown()
+
+
+def test_m01_unauth_wrong_code_does_not_burn_fails(tmp_path: Path):
+    from sysspectogram.console_unlock import ConsoleUnlock
+
+    bus = LiveBus()
+    unlock = ConsoleUnlock(enabled=True, ttl_sec=3600)
+    before = unlock.fail_count
+    httpd = start_web_server(
+        bus, host="127.0.0.1", port=0, unlock=unlock, token_path=False
+    )
+    port = httpd.server_address[1]
+    try:
+        st, data, cookie = _post_unlock(port, {"code": "WRONGWRONG"})
+        assert st == 403, data
+        assert "ss_session" not in cookie
+        assert unlock.fail_count == before
     finally:
         httpd.shutdown()
 
@@ -307,19 +412,31 @@ def test_l01_connection_cap():
         for _ in range(8):
             s = socket.create_connection(("127.0.0.1", port), timeout=1)
             socks.append(s)
-        # Hold connections open without reading — excess should get 503 or refuse.
-        time.sleep(0.2)
-        # A normal request must still eventually work after releasing.
+        time.sleep(0.05)
         for s in socks:
-            s.close()
+            try:
+                s.close()
+            except OSError:
+                pass
         socks.clear()
-        conn = HTTPConnection("127.0.0.1", port, timeout=2)
-        conn.putrequest("GET", "/api/health", skip_host=True)
-        conn.putheader("Host", "127.0.0.1")
-        conn.endheaders()
-        resp = conn.getresponse()
-        assert resp.status == 200, resp.read()
-        conn.close()
+        # Retry health until the semaphore has drained (handlers finish closing).
+        last = b""
+        for _ in range(40):
+            try:
+                conn = HTTPConnection("127.0.0.1", port, timeout=2)
+                conn.putrequest("GET", "/api/health", skip_host=True)
+                conn.putheader("Host", "127.0.0.1")
+                conn.endheaders()
+                resp = conn.getresponse()
+                last = resp.read()
+                status = resp.status
+                conn.close()
+                if status == 200:
+                    return
+            except OSError:
+                pass
+            time.sleep(0.05)
+        raise AssertionError(f"health never recovered: {last!r}")
     finally:
         for s in socks:
             try:
