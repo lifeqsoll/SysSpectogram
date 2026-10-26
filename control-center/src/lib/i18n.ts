@@ -51,7 +51,7 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   },
   'home.installHelperHelp': {
     en: 'Optional. Needs a desktop polkit password dialog (pkexec). If this window cannot prompt, run install-helper-from-release.sh with sudo in a normal terminal.',
-    ru: 'Опционально. Нужен диалог polkit (pkexec). Если окно не может спросить пароль — sudo bash scripts/install-helper-from-release.sh v1.2.1 в обычном терминале.',
+    ru: 'Опционально. Нужен диалог polkit (pkexec). Если окно не может спросить пароль — sudo bash scripts/install-helper-from-release.sh v1.2.2 в обычном терминале.',
   },
   'home.recent': { en: 'Recent alerts', ru: 'Недавние алерты' },
   'home.next': { en: 'What to do next', ru: 'Что сделать дальше' },

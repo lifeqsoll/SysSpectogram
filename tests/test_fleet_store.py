@@ -15,6 +15,8 @@ def test_fleet_upsert_primary(tmp_path: Path):
     assert st.primary_host_id == "b"
     assert store.load().hosts[0].id in {"a", "b"}
     pub = [h.public_dict() for h in st.hosts]
-    assert all(p.get("device_token") in ("", "***") for p in pub)
+    assert all("device_token" not in p for p in pub)
+    assert any(p.get("token_set") is True for p in pub)
+    assert any(p.get("token_set") is False for p in pub)
     store.set_primary("a")
     assert store.load().primary_host_id == "a"

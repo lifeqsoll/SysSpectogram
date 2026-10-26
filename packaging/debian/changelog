@@ -1,3 +1,11 @@
+sysspectogram (1.2.2-1) unstable; urgency=medium
+
+  * Fleet hub hardening (confirm gates, SSH token stdin, host-key pin),
+    soft IP fan-out, Edge CDN (Cloudflare under_attack), never-ban seed,
+    Fleet Center app, Control Center pair wizard / fleet hub only.
+
+ -- lifeqsoll <lifeqsoll@users.noreply.github.com>  Mon, 26 Oct 2026 15:20:00 +0300
+
 sysspectogram (1.2.1-1) unstable; urgency=medium
 
   * Fix wheel default.yaml, control.sock under SYSSPECTOGRAM_HOME,

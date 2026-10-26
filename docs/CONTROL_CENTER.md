@@ -141,7 +141,8 @@ Every top-level subcommand of `python -m sysspectogram` has a row. `scripts/chec
 | `home` | Settings / Home | Onboarding, `.env`, model import, health/digest/checklist, user-settings overlay, `home update` |
 | `protect` | Home / Onboarding | User systemd unit (real mode); Start + finish enable it |
 | `menu` | cli-only | Friend interactive menu for VPS/SSH (zapret-like) |
-| `fleet` | Fleet | Multi-VPS: graph, profiles, warmup, SSH fan-out (`list` / `graph` / `status` / `unlock-locked` / `attack` / `release` / `profile-*` / `warmup` / `tg` / `incidents` / `mark-fp` / `ban`) |
+| `fleet` | Fleet | Multi-VPS: graph, profiles, warmup, SSH fan-out (`list` / `graph` / `status` / `unlock-locked` / `attack` / `release` / `profile-*` / `warmup` / `tg` / `incidents` / `mark-fp` / `ban` / `pair-*` / `pin-host`) |
+| `edge` | Fleet | CDN/WAF hub adapter (Cloudflare Under Attack / clear / playbook M) — not a scrubber; see [EDGE.md](EDGE.md) |
 | `eval` | cli-only | Offline ML eval report / `schema_version` stamp |
 | `metrics` | cli-only | Prometheus text dump / localhost `/metrics` serve |
 | helper release install | Settings | `install-helper-from-release.sh` / `install_helper_release` (no git) |
