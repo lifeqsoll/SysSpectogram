@@ -43,3 +43,28 @@ def test_syslog_and_journal_formats():
     ev = parse_auth_lines(lines)
     assert [e.kind for e in ev] == ["failed", "invalid", "accepted"]
     assert [e.ip for e in ev] == ["203.0.113.10", "198.51.100.20", "192.0.2.10"]
+
+
+def test_accepted_publickey_with_fingerprint_tail():
+    # Real OpenSSH key login appends ``ssh2: ALG SHA256:…`` after the port.
+    lines = [
+        "sshd[512]: Accepted publickey for root from 203.0.113.50 port 51234 "
+        "ssh2: ED25519 SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+        "2024-10-26T12:00:01.123456+00:00 box sshd-session[99]: "
+        "Accepted publickey for alice from 198.51.100.9 port 22 "
+        "ssh2: RSA SHA256:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd",
+    ]
+    ev = parse_auth_lines(lines)
+    assert [e.kind for e in ev] == ["accepted", "accepted"]
+    assert [e.ip for e in ev] == ["203.0.113.50", "198.51.100.9"]
+
+
+def test_rfc3339_and_sshd_session_failed():
+    lines = [
+        "2024-10-26T12:00:01+00:00 host sshd-session[7]: "
+        "Failed password for root from 203.0.113.77 port 22 ssh2",
+    ]
+    ev = parse_auth_lines(lines)
+    assert len(ev) == 1
+    assert ev[0].ip == "203.0.113.77"
+    assert ev[0].kind == "failed"

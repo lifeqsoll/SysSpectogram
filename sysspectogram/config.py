@@ -78,6 +78,7 @@ OVERLAY_ALLOWED = frozenset(
         "ensemble.host_weight",
         "ensemble.agent_weight",
         "ensemble.risk_threshold",
+        "kirk.allow_ssh_cidrs",
         "kirk.vmi",
         "kirk.vmi_backend",
         "kirk.vmi_trust",
@@ -163,11 +164,39 @@ def _merge_overlay_dict(data: dict[str, Any], overlay: dict[str, Any]) -> dict[s
             from sysspectogram.admin_ip import validate_never_ban_cidr
 
             scrubbed: list[str] = []
+            dropped: list[str] = []
             for item in _parse_cidr_list(value):
                 canon, err = validate_never_ban_cidr(item)
                 if err is None and canon:
                     scrubbed.append(canon)
+                else:
+                    dropped.append(f"{item} ({err or 'invalid'})")
+            if dropped:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "scrubbed invalid response.never_ban_cidrs from overlay: %s",
+                    ", ".join(dropped),
+                )
             value = scrubbed
+        elif dotted == "kirk.allow_ssh_cidrs":
+            from sysspectogram.net_ip import validate_allow_ssh_cidr
+
+            scrubbed_a: list[str] = []
+            dropped_a: list[str] = []
+            for item in _parse_cidr_list(value):
+                try:
+                    scrubbed_a.append(validate_allow_ssh_cidr(item))
+                except ValueError as exc:
+                    dropped_a.append(f"{item} ({exc})")
+            if dropped_a:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "scrubbed invalid kirk.allow_ssh_cidrs from overlay: %s",
+                    ", ".join(dropped_a),
+                )
+            value = scrubbed_a
         elif not isinstance(value, _OVERLAY_TYPES):
             continue
         cur: dict[str, Any] = data
@@ -238,11 +267,51 @@ def _apply_settings_overlay(data: dict[str, Any]) -> dict[str, Any]:
     return _merge_overlay_dict(data, overlay)
 
 
+def _scrub_yaml_cidrs(data: dict[str, Any]) -> dict[str, Any]:
+    """Filter wide/invalid never_ban and allow_ssh_cidrs from base YAML (with warn)."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    resp = data.get("response")
+    if isinstance(resp, dict) and resp.get("never_ban_cidrs") is not None:
+        from sysspectogram.admin_ip import validate_never_ban_cidr
+
+        raw = _parse_cidr_list(resp.get("never_ban_cidrs"))
+        keep: list[str] = []
+        drop: list[str] = []
+        for item in raw:
+            canon, err = validate_never_ban_cidr(item)
+            if err is None and canon:
+                keep.append(canon)
+            else:
+                drop.append(f"{item} ({err or 'invalid'})")
+        if drop:
+            log.warning("scrubbed invalid response.never_ban_cidrs from YAML: %s", ", ".join(drop))
+        resp["never_ban_cidrs"] = keep
+    kirk = data.get("kirk")
+    if isinstance(kirk, dict) and kirk.get("allow_ssh_cidrs") is not None:
+        from sysspectogram.net_ip import validate_allow_ssh_cidr
+
+        raw = list(kirk.get("allow_ssh_cidrs") or [])
+        keep2: list[str] = []
+        drop2: list[str] = []
+        for item in raw:
+            try:
+                keep2.append(validate_allow_ssh_cidr(item))
+            except ValueError as exc:
+                drop2.append(f"{item} ({exc})")
+        if drop2:
+            log.warning("scrubbed invalid kirk.allow_ssh_cidrs from YAML: %s", ", ".join(drop2))
+        kirk["allow_ssh_cidrs"] = keep2
+    return data
+
+
 def load_config(path: str | Path | None = None) -> dict[str, Any]:
     load_dotenv()
     cfg_path = Path(path) if path else DEFAULT_CONFIG
     with cfg_path.open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
+    data = _scrub_yaml_cidrs(data if isinstance(data, dict) else {})
     # Env overrides for telegram (preferred over null YAML)
     tg = data.setdefault("telegram", {})
     if os.environ.get("TELEGRAM_BOT_TOKEN"):

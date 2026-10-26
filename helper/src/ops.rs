@@ -350,6 +350,7 @@ const SETTINGS_RULES: &[(&str, Kind)] = &[
     ("ensemble.host_weight", Kind::Float(0.0, 1.0)),
     ("ensemble.agent_weight", Kind::Float(0.0, 1.0)),
     ("ensemble.risk_threshold", Kind::Float(0.0, 1.0)),
+    ("kirk.allow_ssh_cidrs", Kind::String),
     ("kirk.vmi", Kind::Bool),
     ("kirk.vmi_backend", Kind::Enum(&["mock", "libvmi"])),
     ("kirk.vmi_trust", Kind::Enum(&["lab", "out-of-band"])),
@@ -401,6 +402,12 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
             }
             validate_never_ban_list(s)
         }
+        (Kind::String, Value::String(s)) if key == "kirk.allow_ssh_cidrs" => {
+            if s.len() > 2048 {
+                return Err(format!("{key}: string too long (max 2048)"));
+            }
+            validate_allow_ssh_list(s)
+        }
         (Kind::String, Value::String(s)) => {
             if s.len() > 2048 {
                 Err(format!("{key}: string too long (max 2048)"))
@@ -408,8 +415,10 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
                 Ok(())
             }
         }
-        // never_ban: allow a JSON array of IP/CIDR strings as well as one comma-separated string
-        (Kind::String, Value::Array(items)) if key == "response.never_ban_cidrs" => {
+        // never_ban / allow_ssh: JSON array of IP/CIDR strings or one comma-separated string
+        (Kind::String, Value::Array(items))
+            if key == "response.never_ban_cidrs" || key == "kirk.allow_ssh_cidrs" =>
+        {
             let mut total = 0usize;
             let mut parts: Vec<&str> = Vec::new();
             for item in items {
@@ -422,7 +431,12 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
                 }
                 parts.push(s);
             }
-            validate_never_ban_list(&parts.join(","))
+            let joined = parts.join(",");
+            if key == "kirk.allow_ssh_cidrs" {
+                validate_allow_ssh_list(&joined)
+            } else {
+                validate_never_ban_list(&joined)
+            }
         }
         _ => Err(format!("{key}: wrong value type")),
     }
@@ -462,6 +476,10 @@ fn validate_never_ban_cidr(raw: &str) -> Result<(), String> {
             if v6.is_unspecified() || v6.is_loopback() || v6.is_multicast() {
                 return Err("special_address".into());
             }
+            // Match Python: reject IPv4-mapped (::ffff:a.b.c.d).
+            if v6.to_ipv4_mapped().is_some() {
+                return Err("special_address".into());
+            }
             (64u8, 128u8)
         }
     };
@@ -491,6 +509,60 @@ fn validate_never_ban_list(raw: &str) -> Result<(), String> {
             continue;
         }
         validate_never_ban_cidr(p).map_err(|e| format!("response.never_ban_cidrs: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Looser than never_ban (admin SSH allow may be /8+), but still reject junk /0 / mapped.
+fn validate_allow_ssh_cidr(raw: &str) -> Result<(), String> {
+    use std::net::IpAddr;
+
+    let token = raw.trim();
+    if token.is_empty() {
+        return Err("empty".into());
+    }
+    let (addr_s, prefix_opt) = match token.split_once('/') {
+        Some((a, p)) => (a.trim(), Some(p.trim())),
+        None => (token, None),
+    };
+    let addr: IpAddr = addr_s
+        .parse()
+        .map_err(|_| format!("invalid_ip in {token}"))?;
+    let (min_pref, host_pref) = match addr {
+        IpAddr::V4(_) => (8u8, 32u8),
+        IpAddr::V6(v6) => {
+            if v6.to_ipv4_mapped().is_some() {
+                return Err("special_address".into());
+            }
+            (32u8, 128u8)
+        }
+    };
+    let prefix: u8 = match prefix_opt {
+        None => host_pref,
+        Some(p) => p
+            .parse()
+            .map_err(|_| format!("bad prefix in {token}"))?,
+    };
+    if prefix > host_pref {
+        return Err("invalid_ip".into());
+    }
+    if prefix < min_pref {
+        return Err("too_wide".into());
+    }
+    Ok(())
+}
+
+fn validate_allow_ssh_list(raw: &str) -> Result<(), String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Ok(());
+    }
+    for part in text.split([',', ';', ' ']) {
+        let p = part.trim();
+        if p.is_empty() {
+            continue;
+        }
+        validate_allow_ssh_cidr(p).map_err(|e| format!("kirk.allow_ssh_cidrs: {e}"))?;
     }
     Ok(())
 }

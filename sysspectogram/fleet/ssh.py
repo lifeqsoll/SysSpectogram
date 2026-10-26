@@ -24,7 +24,13 @@ class SshResult:
     returncode: int
 
     def json(self) -> dict[str, Any] | None:
-        text = (self.stdout or "").strip()
+        # With ``ssh -tt``, motd/banners and remote stderr can land in either
+        # stream (and lines may carry ``\\r``). Scan both, last JSON object wins.
+        chunks: list[str] = []
+        for part in (self.stdout, self.stderr):
+            if part:
+                chunks.append(part.replace("\r\n", "\n").replace("\r", "\n"))
+        text = "\n".join(chunks).strip()
         if not text:
             return None
         for line in reversed(text.splitlines()):

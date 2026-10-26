@@ -47,3 +47,40 @@ def nft_cidr_family(cidr: str) -> tuple[str, str]:
         raise ValueError("empty cidr")
     net = ip_network(token, strict=False)
     return ("ip6" if net.version == 6 else "ip"), str(net)
+
+
+def validate_allow_ssh_cidr(raw: Any) -> str:
+    """Canonical CIDR for kirk.allow_ssh_cidrs / lockdown allows, or raise ValueError.
+
+    Rejects junk, over-wide prefixes (``/0``…), and IPv4-mapped IPv6 (``::ffff:…``).
+    """
+    from ipaddress import IPv4Network, IPv6Network, ip_network
+
+    token = str(raw or "").strip()
+    if not token:
+        raise ValueError("empty cidr")
+    try:
+        net = ip_network(token, strict=False)
+    except ValueError as exc:
+        raise ValueError(f"invalid cidr: {token!r}") from exc
+    if isinstance(net, IPv4Network):
+        if net.prefixlen < 8:
+            raise ValueError(f"cidr too wide: {token!r}")
+        if net.network_address.is_unspecified and net.prefixlen == 0:
+            raise ValueError(f"cidr too wide: {token!r}")
+    elif isinstance(net, IPv6Network):
+        if net.prefixlen < 32:
+            raise ValueError(f"cidr too wide: {token!r}")
+        if getattr(net.network_address, "ipv4_mapped", None) is not None:
+            raise ValueError(f"ipv4-mapped address not allowed: {token!r}")
+    else:
+        raise ValueError(f"invalid cidr: {token!r}")
+    return str(net)
+
+
+def validate_allow_ssh_cidrs(raw: list[Any] | None) -> list[str]:
+    """Validate a full allow list; raise ValueError on the first bad entry."""
+    out: list[str] = []
+    for item in raw or []:
+        out.append(validate_allow_ssh_cidr(item))
+    return out

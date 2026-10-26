@@ -211,17 +211,24 @@ class NftBackend:
         This is a **host soft-mitigation** under scan/flood noise — not anti-DDoS / CDN.
         Always pass admin SSH CIDRs or you can lock yourself out of new sessions.
         """
-        allows = [str(c).strip() for c in (allow_cidrs or self.never_ban_cidrs or []) if str(c).strip()]
+        from sysspectogram.net_ip import nft_cidr_family, validate_allow_ssh_cidrs
+
+        raw_allows = [str(c).strip() for c in (allow_cidrs or self.never_ban_cidrs or []) if str(c).strip()]
+        # Refuse empty / invalid allow before any nft mutation.
+        if not raw_allows:
+            return (
+                "lockdown refused: allow_cidrs/never_ban empty "
+                "(would drop new SSH SYN from your admin IP)"
+            )
+        try:
+            allows = validate_allow_ssh_cidrs(raw_allows)
+            families = [nft_cidr_family(c) for c in allows]
+        except ValueError as exc:
+            return f"lockdown refused: {exc}"
         if dry_run:
             return (
                 "dry-run lockdown: established+allow_cidrs accept, then SYN drop "
                 f"allow={allows or '-'}"
-            )
-        # Refuse empty allow before nft check so CI/hosts without nft still fail safe.
-        if not allows:
-            return (
-                "lockdown refused: allow_cidrs/never_ban empty "
-                "(would drop new SSH SYN from your admin IP)"
             )
         if not shutil.which("nft"):
             return "nft required for lockdown"
@@ -242,13 +249,7 @@ class NftBackend:
                 "sysspectogram:lockdown:est",
             ]
         )
-        for cidr in allows:
-            try:
-                from sysspectogram.net_ip import nft_cidr_family
-
-                fam, canon = nft_cidr_family(cidr)
-            except ValueError:
-                return f"lockdown refused: invalid cidr {cidr!r}"
+        for fam, canon in families:
             code, out = self._run(
                 [
                     "nft",
@@ -499,17 +500,29 @@ class NftBackend:
         """Drop most traffic except allowlisted SSH sources (table inet ss_kirk).
 
         TTL is tracked in-process; call ``expire_kirk_isolate`` / ``list_bans`` to release.
+
+        All CIDRs are validated *before* any nft mutation so a typo cannot leave
+        a policy-drop table with no allow rules (and no way out via Telegram).
         """
-        allow_cidrs = allow_cidrs or []
+        from sysspectogram.net_ip import nft_cidr_family, validate_allow_ssh_cidrs
+
+        raw = list(allow_cidrs or [])
+        if not raw:
+            return "kirk_isolate refused: allow_ssh_cidrs empty (would lock you out)"
+        try:
+            allow_cidrs = validate_allow_ssh_cidrs(raw)
+        except ValueError as exc:
+            return f"kirk_isolate refused: {exc}"
+        families: list[tuple[str, str]] = []
         for cidr in allow_cidrs:
-            if not _SAFE_CIDR.match(str(cidr).strip()):
-                return f"kirk_isolate refused: invalid cidr {cidr!r}"
+            try:
+                families.append(nft_cidr_family(cidr))
+            except ValueError as exc:
+                return f"kirk_isolate refused: invalid cidr {cidr!r} ({exc})"
         if dry_run:
             return f"dry-run kirk_isolate allow={allow_cidrs} ttl={ttl_sec}"
         if not shutil.which("nft"):
             return "nft required for kirk_isolate"
-        if not allow_cidrs:
-            return "kirk_isolate refused: allow_ssh_cidrs empty (would lock you out)"
         self._run(["nft", "add", "table", "inet", "ss_kirk"])
         self._run(["nft", "flush", "table", "inet", "ss_kirk"])
         self._run(
@@ -552,13 +565,7 @@ class NftBackend:
             )
         self._run(["nft", "add", "rule", "inet", "ss_kirk", "input", "iif", "lo", "accept"])
         self._run(["nft", "add", "rule", "inet", "ss_kirk", "output", "oif", "lo", "accept"])
-        for cidr in allow_cidrs:
-            try:
-                from sysspectogram.net_ip import nft_cidr_family
-
-                fam, canon = nft_cidr_family(cidr)
-            except ValueError:
-                return f"kirk_isolate refused: invalid cidr {cidr!r}"
+        for fam, canon in families:
             self._run(
                 [
                     "nft",
@@ -616,15 +623,6 @@ class NftBackend:
         if time.time() < self._kirk_expires:
             return None
         return self.kirk_release(dry_run=dry_run)
-
-
-_SAFE_CIDR = re.compile(
-    r"^(?:"
-    r"(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?"  # IPv4 / optional prefix
-    r"|"
-    r"[0-9a-fA-F:]+(?:/\d{1,3})?"  # coarse IPv6
-    r")$"
-)
 
 
 def read_proc_comm(pid: int) -> str | None:

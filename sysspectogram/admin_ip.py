@@ -65,6 +65,9 @@ def validate_never_ban_cidr(raw: str) -> tuple[str | None, str | None]:
             return None, "too_wide"
         if addr.is_unspecified or addr.is_loopback or addr.is_multicast or addr.is_reserved:
             return None, "special_address"
+        # Keep never_ban consistent with Rust helper (reject IPv4-mapped).
+        if getattr(addr, "ipv4_mapped", None) is not None:
+            return None, "special_address"
     else:
         return None, "invalid_ip"
     # Host routes stay as /32 or /128; otherwise keep the network form.

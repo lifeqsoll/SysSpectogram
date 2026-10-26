@@ -1367,6 +1367,15 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
                 )
                 return 2
             value = canon or ""
+        elif key == "kirk.allow_ssh_cidrs":
+            from sysspectogram.config import _parse_cidr_list
+            from sysspectogram.net_ip import validate_allow_ssh_cidrs
+
+            try:
+                value = ", ".join(validate_allow_ssh_cidrs(_parse_cidr_list(value)))
+            except ValueError as exc:
+                print(json.dumps({"ok": False, "error": f"allow_ssh_cidrs: {exc}"}))
+                return 2
         elif not isinstance(value, (bool, int, float, str)):
             rejected.append(str(key))
             continue
@@ -1382,7 +1391,13 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
 
 
 def _pair_tty_or_unlock(args: argparse.Namespace) -> dict | None:
-    """Require a controlling TTY, or a valid console unlock code (same-UID abuse)."""
+    """Gate non-interactive pair-remote (cron / piped same-UID abuse).
+
+    A real controlling TTY is enough. Same-UID code can still fake a pty via
+    ``pty.fork()`` — that is accepted; this gate only stops dumb non-tty callers.
+    For automation without a console, pass ``--unlock-code`` matching
+    ``state/unlock.code``.
+    """
     import secrets
     import sys
 

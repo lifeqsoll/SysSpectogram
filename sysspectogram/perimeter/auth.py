@@ -9,25 +9,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-# Real sshd auth lines only — not "Disconnected from invalid user …" /
-# "Connection closed by invalid user …" (those have no ``from`` before the IP,
-# so a forged username ``… from EVIL port 22`` would otherwise match).
+# Real sshd auth lines only. Kind must be Failed/Invalid/Accepted — so
+# ``Disconnected from invalid user …`` / ``Connection closed by …`` never match
+# (no separate noise filter: a substring ``Disconnected`` must not hide real fails).
 #
-# Optional syslog prefix + optional ``sshd[pid]:`` (journalctl -o cat strips both).
-# End-anchored ``from <ip> port N (ssh2)?`` so an earlier forged CIDR cannot win.
+# Optional classic syslog or RFC3339 prefix + ``sshd`` / ``sshd-session`` tag
+# (journalctl -o cat may strip both). End-anchored ``from <ip> port N`` so a forged
+# CIDR earlier in the line cannot win. Accepted publickey may append
+# ``ssh2: ED25519 SHA256:…``.
 _AUTH_RE = re.compile(
     r"^(?:"
     r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+"
+    r"|"
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+\S+\s+"
     r")?"
-    r"(?:sshd\[\d+\]:\s+)?"
+    r"(?:sshd(?:-session)?\[\d+\]:\s+)?"
     r"(?P<kind>Failed password for invalid user |Failed password for |Invalid user |Accepted \S+ for )"
     r"(?P<user>\S+)"
-    r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)(?: ssh2)?\s*$",
-    re.I,
-)
-
-_NOISE_RE = re.compile(
-    r"(?:sshd\[\d+\]:\s*)?(?:Disconnected|Connection closed)\b",
+    r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
+    r"(?: ssh2(?:: \S+ SHA256:\S+)?)?\s*$",
     re.I,
 )
 
@@ -67,7 +67,7 @@ def _kind_from_match(kind_token: str) -> str:
 def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
     ts = ts if ts is not None else datetime.now(timezone.utc).timestamp()
     text = (line or "").strip()
-    if not text or _NOISE_RE.search(text):
+    if not text:
         return None
     m = _AUTH_RE.match(text)
     if not m:

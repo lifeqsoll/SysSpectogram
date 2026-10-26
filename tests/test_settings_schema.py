@@ -30,7 +30,7 @@ def test_defaults_match_default_yaml():
         assert validate_value(entry, entry["default"]) == []
         cur = get_value(cfg, entry["key"])
         # Overlay / UI store CIDR lists as a comma-separated string; YAML keeps a list.
-        if entry["key"] == "response.never_ban_cidrs" and cur == []:
+        if entry["key"] in {"response.never_ban_cidrs", "kirk.allow_ssh_cidrs"} and cur == []:
             cur = ""
         assert cur == entry["default"], entry["key"]
 

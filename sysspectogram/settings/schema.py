@@ -96,6 +96,25 @@ def validate_value(entry: dict[str, Any], value: Any) -> list[str]:
             _, err = validate_never_ban_value(value)
             if err:
                 errors.append(f"{key}: {err} (reject /0, loopback, unspecified, wide prefixes)")
+        elif key == "kirk.allow_ssh_cidrs":
+            from sysspectogram.net_ip import validate_allow_ssh_cidr
+
+            if isinstance(value, list):
+                parts = [str(x).strip() for x in value if str(x).strip()]
+            elif isinstance(value, str):
+                if len(value) > 2048:
+                    errors.append(f"{key}: string too long (max 2048)")
+                    return errors
+                parts = [p.strip() for p in value.replace(";", ",").split(",") if p.strip()]
+            else:
+                errors.append(f"{key}: expected a string or list")
+                return errors
+            for part in parts:
+                try:
+                    validate_allow_ssh_cidr(part)
+                except ValueError as exc:
+                    errors.append(f"{key}: {exc}")
+                    return errors
         elif not isinstance(value, str):
             errors.append(f"{key}: expected a string")
         elif len(value) > 2048:

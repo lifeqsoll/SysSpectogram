@@ -160,6 +160,14 @@ settings:
     description:
       en: How many consecutive passes must show a hidden task before an alert. Higher values reduce races but delay alerts.
       ru: Сколько подряд проходов должны показать скрытую задачу, прежде чем появится алерт. Больше значение — меньше ложных срабатываний и больше задержка.
+  - key: kirk.allow_ssh_cidrs
+    group: kirk
+    type: string
+    default: ""
+    title: {en: SSH allow CIDRs for kirk isolate, ru: CIDR SSH для изоляции kirk}
+    description:
+      en: Comma-separated admin SSH sources kept during kirk_isolate. Validated before any nft drop table is created.
+      ru: Через запятую — ваши SSH-источники, которые остаются при kirk_isolate. Проверяются до создания nft drop-таблицы.
   - key: alerts.strict_secrets
     group: alerts
     type: bool
