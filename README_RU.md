@@ -21,7 +21,7 @@
 
 ## С чего начать
 
-Три варианта. Всё «для гиков» спрятано за **Advanced**. Релизы: **[v1.2.2](docs/RELEASE_v1.2.2.md)** · [v1.2.1](docs/RELEASE_v1.2.1.md) · [v1.2.0 (сломан install)](docs/RELEASE_v1.2.0.md).
+Три варианта. Всё «для гиков» спрятано за **Advanced**. Релизы: **[v1.3.0](docs/RELEASE_v1.3.0.md)** · [v1.2.2](docs/RELEASE_v1.2.2.md) · [v1.2.1](docs/RELEASE_v1.2.1.md).
 
 ### 1. Десктоп (AppImage / `.deb`)
 
@@ -42,14 +42,14 @@ cd control-center && npm install && npm run tauri dev
 ```bash
 # нужны python3, python3-venv, curl; тег при необходимости замените
 # берите скрипт с тега релиза, не с плавающего main
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.2/scripts/friend-day0.sh | bash -s -- v1.2.2
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/friend-day0.sh | bash -s -- v1.3.0
 loginctl enable-linger $USER   # иначе защита остановится после выхода из SSH
 ```
 
 Отдельный привилегированный helper (polkit), если нужен:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.2/scripts/install-helper-from-release.sh | sudo bash -s -- v1.2.2
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.3.0
 ```
 
 Подробнее: [FRIEND.md](docs/FRIEND.md). Установка через git: [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX после обучения на другой машине: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
@@ -96,7 +96,7 @@ Root на том же хосте может остановить сервис и
 
 | Тема | Ссылки |
 | --- | --- |
-| Простой путь | [Установка без гиковщины](docs/FRIEND.md) · [Домашний экран](docs/HOME.md) · [Релиз v1.2.2](docs/RELEASE_v1.2.2.md) |
+| Простой путь | [Установка без гиковщины](docs/FRIEND.md) · [Домашний экран](docs/HOME.md) · [Релиз v1.3.0](docs/RELEASE_v1.3.0.md) |
 | Несколько VPS | [Флот](docs/FLEET.md) · вкладка Флот в Control Center · CLI `fleet` / `home pair-*` |
 | Для гиков | [Configure](docs/CONFIGURE.md) · [Day-0 через git](docs/DAY0_VPS.md) · [Холодная установка](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Защита | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |
@@ -830,7 +830,7 @@ MIT. См. [LICENSE](LICENSE).
 
 ## О версиях
 
-**v1.2.2** — Fleet hub, Edge CDN, Fleet Center; установка поверх v1.2.1. Не берите **v1.2.0**. См. [RELEASE_v1.2.2.md](docs/RELEASE_v1.2.2.md), [FLEET.md](docs/FLEET.md), [EDGE.md](docs/EDGE.md), [FRIEND.md](docs/FRIEND.md).
+**v1.3.0** — Security hardening (подписи, auth/web/pair/kirk). Breaking относительно 1.2.x. См. [RELEASE_v1.3.0.md](docs/RELEASE_v1.3.0.md), [FRIEND.md](docs/FRIEND.md). Не берите **v1.2.0**.
 
 ## Участие
 

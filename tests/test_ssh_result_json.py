@@ -52,3 +52,16 @@ def test_does_not_merge_streams_into_invalid_json():
         returncode=0,
     )
     assert r.json() == {"ok": True, "pair_code": "AAAA"}
+
+
+def test_banner_then_outer_object_with_nested_list():
+    # Top→bottom raw_decode must return the outer object, not the last nested dict.
+    outer = {
+        "ok": True,
+        "items": [{"pair_code": "FAKE"}, {"pair_code": "REAL"}],
+        "pair_code": "OUTER",
+    }
+    stdout = "Welcome\n" + json.dumps(outer, indent=2) + "\n"
+    r = SshResult(ok=True, stdout=stdout, stderr="Connection to h closed.\n", returncode=0)
+    assert r.json() == outer
+    assert r.json()["pair_code"] == "OUTER"

@@ -19,7 +19,7 @@ Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts 
 
 ## Start here
 
-Three ways in. Geek tools stay behind **Advanced**. Release notes: **[v1.2.2](docs/RELEASE_v1.2.2.md)** · [v1.2.1](docs/RELEASE_v1.2.1.md) · [v1.2.0 (broken install)](docs/RELEASE_v1.2.0.md).
+Three ways in. Geek tools stay behind **Advanced**. Release notes: **[v1.3.0](docs/RELEASE_v1.3.0.md)** · [v1.2.2](docs/RELEASE_v1.2.2.md) · [v1.2.1](docs/RELEASE_v1.2.1.md).
 
 ### 1. Desktop (AppImage / `.deb`)
 
@@ -42,14 +42,14 @@ cd control-center && npm install && npm run tauri dev
 ```bash
 # python3 + python3-venv + curl; replace tag if needed
 # prefer the tagged script (not floating main); or download friend-day0.sh from the release
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.2/scripts/friend-day0.sh | bash -s -- v1.2.2
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/friend-day0.sh | bash -s -- v1.3.0
 loginctl enable-linger $USER   # else protect stops on logout
 ```
 
 Optional privileged helper (polkit; no local checkout):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.2.2/scripts/install-helper-from-release.sh | sudo bash -s -- v1.2.2
+curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.0/scripts/install-helper-from-release.sh | sudo bash -s -- v1.3.0
 ```
 
 Full friend story: [docs/FRIEND.md](docs/FRIEND.md). Geek git Day-0: [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX after training elsewhere: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
@@ -102,7 +102,7 @@ Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md
 
 | Topic | Links |
 | --- | --- |
-| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.2.2](docs/RELEASE_v1.2.2.md) |
+| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.3.0](docs/RELEASE_v1.3.0.md) |
 | Many VPS | [Fleet](docs/FLEET.md) · Control Center Fleet tab · `fleet` / `home pair-*` CLI |
 | Geek / advanced | [Configure](docs/CONFIGURE.md) · [Day-0 CLI (git)](docs/DAY0_VPS.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Defense | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |
@@ -877,7 +877,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## Roadmap note
 
-**v1.2.2** — Fleet hub hardening, Edge CDN, Fleet Center; installable (extends v1.2.1). Do **not** use **v1.2.0**. See [RELEASE_v1.2.2.md](docs/RELEASE_v1.2.2.md), [FLEET.md](docs/FLEET.md), [EDGE.md](docs/EDGE.md), [FRIEND.md](docs/FRIEND.md).
+**v1.3.0** — Security hardening (signed updates, auth/web/pair/kirk). Breaking vs 1.2.x. See [RELEASE_v1.3.0.md](docs/RELEASE_v1.3.0.md), [FLEET.md](docs/FLEET.md), [FRIEND.md](docs/FRIEND.md). Do **not** use **v1.2.0**.
 
 ## Contributing
 

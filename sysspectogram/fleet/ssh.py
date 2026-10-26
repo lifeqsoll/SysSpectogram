@@ -45,20 +45,24 @@ class SshResult:
             return obj if isinstance(obj, dict) else None
 
         def _loads_raw_decode(text: str) -> dict[str, Any] | None:
+            """Top→bottom: first successful object wins; skip past nested payloads."""
             if not text:
                 return None
             decoder = json.JSONDecoder()
-            lines = text.splitlines()
-            for i in range(len(lines) - 1, -1, -1):
-                if not lines[i].strip().startswith("{"):
-                    continue
-                chunk = "\n".join(lines[i:]).lstrip()
+            pos = 0
+            while pos < len(text):
+                start = text.find("{", pos)
+                if start < 0:
+                    return None
                 try:
-                    obj, _end = decoder.raw_decode(chunk)
+                    obj, end = decoder.raw_decode(text, start)
                 except json.JSONDecodeError:
+                    pos = start + 1
                     continue
                 if isinstance(obj, dict):
                     return obj
+                # Non-dict JSON (e.g. array start mis-hit) — jump past it.
+                pos = end
             return None
 
         for part in (self.stdout, self.stderr):
