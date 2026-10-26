@@ -58,8 +58,11 @@ def test_ensure_secret_mode_tightens(tmp_path: Path):
 
 def test_cmd_home_env_rejects_injection(tmp_path: Path, monkeypatch):
     from sysspectogram import cli
+    import sysspectogram.config as cfg
 
-    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    # home env writes under SYSSPECTOGRAM_HOME (not cli.ROOT / site-packages).
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    monkeypatch.setattr(cfg, "_DOTENV_LOADED", False)
     env = tmp_path / ".env"
     env.write_text("OLD=1\n", encoding="utf-8")
     os.chmod(env, 0o644)
@@ -79,8 +82,10 @@ def test_cmd_home_env_rejects_injection(tmp_path: Path, monkeypatch):
 
 def test_cmd_home_env_mode(tmp_path: Path, monkeypatch):
     from sysspectogram import cli
+    import sysspectogram.config as cfg
 
-    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    monkeypatch.setattr(cfg, "_DOTENV_LOADED", False)
     old = os.umask(0o022)
     try:
         tok = "123456789:AA" + ("x" * 30)
