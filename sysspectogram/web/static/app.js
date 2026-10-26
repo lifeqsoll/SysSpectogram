@@ -471,7 +471,7 @@
         try {
           const res = await fetch("/api/unlock", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-SS-CSRF": "1" },
             body: JSON.stringify({ code }),
           });
           const data = await res.json();

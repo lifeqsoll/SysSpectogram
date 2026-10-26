@@ -202,6 +202,7 @@ def ssh_run(
     timeout: float = 60.0,
     identity: str | None = None,
     stdin_data: str | None = None,
+    force_tty: bool = False,
 ) -> SshResult:
     if not host.ssh:
         return SshResult(False, "", "ssh target empty", 2)
@@ -212,6 +213,9 @@ def ssh_run(
     if parsed is None:
         return SshResult(False, "", "invalid ssh destination", 2)
     cmd, known = _ssh_base_args(host, identity=identity, parsed=parsed)
+    # pair-remote requires a remote TTY (isatty); -tt forces one even without local tty.
+    if force_tty:
+        cmd.append("-tt")
     cmd.append("--")
     cmd.append(parsed.ssh_argv_dest())
     cmd.append(remote_command)

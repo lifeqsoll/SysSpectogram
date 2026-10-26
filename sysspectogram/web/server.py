@@ -92,6 +92,24 @@ class WebAppState:
         return snap
 
 
+def _host_header_name(raw: str) -> str:
+    """Extract hostname from Host header; keep IPv6 literals like ``[::1]:port``."""
+    h = (raw or "").strip().lower()
+    if not h:
+        return ""
+    if h.startswith("["):
+        end = h.find("]")
+        if end > 0:
+            return h[1:end]
+        return h.strip("[]")
+    # hostname:port or ipv4:port — only strip a numeric port.
+    if h.count(":") == 1:
+        host, maybe_port = h.rsplit(":", 1)
+        if maybe_port.isdigit():
+            return host
+    return h
+
+
 def _make_handler(app: WebAppState):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -116,6 +134,45 @@ def _make_handler(app: WebAppState):
             if app.allow_local_unauth(self._client_ip()):
                 return True
             return False
+
+        def _allowed_hosts(self) -> set[str]:
+            allowed = {"127.0.0.1", "localhost", "::1"}
+            if app.bind_host:
+                bh = str(app.bind_host).strip().lower()
+                if bh.startswith("[") and bh.endswith("]"):
+                    bh = bh[1:-1]
+                allowed.add(bh)
+            if app.public_url:
+                try:
+                    ph = (urlparse(app.public_url).hostname or "").lower()
+                    if ph:
+                        allowed.add(ph)
+                except Exception:
+                    pass
+            return allowed
+
+        def _host_ok(self) -> bool:
+            # Fail closed: missing/empty Host must not skip the allowlist
+            # (HTTP/1.0 or stripped-header clients).
+            host_hdr = _host_header_name(self.headers.get("Host") or "")
+            if not host_hdr:
+                return False
+            return host_hdr in self._allowed_hosts()
+
+        def _require_json_ctype(self) -> bool:
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            return ctype == "application/json"
+
+        def _csrf_ok(self) -> bool:
+            origin = (self.headers.get("Origin") or "").rstrip("/")
+            if app.public_url:
+                expect = app.public_url.rstrip("/")
+                return bool(origin) and origin == expect
+            if origin:
+                ohost = (urlparse(origin).hostname or "").lower()
+                if ohost not in {"127.0.0.1", "localhost", "::1"}:
+                    return False
+            return (self.headers.get("X-SS-CSRF") or "").strip() == "1"
 
         def _send(self, code: int, body: bytes, content_type: str, extra: dict | None = None) -> None:
             self.send_response(code)
@@ -171,6 +228,9 @@ def _make_handler(app: WebAppState):
                         "actions": app.controllers is not None,
                     },
                 )
+            # Host check on data APIs (DNS rebinding).
+            if path in {"/api/snapshot", "/api/status", "/api/stream"} and not self._host_ok():
+                return self._json(403, {"ok": False, "error": "bad host"})
             if not self._authorized():
                 return self._json(401, {"ok": False, "error": "unauthorized"})
             if path == "/api/snapshot":
@@ -187,6 +247,13 @@ def _make_handler(app: WebAppState):
             path = urlparse(self.path).path
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
+
+            if path in {"/api/auth/telegram", "/api/unlock", "/api/action"}:
+                if not self._host_ok():
+                    return self._json(403, {"ok": False, "error": "bad host"})
+                if not self._require_json_ctype():
+                    return self._json(415, {"ok": False, "error": "Content-Type must be application/json"})
+
             try:
                 payload = json.loads(raw.decode("utf-8") or "{}")
             except json.JSONDecodeError:
@@ -223,6 +290,8 @@ def _make_handler(app: WebAppState):
 
             # Console unlock via Mini App / local UI (code never in .env)
             if path == "/api/unlock":
+                if not self._csrf_ok():
+                    return self._json(403, {"ok": False, "error": "csrf"})
                 if app.public_url and not self._authorized():
                     return self._json(401, {"ok": False, "error": "unauthorized"})
                 if app.unlock is None or not app.unlock.enabled:
@@ -249,41 +318,8 @@ def _make_handler(app: WebAppState):
             if path == "/api/action":
                 if app.controllers is None:
                     return self._json(503, {"ok": False, "error": "actions not configured"})
-                # Host whitelist (DNS rebinding / Host header attacks).
-                host_hdr = (self.headers.get("Host") or "").split(":")[0].strip().lower()
-                allowed_hosts = {"127.0.0.1", "localhost", "::1"}
-                if app.bind_host:
-                    allowed_hosts.add(str(app.bind_host).strip().lower())
-                if app.public_url:
-                    try:
-                        from urllib.parse import urlparse as _up
-
-                        ph = (_up(app.public_url).hostname or "").lower()
-                        if ph:
-                            allowed_hosts.add(ph)
-                    except Exception:
-                        pass
-                if host_hdr and host_hdr not in allowed_hosts:
-                    return self._json(403, {"ok": False, "error": "bad host"})
-                ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-                if ctype != "application/json":
-                    return self._json(415, {"ok": False, "error": "Content-Type must be application/json"})
-                # CSRF: require matching Origin when public_url set; for local-unauth
-                # require either no Origin or a loopback Origin, plus custom header.
-                origin = (self.headers.get("Origin") or "").rstrip("/")
-                if app.public_url:
-                    expect = app.public_url.rstrip("/")
-                    if not origin or origin != expect:
-                        return self._json(403, {"ok": False, "error": "origin required"})
-                else:
-                    if origin:
-                        from urllib.parse import urlparse as _up
-
-                        ohost = (_up(origin).hostname or "").lower()
-                        if ohost not in {"127.0.0.1", "localhost", "::1"}:
-                            return self._json(403, {"ok": False, "error": "origin not allowed"})
-                    if (self.headers.get("X-SS-CSRF") or "").strip() != "1":
-                        return self._json(403, {"ok": False, "error": "X-SS-CSRF required"})
+                if not self._csrf_ok():
+                    return self._json(403, {"ok": False, "error": "csrf"})
                 action = str(payload.get("action") or "")
                 data = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
                 # strip action key from payload copy

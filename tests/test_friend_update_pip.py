@@ -113,3 +113,53 @@ def test_update_stack_refuses_unsigned(tmp_path: Path, monkeypatch):
     out = fu.update_stack("v9.9.9")
     assert out.get("ok") is False
     assert "minisig" in str(out.get("error") or "").lower()
+
+
+def test_embedded_pubkey_resolves():
+    pub = fu._embedded_minisign_pub()
+    assert pub is not None
+    assert pub.is_file()
+    assert "minisign" in pub.name
+
+
+def test_update_stack_refuses_downgrade(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".venv" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(fu, "_home", lambda: home)
+    wheel = "pkg.whl"
+    assets = {
+        wheel: "https://example.test/pkg.whl",
+        "SHA256SUMS": "https://example.test/SHA256SUMS",
+        "sysspectogram-agent-x86_64-linux-musl": "https://example.test/agent",
+        "sysspectogram-agent-x86_64-linux-musl.sha256": "https://example.test/agent.sha256",
+        "sysspectogram-agent-x86_64-linux-musl.minisig": "https://example.test/agent.minisig",
+        f"{wheel}.minisig": "https://example.test/wheel.minisig",
+    }
+    urls = {
+        assets[wheel]: b"whl",
+        assets["SHA256SUMS"]: (
+            __import__("hashlib").sha256(b"whl").hexdigest() + f"  {wheel}\n"
+        ).encode(),
+        assets["sysspectogram-agent-x86_64-linux-musl"]: b"agent",
+        assets["sysspectogram-agent-x86_64-linux-musl.sha256"]: (
+            __import__("hashlib").sha256(b"agent").hexdigest() + "  agent\n"
+        ).encode(),
+        assets["sysspectogram-agent-x86_64-linux-musl.minisig"]: b"sig",
+        assets[f"{wheel}.minisig"]: b"sig",
+        "https://api.github.com/repos/lifeqsoll/SysSpectogram/releases/tags/v0.0.1": (
+            __import__("json")
+            .dumps({"assets": [{"name": n, "browser_download_url": u} for n, u in assets.items()]})
+            .encode()
+        ),
+    }
+    monkeypatch.setattr(fu, "_get", lambda url: urls[url])
+    monkeypatch.setattr(fu, "_verify_minisign", lambda *a, **k: None)
+    monkeypatch.setattr(
+        sys.modules["sysspectogram"],
+        "__version__",
+        "9.9.9",
+        raising=False,
+    )
+    out = fu.update_stack("v0.0.1")
+    assert out.get("ok") is False
+    assert "downgrade" in str(out.get("error") or "").lower()

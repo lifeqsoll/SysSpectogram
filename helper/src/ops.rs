@@ -186,7 +186,8 @@ impl Drop for Staging {
 }
 
 fn copy_regular(src: &Path, dst: &Path) -> Result<(), String> {
-    // Re-check type via open(O_NOFOLLOW) so a TOCTOU symlink→FIFO swap cannot hang root.
+    // Re-check type via open(O_NOFOLLOW|O_NONBLOCK) so a TOCTOU symlink→FIFO swap
+    // cannot hang root (FIFO open without O_NONBLOCK blocks until a writer).
     use std::os::unix::fs::OpenOptionsExt;
     let meta = fs::symlink_metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
     if meta.file_type().is_symlink() {
@@ -200,7 +201,7 @@ fn copy_regular(src: &Path, dst: &Path) -> Result<(), String> {
     }
     let mut infile = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(src)
         .map_err(|e| format!("open {}: {e}", src.display()))?;
     let meta2 = infile
@@ -427,22 +428,43 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
     }
 }
 
-/// Mirror Python `validate_never_ban_cidr`: host or /24+ (v4) / /64+ (v6); no 0.0.0.0/127.0.0.1.
+/// Mirror Python `validate_never_ban_cidr`: host or /24+ (v4) / /64+ (v6);
+/// reject unspecified/loopback/0.0.0.0/8 (parsed, not string-compared).
 fn validate_never_ban_cidr(raw: &str) -> Result<(), String> {
+    use std::net::IpAddr;
+
     let token = raw.trim();
     if token.is_empty() {
         return Err("empty".into());
     }
-    let (addr, prefix_opt) = match token.split_once('/') {
+    let (addr_s, prefix_opt) = match token.split_once('/') {
         Some((a, p)) => (a.trim(), Some(p.trim())),
         None => (token, None),
     };
-    if addr == "0.0.0.0" || addr == "::" || addr == "127.0.0.1" || addr == "::1" {
-        return Err("special_address".into());
-    }
-    let is_v6 = addr.contains(':');
-    let max_wide = if is_v6 { 64 } else { 24 };
-    let host_pref = if is_v6 { 128 } else { 32 };
+    let addr: IpAddr = addr_s
+        .parse()
+        .map_err(|_| format!("invalid_ip in {token}"))?;
+    let (max_wide, host_pref) = match addr {
+        IpAddr::V4(v4) => {
+            // 0.0.0.0/8 + 127.0.0.0/8 (covers 0.0.0.1, 000.0.0.0 via parse, 127.0.0.0/24).
+            let o0 = v4.octets()[0];
+            if v4.is_unspecified()
+                || v4.is_loopback()
+                || v4.is_multicast()
+                || o0 == 0
+                || o0 == 127
+            {
+                return Err("special_address".into());
+            }
+            (24u8, 32u8)
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_unspecified() || v6.is_loopback() || v6.is_multicast() {
+                return Err("special_address".into());
+            }
+            (64u8, 128u8)
+        }
+    };
     let prefix: u8 = match prefix_opt {
         None => host_pref,
         Some(p) => p
@@ -454,24 +476,6 @@ fn validate_never_ban_cidr(raw: &str) -> Result<(), String> {
     }
     if prefix < max_wide {
         return Err("too_wide".into());
-    }
-    // Lightweight character check — full parse left to Python overlay path too.
-    if is_v6 {
-        if !addr.chars().all(|c| c.is_ascii_hexdigit() || c == ':') {
-            return Err("invalid_ip".into());
-        }
-    } else {
-        let parts: Vec<&str> = addr.split('.').collect();
-        if parts.len() != 4
-            || parts.iter().any(|p| {
-                p.is_empty()
-                    || p.len() > 3
-                    || !p.chars().all(|c| c.is_ascii_digit())
-                    || p.parse::<u32>().map(|n| n > 255).unwrap_or(true)
-            })
-        {
-            return Err("invalid_ip".into());
-        }
     }
     Ok(())
 }
@@ -615,6 +619,9 @@ mod tests {
         .is_ok());
         assert!(validate_change("response.never_ban_cidrs", &json!("0.0.0.0/0")).is_err());
         assert!(validate_change("response.never_ban_cidrs", &json!("127.0.0.1/32")).is_err());
+        assert!(validate_change("response.never_ban_cidrs", &json!("127.0.0.0/24")).is_err());
+        assert!(validate_change("response.never_ban_cidrs", &json!("0.0.0.1/32")).is_err());
+        assert!(validate_change("response.never_ban_cidrs", &json!("000.0.0.0/32")).is_err());
         assert!(validate_change("response.never_ban_cidrs", &json!([1, 2])).is_err());
         assert!(validate_change("ui.lang", &json!("ru")).is_ok());
         assert!(validate_change("web.enabled", &json!(true)).is_ok());

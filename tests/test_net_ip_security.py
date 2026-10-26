@@ -24,11 +24,26 @@ def test_parse_ban_ip_accepts_host():
         "0.0.0.0",
         "::",
         "",
+        "127.0.0.1",
+        "::1",
+        "fe80::1",
+        "fe80::1%eth0",
     ],
 )
 def test_parse_ban_ip_rejects(bad):
     with pytest.raises(ValueError):
         parse_ban_ip(bad)
+
+
+def test_nft_cidr_family_ipv6():
+    from sysspectogram.net_ip import nft_cidr_family
+
+    fam, cidr = nft_cidr_family("2001:db8::/64")
+    assert fam == "ip6"
+    assert cidr == "2001:db8::/64"
+    fam4, c4 = nft_cidr_family("203.0.113.0/24")
+    assert fam4 == "ip"
+    assert c4 == "203.0.113.0/24"
 
 
 def test_nft_family_ipv6():

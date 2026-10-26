@@ -60,6 +60,43 @@ def _version_tuple(ver: str) -> tuple[int, ...]:
     return tuple(parts or (0,))
 
 
+def _embedded_minisign_pub() -> Path | None:
+    """Resolve embedded minisign pubkey (wheel package data, then checkout keys/)."""
+    # 1) Same-tree / wheel package data next to this module (day0 pip installs).
+    local = Path(__file__).resolve().parent / "resources" / "keys" / "SysSpectogram.minisign.pub"
+    if local.is_file():
+        return local
+    # 2) Editable monorepo checkout: control-center keys (same file as Tauri embed).
+    checkout = (
+        Path(__file__).resolve().parents[1]
+        / "control-center"
+        / "src-tauri"
+        / "keys"
+        / "SysSpectogram.minisign.pub"
+    )
+    if checkout.is_file():
+        return checkout
+    # 3) importlib.resources (zipimport / alternate layouts).
+    try:
+        from importlib import resources
+
+        cand = resources.files("sysspectogram").joinpath(
+            "resources", "keys", "SysSpectogram.minisign.pub"
+        )
+        with resources.as_file(cand) as path:
+            if not path.is_file():
+                return None
+            # Materialize outside the context (zip temp may vanish after `with`).
+            data = path.read_bytes()
+        cache = state_root() / "state" / "bootstrap-cache" / "SysSpectogram.minisign.pub"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(data)
+        return cache
+    except (ImportError, FileNotFoundError, TypeError, OSError, ModuleNotFoundError):
+        pass
+    return None
+
+
 def update_stack(tag: str) -> dict[str, Any]:
     tag = tag.strip()
     if not tag.startswith("v"):
@@ -113,14 +150,8 @@ def update_stack(tag: str) -> dict[str, Any]:
     steps.append({"step": "sha256_agent", "ok": True})
 
     # Embedded pubkey only (ADR 0005) — never download pubkey from the release.
-    pub = (
-        Path(__file__).resolve().parents[1]
-        / "control-center"
-        / "src-tauri"
-        / "keys"
-        / "SysSpectogram.minisign.pub"
-    )
-    if not pub.is_file():
+    pub = _embedded_minisign_pub()
+    if pub is None or not pub.is_file():
         return {
             "ok": False,
             "error": "embedded SysSpectogram.minisign.pub missing from install tree",
@@ -137,16 +168,26 @@ def update_stack(tag: str) -> dict[str, Any]:
     # Refuse version downgrade when current install reports a version.
     try:
         from sysspectogram import __version__ as cur_ver
-
-        want = tag.lstrip("v")
+    except ImportError as exc:
+        return {
+            "ok": False,
+            "error": f"cannot read installed version for downgrade check: {exc}",
+            "steps": steps,
+        }
+    want = tag.lstrip("v")
+    try:
         if _version_tuple(want) < _version_tuple(str(cur_ver)):
             return {
                 "ok": False,
                 "error": f"refuse downgrade {cur_ver} → {want}",
                 "steps": steps,
             }
-    except Exception:  # noqa: BLE001
-        pass
+    except (TypeError, ValueError) as exc:
+        return {
+            "ok": False,
+            "error": f"cannot compare versions for downgrade check: {exc}",
+            "steps": steps,
+        }
     sig_agent = cache / "agent.minisig"
     _download(assets[agent_sig_name], sig_agent)
     try:

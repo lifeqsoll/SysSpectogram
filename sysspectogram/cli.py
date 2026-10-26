@@ -1381,8 +1381,41 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pair_tty_or_unlock(args: argparse.Namespace) -> dict | None:
+    """Require a controlling TTY, or a valid console unlock code (same-UID abuse)."""
+    import secrets
+    import sys
+
+    if sys.stdin.isatty():
+        return None
+    code = str(getattr(args, "unlock_code", "") or "").strip()
+    if not code:
+        return {
+            "ok": False,
+            "error": "pair requires a TTY (interactive console) or --unlock-code",
+            "hint": "run on the VPS console, or: home pair-remote --unlock-code CODE",
+        }
+    from sysspectogram.console_unlock import ConsoleUnlock
+
+    code_path = state_root() / "state" / "unlock.code"
+    try:
+        if code_path.is_file():
+            want = ConsoleUnlock.normalize(code_path.read_text(encoding="utf-8"))
+            got = ConsoleUnlock.normalize(code)
+            if want and len(want) == len(got) and secrets.compare_digest(want, got):
+                return None
+    except OSError:
+        pass
+    return {"ok": False, "error": "bad unlock code for non-TTY pair"}
+
+
 def _cmd_home_pair_remote(args: argparse.Namespace) -> int:
     import json
+
+    denied = _pair_tty_or_unlock(args)
+    if denied is not None:
+        print(json.dumps(denied, ensure_ascii=False, indent=2))
+        return 2
 
     from sysspectogram.remote_devices import begin_pair
 
@@ -1394,6 +1427,9 @@ def _cmd_home_pair_remote(args: argparse.Namespace) -> int:
 def _cmd_home_pair_complete(args: argparse.Namespace) -> int:
     import json
 
+    # Completing an already-pending pair is allowed without TTY (admin finishes
+    # over SSH after operator started pair-remote on console). Starting a new
+    # pair still needs TTY/unlock via pair-remote.
     from sysspectogram.remote_devices import complete_pair
 
     out = complete_pair(str(args.code), label=getattr(args, "label", None))
@@ -2571,6 +2607,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="start remote CC pairing (prints 5‑min code; never send via Telegram)",
     )
     hm_pair.add_argument("--label", default="device", help="label for the pending pair")
+    hm_pair.add_argument(
+        "--unlock-code",
+        default="",
+        help="allow non-TTY pair when matching state/unlock.code (fleet/automation)",
+    )
     hm_pair.set_defaults(func=_cmd_home_pair_remote)
     hm_pair_c = hm_sub.add_parser(
         "pair-complete",

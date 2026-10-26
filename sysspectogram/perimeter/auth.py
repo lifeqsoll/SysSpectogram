@@ -9,19 +9,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-# Greedy ``.* from <ip> port <n>`` so a forged
-# ``from 0.0.0.0/0 from REAL port N`` binds the real trailing address.
-_FROM_IP_PORT = r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
-_FAILED_RE = re.compile(
-    rf"Failed password for (invalid user )?(?P<user>\S+){_FROM_IP_PORT}",
+# Real sshd auth lines only — not "Disconnected from invalid user …" /
+# "Connection closed by invalid user …" (those have no ``from`` before the IP,
+# so a forged username ``… from EVIL port 22`` would otherwise match).
+#
+# Optional syslog prefix + optional ``sshd[pid]:`` (journalctl -o cat strips both).
+# End-anchored ``from <ip> port N (ssh2)?`` so an earlier forged CIDR cannot win.
+_AUTH_RE = re.compile(
+    r"^(?:"
+    r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+"
+    r")?"
+    r"(?:sshd\[\d+\]:\s+)?"
+    r"(?P<kind>Failed password for invalid user |Failed password for |Invalid user |Accepted \S+ for )"
+    r"(?P<user>\S+)"
+    r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)(?: ssh2)?\s*$",
     re.I,
 )
-_INVALID_RE = re.compile(
-    rf"Invalid user (?P<user>\S+){_FROM_IP_PORT}",
-    re.I,
-)
-_ACCEPTED_RE = re.compile(
-    rf"Accepted \S+ for (?P<user>\S+){_FROM_IP_PORT}",
+
+_NOISE_RE = re.compile(
+    r"(?:sshd\[\d+\]:\s*)?(?:Disconnected|Connection closed)\b",
     re.I,
 )
 
@@ -38,28 +44,38 @@ class AuthEvent:
 def _normalize_auth_ip(raw: str) -> str | None:
     """Keep only a bare host address; drop forged CIDRs / junk from log injection."""
     token = (raw or "").strip()
-    if not token or "/" in token:
+    if not token or "/" in token or "%" in token:
         return None
     try:
-        return str(ipaddress.ip_address(token))
+        addr = ipaddress.ip_address(token)
     except ValueError:
         return None
+    if addr.is_unspecified or addr.is_multicast or addr.is_loopback:
+        return None
+    return str(addr)
+
+
+def _kind_from_match(kind_token: str) -> str:
+    low = (kind_token or "").lower()
+    if "invalid user" in low:
+        return "invalid"
+    if low.startswith("accepted"):
+        return "accepted"
+    return "failed"
 
 
 def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
     ts = ts if ts is not None else datetime.now(timezone.utc).timestamp()
-    for kind, rx in (("failed", _FAILED_RE), ("invalid", _INVALID_RE), ("accepted", _ACCEPTED_RE)):
-        m = rx.search(line)
-        if not m:
-            continue
-        # Prefer the last ``from <ip> port`` on the line (sshd may echo forged text earlier).
-        matches = list(rx.finditer(line))
-        m = matches[-1] if matches else m
-        ip = _normalize_auth_ip(m.group("ip"))
-        if ip is None:
-            return None
-        return AuthEvent(kind, ip, m.group("user"), line.strip(), ts)
-    return None
+    text = (line or "").strip()
+    if not text or _NOISE_RE.search(text):
+        return None
+    m = _AUTH_RE.match(text)
+    if not m:
+        return None
+    ip = _normalize_auth_ip(m.group("ip"))
+    if ip is None:
+        return None
+    return AuthEvent(_kind_from_match(m.group("kind")), ip, m.group("user"), text, ts)
 
 
 def parse_auth_lines(lines: list[str]) -> list[AuthEvent]:

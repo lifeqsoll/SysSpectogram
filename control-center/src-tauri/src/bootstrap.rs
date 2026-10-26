@@ -123,8 +123,40 @@ fn asset_url(release: &Value, name_substr: &str) -> Result<String, String> {
     Err(format!("no release asset matching {name_substr:?}"))
 }
 
+fn version_tuple(ver: &str) -> Vec<u32> {
+    let cleaned = ver.trim().trim_start_matches('v');
+    cleaned
+        .split('.')
+        .map(|chunk| {
+            let digits: String = chunk.chars().filter(|c| c.is_ascii_digit()).collect();
+            digits.parse::<u32>().unwrap_or(0)
+        })
+        .collect()
+}
+
+fn refuse_downgrade(tag: &str) -> Result<(), String> {
+    let want = tag.trim().trim_start_matches('v');
+    let cur = env!("CARGO_PKG_VERSION");
+    let want_t = version_tuple(want);
+    let cur_t = version_tuple(cur);
+    let n = want_t.len().max(cur_t.len());
+    for i in 0..n {
+        let w = want_t.get(i).copied().unwrap_or(0);
+        let c = cur_t.get(i).copied().unwrap_or(0);
+        if w < c {
+            return Err(format!("refuse downgrade {cur} → {want}"));
+        }
+        if w > c {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 /// Download and install the Python wheel + musl agent for `tag` (e.g. v1.1.0).
 pub fn install_stack(tag: &str) -> Result<Value, String> {
+    refuse_downgrade(tag)?;
+
     let root = paths::user_data_root();
     fs::create_dir_all(&root).map_err(|e| format!("mkdir {}: {e}", root.display()))?;
     // Point subsequent CLI/guard at this home.

@@ -44,3 +44,32 @@ def test_validate_never_ban_value_list():
     ok, err = validate_never_ban_value(["203.0.113.10", "198.51.100.0/24"])
     assert err is None
     assert "203.0.113.10/32" in (ok or "")
+
+
+def test_load_scrubs_wide_never_ban(tmp_path: Path, monkeypatch):
+    """Stale 0.0.0.0/0 in user-settings must not disable bans at runtime."""
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    (state / "user-settings.json").write_text(
+        json.dumps(
+            {
+                "response.never_ban_cidrs": "0.0.0.0/0, 203.0.113.10, 127.0.0.0/24",
+            }
+        ),
+        encoding="utf-8",
+    )
+    from sysspectogram.config import default_config_path, load_config
+
+    cfg = load_config(default_config_path())
+    never = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
+    assert "0.0.0.0/0" not in never
+    assert "127.0.0.0/24" not in never
+    assert any(x.startswith("203.0.113.10") for x in never)
+
+
+def test_reject_zero_slash8_hosts():
+    assert validate_never_ban_cidr("0.0.0.1/32")[1] == "special_address"
+    # Leading-zero IPv4 is rejected by ip_network (invalid) or as special.
+    assert validate_never_ban_cidr("000.0.0.0/32")[1] in {"special_address", "invalid_ip"}
+    assert validate_never_ban_cidr("127.0.0.0/24")[1] == "special_address"

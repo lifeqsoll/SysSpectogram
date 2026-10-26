@@ -244,7 +244,9 @@ class NftBackend:
         )
         for cidr in allows:
             try:
-                ip_network(cidr, strict=False)
+                from sysspectogram.net_ip import nft_cidr_family
+
+                fam, canon = nft_cidr_family(cidr)
             except ValueError:
                 return f"lockdown refused: invalid cidr {cidr!r}"
             code, out = self._run(
@@ -255,16 +257,16 @@ class NftBackend:
                     "inet",
                     "sysspectogram",
                     "input",
-                    "ip",
+                    fam,
                     "saddr",
-                    cidr,
+                    canon,
                     "accept",
                     "comment",
-                    f"sysspectogram:lockdown:allow:{cidr}",
+                    f"sysspectogram:lockdown:allow:{canon}",
                 ]
             )
             if code != 0:
-                return f"lockdown allow failed for {cidr}: {out.strip()}"
+                return f"lockdown allow failed for {canon}: {out.strip()}"
         code, out = self._run(
             [
                 "nft",
@@ -304,7 +306,9 @@ class NftBackend:
         self._ensure_chain()
         for cidr in allows:
             try:
-                ip_network(cidr, strict=False)
+                from sysspectogram.net_ip import nft_cidr_family
+
+                fam, canon = nft_cidr_family(cidr)
             except ValueError:
                 return f"syn_rate_limit refused: invalid cidr {cidr!r}"
             self._run(
@@ -315,12 +319,12 @@ class NftBackend:
                     "inet",
                     "sysspectogram",
                     "input",
-                    "ip",
+                    fam,
                     "saddr",
-                    cidr,
+                    canon,
                     "accept",
                     "comment",
-                    f"sysspectogram:synrl:allow:{cidr}",
+                    f"sysspectogram:synrl:allow:{canon}",
                 ]
             )
         code, out = self._run(
@@ -549,6 +553,12 @@ class NftBackend:
         self._run(["nft", "add", "rule", "inet", "ss_kirk", "input", "iif", "lo", "accept"])
         self._run(["nft", "add", "rule", "inet", "ss_kirk", "output", "oif", "lo", "accept"])
         for cidr in allow_cidrs:
+            try:
+                from sysspectogram.net_ip import nft_cidr_family
+
+                fam, canon = nft_cidr_family(cidr)
+            except ValueError:
+                return f"kirk_isolate refused: invalid cidr {cidr!r}"
             self._run(
                 [
                     "nft",
@@ -557,9 +567,9 @@ class NftBackend:
                     "inet",
                     "ss_kirk",
                     "input",
-                    "ip",
+                    fam,
                     "saddr",
-                    cidr,
+                    canon,
                     "tcp",
                     "dport",
                     "22",
@@ -574,9 +584,9 @@ class NftBackend:
                     "inet",
                     "ss_kirk",
                     "output",
-                    "ip",
+                    fam,
                     "daddr",
-                    cidr,
+                    canon,
                     "ct",
                     "state",
                     "established,related",

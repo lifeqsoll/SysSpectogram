@@ -39,7 +39,12 @@ where = ["."]
 include = ["sysspectogram*"]
 
 [tool.setuptools.package-data]
-sysspectogram = ["resources/configs/*.yaml", "resources/configs/*.txt", "resources/configs/scenarios/*.yaml"]
+sysspectogram = [
+    "resources/configs/*.yaml",
+    "resources/configs/*.txt",
+    "resources/configs/scenarios/*.yaml",
+    "resources/keys/*.pub",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

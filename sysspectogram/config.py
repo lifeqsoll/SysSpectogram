@@ -157,8 +157,17 @@ def _merge_overlay_dict(data: dict[str, Any], overlay: dict[str, Any]) -> dict[s
         if dotted == "response.mode" and value == "enforce":
             value = "shield"
         # CIDR lists are stored as strings in the overlay / Control Center.
+        # Scrub wide/special entries silently on load so a stale 0.0.0.0/0 cannot
+        # disable bans (write paths already validate).
         if dotted == "response.never_ban_cidrs":
-            value = _parse_cidr_list(value)
+            from sysspectogram.admin_ip import validate_never_ban_cidr
+
+            scrubbed: list[str] = []
+            for item in _parse_cidr_list(value):
+                canon, err = validate_never_ban_cidr(item)
+                if err is None and canon:
+                    scrubbed.append(canon)
+            value = scrubbed
         elif not isinstance(value, _OVERLAY_TYPES):
             continue
         cur: dict[str, Any] = data

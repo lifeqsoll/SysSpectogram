@@ -47,20 +47,23 @@ def validate_never_ban_cidr(raw: str) -> tuple[str | None, str | None]:
             net = ip_network(f"{addr}/32" if addr.version == 4 else f"{addr}/128", strict=False)
     except ValueError:
         return None, "invalid_ip"
+    addr = net.network_address
     if isinstance(net, IPv4Network):
         if net.prefixlen < MAX_V4_PREFIX_LEN:
             return None, "too_wide"
-        # Never-ban must be a real admin egress, not unspecified/loopback.
-        if net.network_address.is_unspecified or net.network_address.is_loopback:
-            return None, "special_address"
-        if net.network_address.is_multicast:
+        # Never-ban must be a real admin egress, not unspecified/loopback/0.0.0.0/8.
+        if (
+            addr.is_unspecified
+            or addr.is_loopback
+            or addr.is_multicast
+            or addr.is_reserved
+            or (addr.version == 4 and int(addr) >> 24 == 0)
+        ):
             return None, "special_address"
     elif isinstance(net, IPv6Network):
         if net.prefixlen < MAX_V6_PREFIX_LEN:
             return None, "too_wide"
-        if net.network_address.is_unspecified or net.network_address.is_loopback:
-            return None, "special_address"
-        if net.network_address.is_multicast:
+        if addr.is_unspecified or addr.is_loopback or addr.is_multicast or addr.is_reserved:
             return None, "special_address"
     else:
         return None, "invalid_ip"

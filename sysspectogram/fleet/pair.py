@@ -31,7 +31,7 @@ def pair_start(
     py = remote_python(host)
     lab = shlex.quote((label or "device").strip() or "device")
     remote = f"cd {shlex.quote(home)} && {py} -m sysspectogram home pair-remote --label {lab}"
-    r = ssh_run(host, remote, identity=identity, timeout=45.0)
+    r = ssh_run(host, remote, identity=identity, timeout=45.0, force_tty=True)
     data = r.json()
     if not data:
         return {
