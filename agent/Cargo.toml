@@ -5,7 +5,7 @@ default-members = ["."]
 
 [package]
 name = "sysspectogram-agent"
-version = "1.3.0"
+version = "1.3.1"
 edition = "2021"
 description = "Syscall / process integrity sensor (userspace + Aya-loaded clang BPF probes)"
 license = "MIT"
