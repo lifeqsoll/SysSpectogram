@@ -176,19 +176,17 @@ jobs:
           test -n "${MINISIGN_SECRET_KEY:-}"
           test -n "${MINISIGN_PUBLIC_KEY:-}"
           command -v minisign
-          # Key file already written by "Sign helper" into RUNNER_TEMP/minisign.key
-          if [[ ! -f "$RUNNER_TEMP/minisign.key" ]]; then
-            python3 - <<'PY'
-            import os
-            from pathlib import Path
-            raw = os.environ["MINISIGN_SECRET_KEY"].replace("\r\n", "\n").strip("\n") + "\n"
-            if "\\n" in raw and raw.count("\n") < 2:
-                raw = raw.replace("\\n", "\n")
-            path = Path(os.environ["RUNNER_TEMP"]) / "minisign.key"
-            path.write_text(raw)
-            path.chmod(0o600)
-            PY
-          fi
+          # Rewrite key each time (avoid nested heredoc-in-if: indented PY breaks bash).
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          raw = os.environ["MINISIGN_SECRET_KEY"].replace("\r\n", "\n").strip("\n") + "\n"
+          if "\\n" in raw and raw.count("\n") < 2:
+              raw = raw.replace("\\n", "\n")
+          path = Path(os.environ["RUNNER_TEMP"]) / "minisign.key"
+          path.write_text(raw)
+          path.chmod(0o600)
+          PY
           PUB_B64="$(printf '%s\n' "$MINISIGN_PUBLIC_KEY" | awk 'NF{line=$0} END{print line}')"
           EMBED="$(grep -oE "MINISIGN_PUB_B64='[^']+'" scripts/install-helper-from-release.sh | head -1 | cut -d= -f2 | tr -d "'")"
           EMBED2="$(grep -oE "MINISIGN_PUB_B64='[^']+'" scripts/friend-day0.sh | head -1 | cut -d= -f2 | tr -d "'")"
