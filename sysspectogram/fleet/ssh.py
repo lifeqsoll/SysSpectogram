@@ -55,11 +55,14 @@ class SshDestination:
         return self.host
 
     def known_hosts_name(self) -> str:
-        """Host name token for a known_hosts line (brackets + port when needed)."""
-        if self.port is not None:
+        """Host name token for a known_hosts line.
+
+        OpenSSH uses bare ``host`` / bare IPv6 for port 22, and ``[host]:port``
+        only when the port is non-default. Bracketed ``[host]:22`` or ``[::1]``
+        does not match the default lookup → StrictHostKeyChecking=yes fails closed.
+        """
+        if self.port is not None and self.port != 22:
             return f"[{self.host}]:{self.port}"
-        if ":" in self.host:
-            return f"[{self.host}]"
         return self.host
 
 

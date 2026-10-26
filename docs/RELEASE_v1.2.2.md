@@ -287,7 +287,8 @@ Mass ops (explicit):
 - `fleet warmup` / `mark-fp` require host-key pin; warmup `ok` is false when any host fails
 - `fleet keyscan` / SSH: bare IPv6 (no brackets), `-p` for non-default port, known_hosts `[host]:port`
 - `home seed-never-ban --ip`: validate via `ip_network`; reject junk / `/0` / wider than `/24` (v4) or `/64` (v6); `--force` always writes `.bak` for corrupt **or** non-object JSON
-- Fleet Center in CI (`npm ci` + check + vitest); agent/helper Cargo.toml aligned to 1.2.2
+- Fleet Center in CI (`npm ci` + check + vitest + build); agent/helper Cargo.toml aligned to 1.2.2
+- Security: `parse_ban_ip` on all ban paths; auth.log CIDR injection fixed; nft `ip6`; mandatory minisig on update; pair_* removed from control socket; never_ban validated on every write path; web Host/Content-Type/CSRF; known_hosts port-22; unlock code 10-char alphabet in CC
 - `.gitignore`: `/bin/sysspectogram-agent`; fleet-center lock synced; drop unused `uplot`
 
 ---

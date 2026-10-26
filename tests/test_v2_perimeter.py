@@ -12,13 +12,23 @@ from sysspectogram.response.tokens import TokenStore
 def test_parse_auth_failed():
     lines = [
         "Failed password for root from 203.0.113.9 port 22 ssh2",
-        "Invalid user admin from 198.51.100.1",
+        "Invalid user admin from 198.51.100.1 port 22 ssh2",
         "Accepted publickey for alice from 192.0.2.10 port 22 ssh2",
         "noise",
     ]
     ev = parse_auth_lines(lines)
     assert [e.kind for e in ev] == ["failed", "invalid", "accepted"]
     assert ev[0].ip == "203.0.113.9"
+
+
+def test_parse_auth_rejects_cidr_injection():
+    lines = [
+        "Invalid user x from 0.0.0.0/0 from 203.0.113.9 port 5555 ssh2",
+        "Failed password for invalid user x from 10.0.0.0/8 from 198.51.100.7 port 22 ssh2",
+    ]
+    ev = parse_auth_lines(lines)
+    assert [e.ip for e in ev] == ["203.0.113.9", "198.51.100.7"]
+    assert all("/" not in e.ip for e in ev)
 
 
 def test_bruteforce_rule():

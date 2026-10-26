@@ -84,7 +84,16 @@ def test_ssh_run_uses_dash_p_not_colon_in_dest():
         known.unlink(missing_ok=True)
 
 
-def test_known_hosts_ipv6_with_port():
+def test_known_hosts_port_22_no_brackets():
+    d = parse_ssh_destination("alice@example.com:22")
+    assert d is not None
+    assert d.known_hosts_name() == "example.com"
+    d6 = parse_ssh_destination("root@[::1]")
+    assert d6 is not None
+    assert d6.known_hosts_name() == "::1"
+
+
+def test_known_hosts_ipv6_with_nondefault_port():
     d = parse_ssh_destination("root@[2001:db8::1]:2222")
     assert d is not None
     assert d.known_hosts_name() == "[2001:db8::1]:2222"

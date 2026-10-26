@@ -192,20 +192,20 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
         include_str!("../keys/SysSpectogram.minisign.pub"),
     )
     .map_err(|e| e.to_string())?;
-    // If .minisig is published, verification is mandatory (install minisign if needed).
-    if let Ok(sig_url) = asset_url(&release, "sysspectogram-agent-x86_64-linux-musl.minisig") {
-        let sig_path = cache.join("agent.minisig");
-        download(&sig_url, &sig_path)?;
-        try_minisign(&pub_path, &agent_path, &sig_path)?;
-        log.push(json!({"step": "minisign_agent", "ok": true}));
-    }
+    // .minisig required for both agent and wheel (refuse unsigned releases).
+    let agent_sig_url = asset_url(&release, "sysspectogram-agent-x86_64-linux-musl.minisig")
+        .map_err(|_| "release missing agent .minisig (required)".to_string())?;
+    let sig_path = cache.join("agent.minisig");
+    download(&agent_sig_url, &sig_path)?;
+    try_minisign(&pub_path, &agent_path, &sig_path)?;
+    log.push(json!({"step": "minisign_agent", "ok": true}));
     let wheel_sig_name = format!("{wheel_name}.minisig");
-    if let Ok(sig_url) = asset_url(&release, &wheel_sig_name) {
-        let sig_path = cache.join("wheel.minisig");
-        download(&sig_url, &sig_path)?;
-        try_minisign(&pub_path, &wheel_path, &sig_path)?;
-        log.push(json!({"step": "minisign_wheel", "ok": true}));
-    }
+    let wheel_sig_url = asset_url(&release, &wheel_sig_name)
+        .map_err(|_| "release missing wheel .minisig (required)".to_string())?;
+    let wheel_sig_path = cache.join("wheel.minisig");
+    download(&wheel_sig_url, &wheel_sig_path)?;
+    try_minisign(&pub_path, &wheel_path, &wheel_sig_path)?;
+    log.push(json!({"step": "minisign_wheel", "ok": true}));
 
     // venv + pip install wheel (no heavy torch)
     let venv = root.join(".venv");

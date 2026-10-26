@@ -89,10 +89,11 @@ class WebControllers:
 
     def _run(self, action: str, payload: dict[str, Any]) -> str:
         if action == "ban":
-            ip = str(payload.get("ip") or "")
-            if not ip:
-                raise ValueError("ip required")
-            ttl = payload.get("ttl", 3600)
+            from sysspectogram.net_ip import parse_ban_ip
+
+            ip = parse_ban_ip(payload.get("ip") or "")
+            # Accept ttl_sec (fleet) or legacy ttl.
+            ttl = payload.get("ttl_sec", payload.get("ttl", 3600))
             if ttl in (None, ""):
                 ttl_f = 3600.0
             elif ttl in ("perm", "permanent", 0, "0"):
@@ -101,9 +102,9 @@ class WebControllers:
                 ttl_f = float(ttl)
             return self.nft.ban_ip(ip, ttl_sec=ttl_f, dry_run=self.dry_run)
         if action == "unban":
-            ip = str(payload.get("ip") or "")
-            if not ip:
-                raise ValueError("ip required")
+            from sysspectogram.net_ip import parse_ban_ip
+
+            ip = parse_ban_ip(payload.get("ip") or "")
             return self.nft.unban_ip(ip, dry_run=self.dry_run)
         if action == "shield":
             port = int(payload.get("port") or 0)

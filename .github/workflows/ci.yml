@@ -92,12 +92,13 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: fleet-center/package-lock.json
-      - name: check + vitest
+      - name: check + vitest + build
         working-directory: fleet-center
         run: |
           npm ci
           npm run check
           npm test
+          npm run build
 
   agent:
     runs-on: ubuntu-latest

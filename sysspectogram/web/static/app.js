@@ -385,7 +385,7 @@
     try {
       const res = await fetch("/api/action", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-SS-CSRF": "1" },
         credentials: "same-origin",
         body: JSON.stringify({ action, payload }),
       });

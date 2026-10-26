@@ -94,8 +94,11 @@ class FleetTelegramBot:
         return f"[fleet:{self.scope}]\n{text}"
 
     @staticmethod
-    def _is_group_chat(chat_id: Any) -> bool:
-        """Telegram group/supergroup/channel IDs are negative."""
+    def _is_group_chat(chat_id: Any, chat_type: str | None = None) -> bool:
+        """Telegram group/supergroup/channel IDs are negative; channels also by type."""
+        ctype = (chat_type or "").strip().lower()
+        if ctype in ("group", "supergroup", "channel"):
+            return True
         s = str(chat_id or "").strip()
         if s.startswith("-"):
             return True
@@ -104,27 +107,35 @@ class FleetTelegramBot:
         except ValueError:
             return False
 
-    def allowed(self, chat_id: Any, user_id: Any = None) -> bool:
+    def allowed(
+        self,
+        chat_id: Any,
+        user_id: Any = None,
+        *,
+        chat_type: str | None = None,
+    ) -> bool:
         """Gate: configured chat + (for groups / allowlist) matching **user** id.
 
         Putting a group chat ID into FLEET_TELEGRAM_ALLOW_USERS does **not**
-        authorize every member — only positive user IDs count.
+        authorize every member — only positive user IDs count. Channels are
+        treated as groups (never as a private DM).
         """
         chat_s = str(chat_id or "")
         user_s = str(user_id or "").strip() if user_id is not None else ""
         configured = str(self.client.chat_id or "")
         if chat_s != configured:
             return False
-        if self._is_group_chat(chat_s):
+        if self._is_group_chat(chat_s, chat_type):
             if not self.user_ids:
                 return False
             return bool(user_s) and user_s in self.user_ids
-        # Private DM with the configured chat.
+        # Private DM with the configured chat — require a concrete user id.
+        if not user_s:
+            return False
         if self.user_ids:
-            # In DMs chat_id often equals user_id; accept either explicit user or chat.
-            effective = user_s or chat_s
-            return effective in self.user_ids
-        return True
+            return user_s in self.user_ids
+        # No allowlist: sole DM peer (chat_id == user_id for private chats).
+        return user_s == chat_s
 
     def mutating_allowed(self, chat_id: Any, user_id: Any = None) -> bool:
         """Same as allowed — groups already require a user allowlist."""
@@ -157,8 +168,15 @@ class FleetTelegramBot:
         )
         return _markup(rows)
 
-    def handle_command(self, text: str, chat_id: str, user_id: str | None = None) -> None:
-        if not self.allowed(chat_id, user_id):
+    def handle_command(
+        self,
+        text: str,
+        chat_id: str,
+        user_id: str | None = None,
+        *,
+        chat_type: str | None = None,
+    ) -> None:
+        if not self.allowed(chat_id, user_id, chat_type=chat_type):
             return
         parts = text.strip().split()
         if not parts:
@@ -276,9 +294,10 @@ class FleetTelegramBot:
     def handle_callback(self, cq: dict) -> None:
         chat = (cq.get("message") or {}).get("chat") or {}
         chat_id = str(chat.get("id", ""))
+        chat_type = str(chat.get("type") or "") or None
         from_user = cq.get("from") or {}
         user_id = str(from_user.get("id", "") or "") or None
-        if not self.allowed(chat_id, user_id):
+        if not self.allowed(chat_id, user_id, chat_type=chat_type):
             self.client.answer_callback(cq.get("id", ""), "unauthorized")
             return
         data = cq.get("data") or ""
@@ -294,7 +313,7 @@ class FleetTelegramBot:
             return
         if not self.unlock.unlocked():
             self.client.answer_callback(cq_id, "locked")
-            self.handle_command("/status", chat_id)  # will print lock help via gate
+            self.handle_command("/status", chat_id, user_id=user_id, chat_type=chat_type)
             self.client.send_message(self.prefix("LOCKED — /unlock first"), chat_id=chat_id)
             return
         if data == "cmd|status":
@@ -361,7 +380,23 @@ class FleetTelegramBot:
                     chat_id=chat_id,
                 )
                 return
-            # Second gate: same user must reply /confirm_l3 within 60s (not just same chat).
+            # Second gate: same user must reply /confirm_l3 within 60s.
+            # Do not let a second user overwrite another operator's pending confirm.
+            pend = self._pending_l3
+            if (
+                pend
+                and str(pend.get("chat_id")) == str(chat_id)
+                and time.time() - float(pend.get("ts") or 0) <= 60
+                and str(pend.get("user_id") or "") not in ("", uid)
+            ):
+                self.client.send_message(
+                    self.prefix(
+                        f"L3 confirm already pending for another user "
+                        f"(expires in {max(0, int(60 - (time.time() - float(pend.get('ts') or 0))))}s)"
+                    ),
+                    chat_id=chat_id,
+                )
+                return
             self._pending_l3 = {
                 "chat_id": str(chat_id),
                 "user_id": uid,
@@ -434,14 +469,18 @@ class FleetTelegramBot:
                 continue
             for u in updates or []:
                 self._offset = int(u.get("update_id", 0)) + 1
-                if "message" in u:
-                    msg = u["message"]
+                if "message" in u or "channel_post" in u:
+                    msg = u.get("message") or u.get("channel_post") or {}
                     text = msg.get("text") or ""
-                    chat_id = str((msg.get("chat") or {}).get("id") or "")
+                    chat = msg.get("chat") or {}
+                    chat_id = str(chat.get("id") or "")
+                    chat_type = str(chat.get("type") or "") or None
                     from_user = msg.get("from") or {}
                     user_id = str(from_user.get("id", "") or "") or None
                     if text:
-                        self.handle_command(text, chat_id, user_id=user_id)
+                        self.handle_command(
+                            text, chat_id, user_id=user_id, chat_type=chat_type
+                        )
                 elif "callback_query" in u:
                     self.handle_callback(u["callback_query"])
 

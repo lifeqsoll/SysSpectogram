@@ -38,8 +38,12 @@ class NftBackend:
 
     def is_never_ban(self, ip: str) -> bool:
         try:
-            addr = ip_address(str(ip).strip())
+            from sysspectogram.net_ip import parse_ban_ip
+
+            addr = ip_address(parse_ban_ip(ip))
         except ValueError:
+            # Fail-closed for never-ban checks: invalid IPs are not "protected",
+            # but ban_ip must also reject them before touching nft.
             return False
         for cidr in self.never_ban_cidrs:
             try:
@@ -90,6 +94,12 @@ class NftBackend:
         return None
 
     def ban_ip(self, ip: str, ttl_sec: float | None = 3600.0, dry_run: bool = False) -> str:
+        from sysspectogram.net_ip import nft_saddr_family, parse_ban_ip
+
+        try:
+            family, ip = nft_saddr_family(ip)
+        except ValueError as exc:
+            return f"refuse ban: {exc}"
         if self.is_never_ban(ip):
             return f"never_ban skip {ip}"
         # replace existing
@@ -103,6 +113,7 @@ class NftBackend:
         handle = None
         backend = "memory"
         if shutil.which("nft"):
+            # Pass argv list (no shell); family is ip/ip6 from parse only.
             code, out = self._run(
                 [
                     "nft",
@@ -111,7 +122,7 @@ class NftBackend:
                     "inet",
                     "sysspectogram",
                     "input",
-                    "ip",
+                    family,
                     "saddr",
                     ip,
                     "drop",
@@ -123,10 +134,13 @@ class NftBackend:
                 return f"nft failed: {out.strip()}"
             handle = self._find_nft_handle(ip)
             backend = "nft"
-        elif shutil.which("iptables"):
+        elif shutil.which("iptables") or shutil.which("ip6tables"):
+            ipt = "ip6tables" if family == "ip6" and shutil.which("ip6tables") else "iptables"
+            if family == "ip6" and ipt != "ip6tables":
+                return "no ip6tables available for IPv6 ban"
             code, out = self._run(
                 [
-                    "iptables",
+                    ipt,
                     "-I",
                     "INPUT",
                     "-s",
@@ -140,14 +154,20 @@ class NftBackend:
                 ]
             )
             if code != 0:
-                return f"iptables failed: {out.strip()}"
-            backend = "iptables"
+                return f"{ipt} failed: {out.strip()}"
+            backend = ipt
         else:
             return "no nft/iptables available"
         self.bans[ip] = BanRecord(ip, time.time(), expires, comment, handle, backend)
         return f"banned {ip} ttl={ttl_sec} backend={backend} handle={handle}"
 
     def unban_ip(self, ip: str, dry_run: bool = False) -> str:
+        from sysspectogram.net_ip import nft_saddr_family
+
+        try:
+            family, ip = nft_saddr_family(ip)
+        except ValueError as exc:
+            return f"refuse unban: {exc}"
         rec = self.bans.pop(ip, None)
         if dry_run:
             return f"dry-run unban {ip}"
@@ -163,13 +183,13 @@ class NftBackend:
                     return f"nft unban failed handle={handle}: {out.strip()}"
                 return f"unbanned {ip} nft handle={handle}"
             return f"unban: no nft handle found for {ip} (memory cleared)"
-        if shutil.which("iptables"):
-            # delete matching DROP rules for source (may need multiple -D)
+        ipt = "ip6tables" if family == "ip6" and shutil.which("ip6tables") else "iptables"
+        if shutil.which(ipt):
             for _ in range(8):
-                code, _ = self._run(["iptables", "-D", "INPUT", "-s", ip, "-j", "DROP"])
+                code, _ = self._run([ipt, "-D", "INPUT", "-s", ip, "-j", "DROP"])
                 if code != 0:
                     break
-            return f"unban attempted for {ip} (iptables)"
+            return f"unban attempted for {ip} ({ipt})"
         return f"unban recorded {ip}"
 
     def list_bans(self) -> list[BanRecord]:

@@ -186,14 +186,34 @@ impl Drop for Staging {
 }
 
 fn copy_regular(src: &Path, dst: &Path) -> Result<(), String> {
+    // Re-check type via open(O_NOFOLLOW) so a TOCTOU symlink→FIFO swap cannot hang root.
+    use std::os::unix::fs::OpenOptionsExt;
     let meta = fs::symlink_metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("{} is a symlink", src.display()));
+    }
     if !meta.is_file() {
         return Err(format!("{} is not a regular file", src.display()));
     }
     if meta.len() > MAX_FILE_BYTES {
         return Err(format!("{} is too large", src.display()));
     }
-    fs::copy(src, dst).map_err(|e| format!("copy {}: {e}", src.display()))?;
+    let mut infile = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(src)
+        .map_err(|e| format!("open {}: {e}", src.display()))?;
+    let meta2 = infile
+        .metadata()
+        .map_err(|e| format!("fstat {}: {e}", src.display()))?;
+    if !meta2.is_file() || meta2.file_type().is_symlink() {
+        return Err(format!("{} changed type during copy", src.display()));
+    }
+    if meta2.len() > MAX_FILE_BYTES {
+        return Err(format!("{} is too large", src.display()));
+    }
+    let mut outfile = fs::File::create(dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
+    std::io::copy(&mut infile, &mut outfile).map_err(|e| format!("copy {}: {e}", src.display()))?;
     Ok(())
 }
 
@@ -374,6 +394,12 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
                 Err(format!("{key}: must be one of {choices:?}"))
             }
         }
+        (Kind::String, Value::String(s)) if key == "response.never_ban_cidrs" => {
+            if s.len() > 2048 {
+                return Err(format!("{key}: string too long (max 2048)"));
+            }
+            validate_never_ban_list(s)
+        }
         (Kind::String, Value::String(s)) => {
             if s.len() > 2048 {
                 Err(format!("{key}: string too long (max 2048)"))
@@ -384,6 +410,7 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
         // never_ban: allow a JSON array of IP/CIDR strings as well as one comma-separated string
         (Kind::String, Value::Array(items)) if key == "response.never_ban_cidrs" => {
             let mut total = 0usize;
+            let mut parts: Vec<&str> = Vec::new();
             for item in items {
                 let Some(s) = item.as_str() else {
                     return Err(format!("{key}: list entries must be strings"));
@@ -392,11 +419,76 @@ pub fn validate_change(key: &str, value: &Value) -> Result<(), String> {
                 if total > 2048 {
                     return Err(format!("{key}: string too long (max 2048)"));
                 }
+                parts.push(s);
             }
-            Ok(())
+            validate_never_ban_list(&parts.join(","))
         }
         _ => Err(format!("{key}: wrong value type")),
     }
+}
+
+/// Mirror Python `validate_never_ban_cidr`: host or /24+ (v4) / /64+ (v6); no 0.0.0.0/127.0.0.1.
+fn validate_never_ban_cidr(raw: &str) -> Result<(), String> {
+    let token = raw.trim();
+    if token.is_empty() {
+        return Err("empty".into());
+    }
+    let (addr, prefix_opt) = match token.split_once('/') {
+        Some((a, p)) => (a.trim(), Some(p.trim())),
+        None => (token, None),
+    };
+    if addr == "0.0.0.0" || addr == "::" || addr == "127.0.0.1" || addr == "::1" {
+        return Err("special_address".into());
+    }
+    let is_v6 = addr.contains(':');
+    let max_wide = if is_v6 { 64 } else { 24 };
+    let host_pref = if is_v6 { 128 } else { 32 };
+    let prefix: u8 = match prefix_opt {
+        None => host_pref,
+        Some(p) => p
+            .parse()
+            .map_err(|_| format!("bad prefix in {token}"))?,
+    };
+    if prefix > host_pref {
+        return Err("invalid_ip".into());
+    }
+    if prefix < max_wide {
+        return Err("too_wide".into());
+    }
+    // Lightweight character check — full parse left to Python overlay path too.
+    if is_v6 {
+        if !addr.chars().all(|c| c.is_ascii_hexdigit() || c == ':') {
+            return Err("invalid_ip".into());
+        }
+    } else {
+        let parts: Vec<&str> = addr.split('.').collect();
+        if parts.len() != 4
+            || parts.iter().any(|p| {
+                p.is_empty()
+                    || p.len() > 3
+                    || !p.chars().all(|c| c.is_ascii_digit())
+                    || p.parse::<u32>().map(|n| n > 255).unwrap_or(true)
+            })
+        {
+            return Err("invalid_ip".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_never_ban_list(raw: &str) -> Result<(), String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Ok(());
+    }
+    for part in text.split([',', ';', ' ']) {
+        let p = part.trim();
+        if p.is_empty() {
+            continue;
+        }
+        validate_never_ban_cidr(p).map_err(|e| format!("response.never_ban_cidrs: {e}"))?;
+    }
+    Ok(())
 }
 
 fn backup_path() -> PathBuf {
@@ -521,6 +613,8 @@ mod tests {
             &json!(["203.0.113.10/32", "198.51.100.20/32"])
         )
         .is_ok());
+        assert!(validate_change("response.never_ban_cidrs", &json!("0.0.0.0/0")).is_err());
+        assert!(validate_change("response.never_ban_cidrs", &json!("127.0.0.1/32")).is_err());
         assert!(validate_change("response.never_ban_cidrs", &json!([1, 2])).is_err());
         assert!(validate_change("ui.lang", &json!("ru")).is_ok());
         assert!(validate_change("web.enabled", &json!(true)).is_ok());

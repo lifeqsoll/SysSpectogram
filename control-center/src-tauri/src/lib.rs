@@ -460,8 +460,17 @@ fn unlock_code() -> Result<Option<String>, String> {
     match std::fs::read_to_string(&path) {
         Ok(raw) => {
             let code = raw.trim().to_string();
-            let valid = code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit());
-            Ok(if valid { Some(code) } else { None })
+            // Steam-like alphabet: A-Z2-9 without 0/O/1/I/L (DEFAULT_CODE_LEN=10).
+            const ALPH: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            let valid = code.len() == 10
+                && code
+                    .bytes()
+                    .all(|b| ALPH.contains(&b.to_ascii_uppercase()));
+            Ok(if valid {
+                Some(code.to_ascii_uppercase())
+            } else {
+                None
+            })
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("cannot read unlock code: {e}")),

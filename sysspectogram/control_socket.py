@@ -181,14 +181,13 @@ def make_handler(
         op = str(req.get("op") or req.get("action") or "").strip().lower()
         if op in ("", "ping", "status"):
             return {"ok": True, "status": controllers.status()}
-        if op == "pair_begin":
-            from sysspectogram.remote_devices import begin_pair
-
-            return begin_pair(label=str(req.get("label") or ""))
-        if op == "pair_complete":
-            from sysspectogram.remote_devices import complete_pair
-
-            return complete_pair(str(req.get("code") or ""), label=req.get("label"))
+        # Pairing is CLI-only (home pair-remote / pair-complete). Exposing it on the
+        # socket let any same-UID client mint a device_token without an unlock.
+        if op in ("pair_begin", "pair_complete"):
+            return {
+                "ok": False,
+                "error": "pair_* not available on control socket — use home pair-remote / pair-complete on the VPS console",
+            }
         if op in ("list_devices", "devices"):
             from sysspectogram.remote_devices import list_devices
 
@@ -199,20 +198,6 @@ def make_handler(
                     for d in list_devices()
                 ],
             }
-
-        need_token = devices_configured() and op not in (
-            "pair_begin",
-            "pair_complete",
-            "list_devices",
-            "devices",
-        )
-        if need_token:
-            token = req.get("device_token") or req.get("token")
-            if verify_token(str(token) if token else None) is None:
-                return {
-                    "ok": False,
-                    "error": "device_token required (pair with home pair-remote / fleet pair)",
-                }
 
         if op == "unlock":
             from sysspectogram.unlock_help import locked_playbook
@@ -225,6 +210,24 @@ def make_handler(
             return {
                 "ok": False,
                 "error": "bad or expired unlock code",
+                "help": locked_playbook(),
+            }
+
+        # Mutating ops always require a device_token once any device is paired.
+        # Before first pair, require an unlocked console session.
+        if devices_configured():
+            token = req.get("device_token") or req.get("token")
+            if verify_token(str(token) if token else None) is None:
+                return {
+                    "ok": False,
+                    "error": "device_token required (pair with home pair-remote / fleet pair)",
+                }
+        elif unlock_gate is not None and unlock_gate.enabled and not unlock_gate.unlocked():
+            from sysspectogram.unlock_help import locked_playbook
+
+            return {
+                "ok": False,
+                "error": "LOCKED",
                 "help": locked_playbook(),
             }
 

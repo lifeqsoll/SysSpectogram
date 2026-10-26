@@ -9,16 +9,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+# Greedy ``.* from <ip> port <n>`` so a forged
+# ``from 0.0.0.0/0 from REAL port N`` binds the real trailing address.
+_FROM_IP_PORT = r".* from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
 _FAILED_RE = re.compile(
-    r"Failed password for (invalid user )?(?P<user>\S+) from (?P<ip>\S+)",
+    rf"Failed password for (invalid user )?(?P<user>\S+){_FROM_IP_PORT}",
     re.I,
 )
 _INVALID_RE = re.compile(
-    r"Invalid user (?P<user>\S+) from (?P<ip>\S+)",
+    rf"Invalid user (?P<user>\S+){_FROM_IP_PORT}",
     re.I,
 )
 _ACCEPTED_RE = re.compile(
-    r"Accepted \S+ for (?P<user>\S+) from (?P<ip>\S+)",
+    rf"Accepted \S+ for (?P<user>\S+){_FROM_IP_PORT}",
     re.I,
 )
 
@@ -32,17 +35,30 @@ class AuthEvent:
     ts: float
 
 
+def _normalize_auth_ip(raw: str) -> str | None:
+    """Keep only a bare host address; drop forged CIDRs / junk from log injection."""
+    token = (raw or "").strip()
+    if not token or "/" in token:
+        return None
+    try:
+        return str(ipaddress.ip_address(token))
+    except ValueError:
+        return None
+
+
 def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
     ts = ts if ts is not None else datetime.now(timezone.utc).timestamp()
-    m = _FAILED_RE.search(line)
-    if m:
-        return AuthEvent("failed", m.group("ip"), m.group("user"), line.strip(), ts)
-    m = _INVALID_RE.search(line)
-    if m:
-        return AuthEvent("invalid", m.group("ip"), m.group("user"), line.strip(), ts)
-    m = _ACCEPTED_RE.search(line)
-    if m:
-        return AuthEvent("accepted", m.group("ip"), m.group("user"), line.strip(), ts)
+    for kind, rx in (("failed", _FAILED_RE), ("invalid", _INVALID_RE), ("accepted", _ACCEPTED_RE)):
+        m = rx.search(line)
+        if not m:
+            continue
+        # Prefer the last ``from <ip> port`` on the line (sshd may echo forged text earlier).
+        matches = list(rx.finditer(line))
+        m = matches[-1] if matches else m
+        ip = _normalize_auth_ip(m.group("ip"))
+        if ip is None:
+            return None
+        return AuthEvent(kind, ip, m.group("user"), line.strip(), ts)
     return None
 
 

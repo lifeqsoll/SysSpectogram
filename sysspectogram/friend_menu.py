@@ -214,7 +214,13 @@ def _cmd_never_ban() -> None:
         )
     )
     raw = Prompt.ask(_t("Never-ban", "Never-ban"), default=default)
-    _write_overlay({"response.never_ban_cidrs": raw})
+    from sysspectogram.admin_ip import validate_never_ban_value
+
+    canon, err = validate_never_ban_value(raw)
+    if err is not None:
+        console.print(f"[red]invalid never-ban[/]: {err} (no /0, loopback, or wide prefixes)")
+        return
+    _write_overlay({"response.never_ban_cidrs": canon or ""})
     console.print("[green]saved[/]")
 
 

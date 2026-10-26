@@ -40,5 +40,8 @@ def test_control_socket_status_and_ban_when_unlocked(tmp_path):
         locked = request(sock, {"op": "ban", "ip": "203.0.113.10"})
         assert locked["ok"] is False
         assert "LOCKED" in str(locked.get("error") or "")
+        # M1: pairing must not be exposable on the socket
+        assert request(sock, {"op": "pair_begin", "label": "x"})["ok"] is False
+        assert request(sock, {"op": "pair_complete", "code": "ABCD"})["ok"] is False
     finally:
         srv.stop()

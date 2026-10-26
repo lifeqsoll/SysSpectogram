@@ -52,6 +52,14 @@ def _verify_minisign(pub: Path, data: Path, sig: Path) -> None:
         raise RuntimeError(err)
 
 
+def _version_tuple(ver: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for chunk in str(ver).strip().lstrip("v").split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts or (0,))
+
+
 def update_stack(tag: str) -> dict[str, Any]:
     tag = tag.strip()
     if not tag.startswith("v"):
@@ -104,37 +112,55 @@ def update_stack(tag: str) -> dict[str, Any]:
         return {"ok": False, "error": "sha256 agent mismatch", "steps": steps}
     steps.append({"step": "sha256_agent", "ok": True})
 
-    # Embedded pubkey path: prefer CC key if present in tree, else skip minisign when no .minisig
-    pub_candidates = [
-        Path(__file__).resolve().parents[1] / "control-center" / "src-tauri" / "keys" / "SysSpectogram.minisign.pub",
-        home / "SysSpectogram.minisign.pub",
-        cache / "SysSpectogram.minisign.pub",
-    ]
-    pub = next((p for p in pub_candidates if p.is_file()), None)
-    if f"{agent_key}.minisig" in assets:
-        if pub is None:
-            # fetch pubkey asset if published
-            if "SysSpectogram.minisign.pub" in assets:
-                pub = cache / "SysSpectogram.minisign.pub"
-                _download(assets["SysSpectogram.minisign.pub"], pub)
-            else:
-                return {"ok": False, "error": "agent.minisig present but no pubkey", "steps": steps}
-        sig = cache / "agent.minisig"
-        _download(assets[f"{agent_key}.minisig"], sig)
-        try:
-            _verify_minisign(pub, agent_path, sig)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"minisign agent: {exc}", "steps": steps}
-        steps.append({"step": "minisign_agent", "ok": True})
-    if f"{wheel_name}.minisig" in assets and pub is not None:
-        sig = cache / "wheel.minisig"
-        _download(assets[f"{wheel_name}.minisig"], sig)
-        try:
-            _verify_minisign(pub, wheel_path, sig)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"minisign wheel: {exc}", "steps": steps}
-        steps.append({"step": "minisign_wheel", "ok": True})
+    # Embedded pubkey only (ADR 0005) — never download pubkey from the release.
+    pub = (
+        Path(__file__).resolve().parents[1]
+        / "control-center"
+        / "src-tauri"
+        / "keys"
+        / "SysSpectogram.minisign.pub"
+    )
+    if not pub.is_file():
+        return {
+            "ok": False,
+            "error": "embedded SysSpectogram.minisign.pub missing from install tree",
+            "steps": steps,
+        }
+    agent_sig_name = f"{agent_key}.minisig"
+    wheel_sig_name = f"{wheel_name}.minisig"
+    if agent_sig_name not in assets or wheel_sig_name not in assets:
+        return {
+            "ok": False,
+            "error": "release missing required .minisig (agent and wheel); refuse unsigned update",
+            "steps": steps,
+        }
+    # Refuse version downgrade when current install reports a version.
+    try:
+        from sysspectogram import __version__ as cur_ver
 
+        want = tag.lstrip("v")
+        if _version_tuple(want) < _version_tuple(str(cur_ver)):
+            return {
+                "ok": False,
+                "error": f"refuse downgrade {cur_ver} → {want}",
+                "steps": steps,
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    sig_agent = cache / "agent.minisig"
+    _download(assets[agent_sig_name], sig_agent)
+    try:
+        _verify_minisign(pub, agent_path, sig_agent)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"minisign agent: {exc}", "steps": steps}
+    steps.append({"step": "minisign_agent", "ok": True})
+    sig_wheel = cache / "wheel.minisig"
+    _download(assets[wheel_sig_name], sig_wheel)
+    try:
+        _verify_minisign(pub, wheel_path, sig_wheel)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"minisign wheel: {exc}", "steps": steps}
+    steps.append({"step": "minisign_wheel", "ok": True})
     venv = home / ".venv"
     py = venv / "bin" / "python"
     if not py.is_file():

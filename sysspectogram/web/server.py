@@ -147,7 +147,10 @@ def _make_handler(app: WebAppState):
             if allow:
                 self.send_header("Access-Control-Allow-Origin", allow)
                 self.send_header("Vary", "Origin")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Telegram-Init-Data")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, X-Telegram-Init-Data, X-SS-CSRF",
+            )
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.end_headers()
 
@@ -246,12 +249,41 @@ def _make_handler(app: WebAppState):
             if path == "/api/action":
                 if app.controllers is None:
                     return self._json(503, {"ok": False, "error": "actions not configured"})
-                # CSRF: when public_url is set, Origin is required and must match.
+                # Host whitelist (DNS rebinding / Host header attacks).
+                host_hdr = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+                allowed_hosts = {"127.0.0.1", "localhost", "::1"}
+                if app.bind_host:
+                    allowed_hosts.add(str(app.bind_host).strip().lower())
                 if app.public_url:
-                    origin = (self.headers.get("Origin") or "").rstrip("/")
+                    try:
+                        from urllib.parse import urlparse as _up
+
+                        ph = (_up(app.public_url).hostname or "").lower()
+                        if ph:
+                            allowed_hosts.add(ph)
+                    except Exception:
+                        pass
+                if host_hdr and host_hdr not in allowed_hosts:
+                    return self._json(403, {"ok": False, "error": "bad host"})
+                ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if ctype != "application/json":
+                    return self._json(415, {"ok": False, "error": "Content-Type must be application/json"})
+                # CSRF: require matching Origin when public_url set; for local-unauth
+                # require either no Origin or a loopback Origin, plus custom header.
+                origin = (self.headers.get("Origin") or "").rstrip("/")
+                if app.public_url:
                     expect = app.public_url.rstrip("/")
                     if not origin or origin != expect:
                         return self._json(403, {"ok": False, "error": "origin required"})
+                else:
+                    if origin:
+                        from urllib.parse import urlparse as _up
+
+                        ohost = (_up(origin).hostname or "").lower()
+                        if ohost not in {"127.0.0.1", "localhost", "::1"}:
+                            return self._json(403, {"ok": False, "error": "origin not allowed"})
+                    if (self.headers.get("X-SS-CSRF") or "").strip() != "1":
+                        return self._json(403, {"ok": False, "error": "X-SS-CSRF required"})
                 action = str(payload.get("action") or "")
                 data = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
                 # strip action key from payload copy

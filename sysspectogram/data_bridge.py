@@ -81,16 +81,21 @@ def unpack_data_bundle(tar_path: Path, dest: Path) -> dict[str, Any]:
     dest = Path(dest).resolve()
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tar_path, "r:gz") as tar:
-        # refuse path traversal
+        # refuse path traversal / symlink slips (same policy as profiles.py)
         for m in tar.getmembers():
             if m.name.startswith("/") or ".." in Path(m.name).parts:
                 raise ValueError(f"unsafe tar member: {m.name}")
+            if m.issym() or m.islnk() or m.isdev() or m.isfifo():
+                raise ValueError(f"refusing special member: {m.name}")
             if any(bad in m.name.lower() for bad in _FORBIDDEN):
                 raise ValueError(f"secret-like member refused: {m.name}")
         try:
             tar.extractall(dest, filter="data")  # type: ignore[call-arg]
-        except TypeError:
-            tar.extractall(dest)
+        except TypeError as exc:
+            raise ValueError(
+                "Python tar extract filter= unavailable — refuse fallback extractall "
+                "(upgrade to Python 3.12+ or rebuild with filter support)"
+            ) from exc
     manifest_path = dest / "bundle" / "manifest.json"
     if not manifest_path.exists():
         # flat extract

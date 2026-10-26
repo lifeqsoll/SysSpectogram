@@ -1351,7 +1351,23 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
             continue
         if key == "response.mode" and value == "enforce":
             value = "shield"
-        if not isinstance(value, (bool, int, float, str)):
+        if key == "response.never_ban_cidrs":
+            from sysspectogram.admin_ip import validate_never_ban_value
+
+            canon, err = validate_never_ban_value(value)
+            if err is not None:
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": f"never_ban_cidrs: {err}",
+                            "hint": "host IP or /24+/64+ only; no 0.0.0.0/127.0.0.1",
+                        }
+                    )
+                )
+                return 2
+            value = canon or ""
+        elif not isinstance(value, (bool, int, float, str)):
             rejected.append(str(key))
             continue
         current[str(key)] = value

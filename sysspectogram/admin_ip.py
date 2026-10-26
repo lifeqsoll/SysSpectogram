@@ -6,7 +6,7 @@ import json
 import urllib.error
 import urllib.request
 from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
-from typing import Any
+from typing import Any  # noqa: TC003 — used at runtime in validate_never_ban_value
 
 DETECT_URLS = (
     "https://ifconfig.me/ip",
@@ -33,7 +33,8 @@ def cidr_for_ip(ip: str) -> str:
 def validate_never_ban_cidr(raw: str) -> tuple[str | None, str | None]:
     """Return ``(canonical_cidr, error_reason)``.
 
-    Rejects junk, ``/0``, and prefixes wider than /24 (v4) or /64 (v6).
+    Rejects junk, ``/0``, unspecified/loopback (``0.0.0.0``, ``127.0.0.1``),
+    and prefixes wider than /24 (v4) or /64 (v6).
     """
     token = (raw or "").strip()
     if not token:
@@ -47,19 +48,52 @@ def validate_never_ban_cidr(raw: str) -> tuple[str | None, str | None]:
     except ValueError:
         return None, "invalid_ip"
     if isinstance(net, IPv4Network):
-        if int(net.network_address) == 0 and net.prefixlen == 0:
-            return None, "too_wide"
         if net.prefixlen < MAX_V4_PREFIX_LEN:
             return None, "too_wide"
+        # Never-ban must be a real admin egress, not unspecified/loopback.
+        if net.network_address.is_unspecified or net.network_address.is_loopback:
+            return None, "special_address"
+        if net.network_address.is_multicast:
+            return None, "special_address"
     elif isinstance(net, IPv6Network):
-        if int(net.network_address) == 0 and net.prefixlen == 0:
-            return None, "too_wide"
         if net.prefixlen < MAX_V6_PREFIX_LEN:
             return None, "too_wide"
+        if net.network_address.is_unspecified or net.network_address.is_loopback:
+            return None, "special_address"
+        if net.network_address.is_multicast:
+            return None, "special_address"
     else:
         return None, "invalid_ip"
     # Host routes stay as /32 or /128; otherwise keep the network form.
     return str(net), None
+
+
+def validate_never_ban_value(raw: Any) -> tuple[str | None, str | None]:
+    """Validate a never_ban overlay value (comma string or list of CIDRs).
+
+    Returns ``(canonical_comma_string, error)``. Empty list/string is allowed
+    (operator may clear), but every non-empty entry must pass
+    :func:`validate_never_ban_cidr`.
+    """
+    if raw is None:
+        return "", None
+    if isinstance(raw, list):
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        text = str(raw).strip()
+        if not text:
+            return "", None
+        parts = [p.strip() for p in text.replace(";", ",").replace(" ", ",").split(",") if p.strip()]
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        cidr, err = validate_never_ban_cidr(part)
+        if err or not cidr:
+            return None, err or "invalid_ip"
+        if cidr not in seen:
+            seen.add(cidr)
+            out.append(cidr)
+    return ", ".join(out), None
 
 
 def detect_public_ip(*, timeout: float = 5.0) -> str | None:

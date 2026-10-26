@@ -262,6 +262,12 @@ def ban_ip(
     identity: str | None = None,
 ) -> dict[str, Any]:
     """Fan-out IP ban to scope (control action `ban`)."""
+    from sysspectogram.net_ip import parse_ban_ip
+
+    try:
+        ip = parse_ban_ip(ip)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "scope": scope, "results": []}
     hosts = _select(store, scope)
 
     def one(h: FleetHost) -> dict[str, Any]:

@@ -495,7 +495,9 @@ def run_guard(
         from ipaddress import ip_network, ip_address
 
         try:
-            addr = ip_address(alert.ip)
+            from sysspectogram.net_ip import parse_ban_ip
+
+            addr = ip_address(parse_ban_ip(alert.ip))
             for cidr in never_ban:
                 try:
                     if addr in ip_network(cidr, strict=False):
@@ -504,7 +506,9 @@ def run_guard(
                 except ValueError:
                     continue
         except ValueError:
-            pass
+            # Fail-closed: forged / CIDR / junk IPs never reach nft.
+            console.print(f"[yellow]auto_ban skip[/] invalid ip={alert.ip!r}")
+            return
         ttl = auto_ban_ttl
         # OSINT 2.0: scale ban TTL by recon_score when present on extras / recent dossier
         score = None

@@ -32,8 +32,16 @@ def test_allowed_falls_back_to_configured_dm(tmp_path: Path):
     client = MagicMock()
     client.chat_id = "100"
     bot = FleetTelegramBot(client, FleetStore(tmp_path / "fleet.json"), allow_users=frozenset())
-    assert bot.allowed("100") is True
-    assert bot.allowed("999") is False
+    assert bot.allowed("100", user_id="100") is True
+    assert bot.allowed("100") is False  # require user id
+    assert bot.allowed("999", user_id="999") is False
+
+
+def test_channel_type_not_treated_as_dm(tmp_path: Path):
+    client = MagicMock()
+    client.chat_id = "100"
+    bot = FleetTelegramBot(client, FleetStore(tmp_path / "fleet.json"), allow_users=frozenset())
+    assert bot.allowed("100", user_id="100", chat_type="channel") is False
 
 
 def test_group_without_user_allowlist_denied(tmp_path: Path):
@@ -117,10 +125,29 @@ def test_handle_callback_unauthorized(tmp_path: Path):
             "id": "cq1",
             "data": "cmd|status",
             "from": {"id": 7},
-            "message": {"chat": {"id": 999}},
+            "message": {"chat": {"id": 999, "type": "private"}},
         }
     )
     client.answer_callback.assert_called_once_with("cq1", "unauthorized")
+
+
+def test_second_user_cannot_overwrite_pending_l3(tmp_path: Path):
+    client = MagicMock()
+    client.chat_id = "100"
+    bot = FleetTelegramBot(
+        client,
+        FleetStore(tmp_path / "fleet.json"),
+        allow_users=frozenset({"100", "1", "2"}),
+    )
+    bot.unlock._unlocked = True  # noqa: SLF001
+    bot._pending_l3 = {
+        "chat_id": "100",
+        "user_id": "1",
+        "scope": "all",
+        "ts": time.time(),
+    }
+    bot._run_attack("100", "L3", user_id="2")
+    assert bot._pending_l3["user_id"] == "1"
 
 
 def test_confirm_l3_wrong_user_keeps_pending(tmp_path: Path):
@@ -170,7 +197,6 @@ def test_confirm_l3_rejects_other_chat_keeps_pending(tmp_path: Path):
     }
     bot._pending_l3 = pending
     with patch("sysspectogram.fleet_tg.attack") as attack_mock:
-        # chat 200 is not configured → silent deny at allowed()
         bot.handle_command("/confirm_l3", "200", user_id="1")
         attack_mock.assert_not_called()
         assert bot._pending_l3 is pending
