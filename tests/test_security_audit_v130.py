@@ -29,7 +29,7 @@ def test_h01_install_helper_mentions_minisign():
     assert 'PACK_NAME="sysspectogram-helper-packaging.tgz"' in script
     assert "need minisign" in script
     assert "/usr/share/sysspectogram/minisign.pub" in script
-    assert 'TAG="${1:-v1.3.1}"' in script
+    assert 'TAG="${1:-v1.3.2}"' in script
     header = script.split("set -euo pipefail", 1)[0]
     assert "releases/download/" in header
     assert "| sudo bash" not in header

@@ -2,7 +2,7 @@
 # Install privileged helper from a GitHub Release (no local git / cargo).
 #
 # Prefer the signed release asset (raw.githubusercontent skips .minisig — do not use it):
-#   TAG=v1.3.1
+#   TAG=v1.3.2
 #   curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh"
 #   curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh.minisig"
 #   minisign -Vm install-helper-from-release.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
@@ -12,7 +12,7 @@
 # Env: SYSSPECTOGRAM_DEV=1 + SYSSPECTOGRAM_GITHUB_REPO to allow a non-default repo
 set -euo pipefail
 
-TAG="${1:-v1.3.1}"
+TAG="${1:-v1.3.2}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
 
 REPO="lifeqsoll/SysSpectogram"
