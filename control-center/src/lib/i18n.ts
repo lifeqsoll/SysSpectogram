@@ -2,7 +2,7 @@
 import { ui } from './state.svelte';
 
 /** Keep in sync with package.json / check_versions.py (bump_versions.py updates this). */
-export const APP_VERSION_TAG = 'v1.3.2';
+export const APP_VERSION_TAG = 'v1.3.3';
 
 export const STRINGS: Record<string, { en: string; ru: string }> = {
   'app.name': { en: 'SysSpectogram', ru: 'SysSpectogram' },

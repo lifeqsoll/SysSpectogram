@@ -133,10 +133,11 @@ def bump(old: str, new: str) -> None:
     for script in ("scripts/friend-day0.sh", "scripts/install-helper-from-release.sh"):
         p = ROOT / script
         t = p.read_text(encoding="utf-8")
-        t2 = re.sub(r'TAG="\$\{1:-v[0-9.]+\}"', f'TAG="${{1:-{tag}}}"', t, count=1)
-        if t2 == t:
+        t2, n1 = re.subn(r'TAG="\$\{1:-v[0-9.]+\}"', f'TAG="${{1:-{tag}}}"', t, count=1)
+        t2, n2 = re.subn(r'TAG="\$\{TAG:-v[0-9.]+\}"', f'TAG="${{TAG:-{tag}}}"', t2, count=1)
+        if n1 + n2 == 0:
             raise SystemExit(f"TAG default not updated in {script}")
-        # comment examples that hardcode a tag
+        # comment / help examples that hardcode a tag
         t2 = re.sub(r"v\d+\.\d+\.\d+", tag, t2)
         p.write_text(t2, encoding="utf-8")
         print(f"ok {script}")

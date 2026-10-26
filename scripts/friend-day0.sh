@@ -2,7 +2,7 @@
 # Headless day-0: wheel + venv + menu (no git clone).
 #
 # ALWAYS use a *tagged* raw URL (never floating main):
-#   curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.2/scripts/friend-day0.sh | bash -s -- v1.3.2
+#   curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.3/scripts/friend-day0.sh | bash -s -- v1.3.3
 #
 # Or download friend-day0.sh from the GitHub Release assets and run locally.
 # Requires: curl, python3-venv, sha256sum, minisign (signatures are mandatory).
@@ -18,7 +18,7 @@ for arg in "$@"; do
     --no-menu) NO_MENU=1 ;;
     -h|--help)
       echo "Usage: friend-day0.sh [TAG] [--no-menu]"
-      echo "  TAG        release tag (default v1.3.2)"
+      echo "  TAG        release tag (default v1.3.3)"
       echo "  --no-menu  install only; do not exec interactive menu (also default when stdin is not a TTY)"
       exit 0
       ;;
@@ -31,7 +31,7 @@ for arg in "$@"; do
       ;;
   esac
 done
-TAG="${TAG:-v1.3.2}"
+TAG="${TAG:-v1.3.3}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
 REPO="${SYSSPECTOGRAM_GITHUB_REPO:-lifeqsoll/SysSpectogram}"
 HOME_DIR="${SYSSPECTOGRAM_HOME:-${HOME}/.local/share/sysspectogram}"

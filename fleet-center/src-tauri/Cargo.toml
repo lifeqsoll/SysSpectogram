@@ -1,6 +1,6 @@
 [package]
 name = "sysspectogram-fleet-center"
-version = "1.3.2"
+version = "1.3.3"
 description = "SysSpectogram Fleet Hub: desktop UI for multi-VPS fleet and edge ops"
 edition = "2021"
 license = "MIT"

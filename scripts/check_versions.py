@@ -104,11 +104,13 @@ def main() -> int:
             )
             return 1
 
-    for script in ("scripts/friend-day0.sh", "scripts/install-helper-from-release.sh"):
+    for script, patterns in (
+        ("scripts/friend-day0.sh", (f'TAG="${{TAG:-{tag}}}"', f'TAG="${{1:-{tag}}}"')),
+        ("scripts/install-helper-from-release.sh", (f'TAG="${{1:-{tag}}}"',)),
+    ):
         text = (root / script).read_text(encoding="utf-8")
-        want = f'TAG="${{1:-{tag}}}"'
-        if want not in text:
-            print(f"{script} default TAG missing {want}", file=sys.stderr)
+        if not any(p in text for p in patterns):
+            print(f"{script} default TAG missing one of {patterns}", file=sys.stderr)
             return 1
 
     i18n = (root / "control-center" / "src" / "lib" / "i18n.ts").read_text(encoding="utf-8")

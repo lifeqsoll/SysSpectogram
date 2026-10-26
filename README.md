@@ -24,7 +24,7 @@ Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts 
 - **[I install myself → docs/INSTALL.md](docs/INSTALL.md)** (RU: [INSTALL_RU.md](docs/INSTALL_RU.md))
 - **[I install with an AI agent → docs/INSTALL_WITH_AI.md](docs/INSTALL_WITH_AI.md)** — copy the prompt at the top of that file into your agent
 
-Three ways in (short). Full paths and troubleshooting live in INSTALL.md. Geek tools stay behind **Advanced**. Release notes: **[v1.3.2](docs/RELEASE_v1.3.2.md) · [v1.3.1](docs/RELEASE_v1.3.1.md) · [v1.3.0](docs/RELEASE_v1.3.0.md)** · [v1.2.2](docs/RELEASE_v1.2.2.md) · [v1.2.1](docs/RELEASE_v1.2.1.md).
+Three ways in (short). Full paths and troubleshooting live in INSTALL.md. Geek tools stay behind **Advanced**. Release notes: **[v1.3.3](docs/RELEASE_v1.3.3.md) · [v1.3.2](docs/RELEASE_v1.3.2.md) · [v1.3.1](docs/RELEASE_v1.3.1.md) · [v1.3.0](docs/RELEASE_v1.3.0.md)** · [v1.2.2](docs/RELEASE_v1.2.2.md) · [v1.2.1](docs/RELEASE_v1.2.1.md).
 
 ### 1. Desktop (AppImage / `.deb`)
 
@@ -115,7 +115,7 @@ Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md
 
 | Topic | Links |
 | --- | --- |
-| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.3.2](docs/RELEASE_v1.3.2.md) |
+| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.3.3](docs/RELEASE_v1.3.3.md) |
 | Many VPS | [Fleet](docs/FLEET.md) · Control Center Fleet tab · `fleet` / `home pair-*` CLI |
 | Geek / advanced | [Configure](docs/CONFIGURE.md) · [Day-0 CLI (git)](docs/DAY0_VPS.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Defense | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |
