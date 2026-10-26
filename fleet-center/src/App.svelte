@@ -51,6 +51,11 @@
         ? 'Включит Cloudflare Under Attack на зоне из .env. Введите EDGE.'
         : 'Enables Cloudflare Under Attack on the .env zone. Type EDGE.';
     }
+    if (confirmKind === 'PROFILE') {
+      return lang === 'ru'
+        ? 'Запушит настройки профиля на выбранный scope по SSH. Введите PROFILE.'
+        : 'Pushes profile settings to the selected scope over SSH. Type PROFILE.';
+    }
     const scopeHint =
       mode === 'multi'
         ? lang === 'ru'

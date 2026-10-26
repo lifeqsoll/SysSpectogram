@@ -77,48 +77,88 @@ def merge_never_ban(existing: list[str] | None, ip: str) -> list[str]:
     return out
 
 
-def seed_never_ban(*, write: bool = True, force: bool = False) -> dict[str, Any]:
-    """Merge detected public IP into user-settings never_ban. Never wipes existing."""
+def seed_never_ban(
+    *,
+    write: bool = True,
+    force: bool = False,
+    ip: str | None = None,
+) -> dict[str, Any]:
+    """Merge public IP into user-settings never_ban.
+
+    Detects *this machine's* egress IP unless ``ip`` is passed. On a VPS that is
+    usually the VPS address — pass ``--ip`` from the admin PC for the laptop IP.
+    Refuses to clobber a corrupt user-settings.json unless ``force``.
+    """
     from sysspectogram.config import load_config, user_settings_path
 
     cfg = load_config()
     cur = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
-    ip = detect_public_ip()
-    if not ip:
+    detected = (ip or "").strip() or None
+    if not detected:
+        detected = detect_public_ip()
+    if not detected:
         return {
             "ok": False,
             "written": False,
             "ip": None,
             "never_ban_cidrs": cur,
             "reason": "detect_failed",
+            "hint": "pass --ip A.B.C.D if detect fails (admin egress, not VPS)",
         }
-    if _covers(cur, ip) and not force:
+    if _covers(cur, detected) and not force:
         return {
             "ok": True,
             "written": False,
-            "ip": ip,
+            "ip": detected,
             "never_ban_cidrs": cur,
             "reason": "already_covered",
         }
-    merged = merge_never_ban(cur, ip)
+    merged = merge_never_ban(cur, detected)
     if merged == cur:
         return {
             "ok": True,
             "written": False,
-            "ip": ip,
+            "ip": detected,
             "never_ban_cidrs": cur,
             "reason": "unchanged",
         }
     if write:
         path = user_settings_path()
         data: dict[str, Any] = {}
+        corrupt = False
         if path.is_file():
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                raw = path.read_text(encoding="utf-8")
+                parsed = json.loads(raw)
             except (OSError, json.JSONDecodeError):
-                data = {}
-        if not isinstance(data, dict):
-            data = {}
+                corrupt = True
+                parsed = None
+            if corrupt and not force:
+                return {
+                    "ok": False,
+                    "written": False,
+                    "ip": detected,
+                    "never_ban_cidrs": cur,
+                    "reason": "user_settings_corrupt",
+                    "hint": "fix state/user-settings.json or re-run with --force (backs up .bak)",
+                }
+            if isinstance(parsed, dict):
+                data = parsed
+            elif parsed is not None and not force:
+                return {
+                    "ok": False,
+                    "written": False,
+                    "ip": detected,
+                    "never_ban_cidrs": cur,
+                    "reason": "user_settings_not_object",
+                    "hint": "fix state/user-settings.json or re-run with --force",
+                }
+            if corrupt and force:
+                bak = path.with_suffix(path.suffix + ".bak")
+                try:
+                    bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                except OSError:
+                    pass
         # Overlay stores CIDR lists as a comma-separated string (see friend_menu / home settings).
         data["response.never_ban_cidrs"] = ", ".join(merged)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,8 +170,11 @@ def seed_never_ban(*, write: bool = True, force: bool = False) -> dict[str, Any]
     return {
         "ok": True,
         "written": bool(write),
-        "ip": ip,
+        "ip": detected,
         "never_ban_cidrs": merged,
         "reason": "seeded",
-        "hint": "may be shared NAT — edit never_ban if needed",
+        "hint": (
+            "seeds THIS machine egress IP — on a VPS that is the VPS, not your laptop; "
+            "pass --ip from admin PC if needed; may be shared NAT"
+        ),
     }

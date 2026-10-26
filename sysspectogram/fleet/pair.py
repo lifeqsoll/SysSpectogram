@@ -113,26 +113,84 @@ def pair_finish(
     return out
 
 
+def parse_ssh_host_port(ssh_dest: str) -> tuple[str, int | None] | None:
+    """Extract host + optional port from user@host[:port] / [ipv6] forms.
+
+    Rejects destinations that look like SSH option injection (leading ``-``).
+    """
+    dest = (ssh_dest or "").strip()
+    if not dest or dest.startswith("-"):
+        return None
+    hostport = dest.split("@", 1)[-1].strip()
+    if not hostport or hostport.startswith("-"):
+        return None
+    if hostport.startswith("["):
+        # [2001:db8::1] or [2001:db8::1]:2222
+        end = hostport.find("]")
+        if end < 0:
+            return None
+        host = hostport[1:end]
+        rest = hostport[end + 1 :]
+        if not rest:
+            return (host, None)
+        if rest.startswith(":") and rest[1:].isdigit():
+            return (host, int(rest[1:]))
+        return None
+    if hostport.count(":") == 1:
+        host, port_s = hostport.rsplit(":", 1)
+        if port_s.isdigit() and host and not host.startswith("-"):
+            return (host, int(port_s))
+    if ":" in hostport and hostport.count(":") > 1:
+        # bare IPv6 without brackets
+        return (hostport, None)
+    return (hostport, None)
+
+
 def suggest_keyscan(ssh_dest: str) -> dict[str, Any]:
     """Best-effort local ssh-keyscan hint (admin runs manually if needed)."""
     import shutil
     import subprocess
 
-    host_part = ssh_dest.split("@", 1)[-1].split(":", 1)[0]
+    parsed = parse_ssh_host_port(ssh_dest)
+    if not parsed:
+        return {"ok": False, "error": "invalid ssh destination", "host": None}
+    host_part, port = parsed
     keyscan = shutil.which("ssh-keyscan") or shutil.which("ssh-keyscan.exe")
     if not keyscan:
         return {"ok": False, "error": "ssh-keyscan not found", "host": host_part}
+    # ssh-keyscan has no ``--`` on all platforms; never pass a leading-``-`` host.
+    if host_part.startswith("-"):
+        return {"ok": False, "error": "invalid host (must not start with -)", "host": host_part}
+    cmd = [keyscan, "-T", "5", "-t", "ed25519,rsa"]
+    if port is not None:
+        cmd.extend(["-p", str(port)])
+    # Prefer bracketed form for IPv6 so keyscan does not mis-split on ':'.
+    scan_host = host_part
+    if ":" in host_part and not host_part.startswith("["):
+        scan_host = f"[{host_part}]"
+    cmd.append(scan_host)
     try:
         proc = subprocess.run(
-            [keyscan, "-T", "5", "-t", "ed25519,rsa", host_part],
+            cmd,
             capture_output=True,
             text=True,
             timeout=20,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"ok": False, "error": str(exc), "host": host_part}
+        return {"ok": False, "error": str(exc), "host": host_part, "port": port}
     lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip() and not ln.startswith("#")]
     if not lines:
-        return {"ok": False, "error": proc.stderr.strip() or "no keys", "host": host_part}
-    return {"ok": True, "host": host_part, "host_key_line": lines[0].strip(), "all": lines}
+        return {
+            "ok": False,
+            "error": proc.stderr.strip() or "no keys",
+            "host": host_part,
+            "port": port,
+        }
+    return {
+        "ok": True,
+        "host": host_part,
+        "port": port,
+        "host_key_line": lines[0].strip(),
+        "all": lines,
+    }

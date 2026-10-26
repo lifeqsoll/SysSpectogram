@@ -30,3 +30,40 @@ def test_seed_writes(tmp_path, monkeypatch):
     assert out["ok"] is True
     assert out["written"] is True
     assert "198.51.100.9/32" in out["never_ban_cidrs"]
+
+
+def test_seed_refuses_corrupt_user_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    bad = state / "user-settings.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    with patch("sysspectogram.admin_ip.detect_public_ip", return_value="198.51.100.9"):
+        out = seed_never_ban(write=True)
+    assert out["ok"] is False
+    assert out["reason"] == "user_settings_corrupt"
+    assert bad.read_text(encoding="utf-8") == "{not-json"
+
+
+def test_seed_force_backs_up_corrupt(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    bad = state / "user-settings.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    with patch("sysspectogram.admin_ip.detect_public_ip", return_value="198.51.100.9"):
+        out = seed_never_ban(write=True, force=True)
+    assert out["ok"] is True
+    assert out["written"] is True
+    assert (state / "user-settings.json.bak").read_text(encoding="utf-8") == "{not-json"
+    assert "198.51.100.9/32" in bad.read_text(encoding="utf-8")
+
+
+def test_seed_explicit_ip_skips_detect(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    (tmp_path / "state").mkdir(parents=True)
+    with patch("sysspectogram.admin_ip.detect_public_ip") as det:
+        out = seed_never_ban(write=True, ip="203.0.113.55")
+    det.assert_not_called()
+    assert out["ok"] is True
+    assert "203.0.113.55/32" in out["never_ban_cidrs"]

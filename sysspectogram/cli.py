@@ -1253,7 +1253,11 @@ def _cmd_home_seed_never_ban(args: argparse.Namespace) -> int:
 
     from sysspectogram.admin_ip import seed_never_ban
 
-    out = seed_never_ban(write=not bool(getattr(args, "dry_run", False)))
+    out = seed_never_ban(
+        write=not bool(getattr(args, "dry_run", False)),
+        force=bool(getattr(args, "force", False)),
+        ip=getattr(args, "ip", None) or None,
+    )
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0 if out.get("ok") else 1
 
@@ -2499,8 +2503,21 @@ def build_parser() -> argparse.ArgumentParser:
     hm_set.set_defaults(func=_cmd_home_settings)
     hm_warm = hm_sub.add_parser("warmup", help="shield readiness checklist (never_ban, labels, …)")
     hm_warm.set_defaults(func=_cmd_home_warmup)
-    hm_snb = hm_sub.add_parser("seed-never-ban", help="detect public IP and merge into never_ban")
+    hm_snb = hm_sub.add_parser(
+        "seed-never-ban",
+        help="merge public IP into never_ban (THIS host egress unless --ip)",
+    )
     hm_snb.add_argument("--dry-run", action="store_true", help="detect only, do not write")
+    hm_snb.add_argument(
+        "--ip",
+        default=None,
+        help="explicit IP/CIDR (admin egress). Prefer this when seeding on a VPS",
+    )
+    hm_snb.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite corrupt user-settings.json (writes .bak first)",
+    )
     hm_snb.set_defaults(func=_cmd_home_seed_never_ban)
     hm_feed = hm_sub.add_parser("feed-tail", help="tail alerts/incidents JSONL (fleet aggregation)")
     hm_feed.add_argument("--limit", type=int, default=40)

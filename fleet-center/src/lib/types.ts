@@ -23,7 +23,7 @@ export type HostResult = {
   detail?: Record<string, unknown>;
 };
 
-export type ConfirmKind = 'L2' | 'L3' | 'BAN' | 'UNLOCK' | 'RELEASE' | 'EDGE';
+export type ConfirmKind = 'L2' | 'L3' | 'BAN' | 'UNLOCK' | 'RELEASE' | 'EDGE' | 'PROFILE';
 
 /** Never expose raw device_token in the UI. */
 export function hostHasToken(h: Host): boolean {

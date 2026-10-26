@@ -100,7 +100,9 @@
   }
   function applyProfile() {
     if (!profileId) return;
-    void run('profile-apply', () => fleetApi.profileApply(profileId, scope));
+    requestConfirm('PROFILE', () =>
+      run('profile-apply', () => fleetApi.profileApply(profileId, scope)),
+    );
   }
 </script>
 

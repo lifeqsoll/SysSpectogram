@@ -57,6 +57,10 @@ Thumbs.db
 # --- Optional local tools ---
 tools/bin/
 
+# --- Local agent binary (never commit; CI/release builds it) ---
+/bin/sysspectogram-agent
+/bin/
+
 # --- Rust agent ---
 agent/target/
 

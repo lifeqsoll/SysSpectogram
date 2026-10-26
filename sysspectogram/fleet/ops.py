@@ -102,6 +102,10 @@ def warmup_remote(
     hosts = _select(store, scope)
     results: list[dict[str, Any]] = []
     for h in hosts:
+        pin_err = require_host_pin(h, mutating=True)
+        if pin_err:
+            results.append({"ok": False, "host_id": h.id, "error": pin_err})
+            continue
         home = (h.home_path or "").rstrip("/") or "."
         py = remote_python(h)
         remote = f"cd {shlex.quote(home)} && {py} -m sysspectogram home warmup"
@@ -295,6 +299,10 @@ def mark_false_positive(
     hosts = _select(store, scope)
     results: list[dict[str, Any]] = []
     for h in hosts:
+        pin_err = require_host_pin(h, mutating=True)
+        if pin_err:
+            results.append({"ok": False, "host_id": h.id, "error": pin_err})
+            continue
         home = (h.home_path or "").rstrip("/") or "."
         py = remote_python(h)
         remote = (

@@ -255,7 +255,12 @@ def run_configure(
     try:
         from sysspectogram.admin_ip import seed_never_ban
 
-        if Confirm.ask("Seed never-ban with this machine's public IP?", default=True):
+        if Confirm.ask(
+            "Seed never-ban with THIS machine's public IP? "
+            "(On a VPS that is the VPS address — usually skip; use admin laptop IP via "
+            "`home seed-never-ban --ip …`.)",
+            default=False,
+        ):
             seeded = seed_never_ban(write=True)
             if seeded.get("ok"):
                 console.print(

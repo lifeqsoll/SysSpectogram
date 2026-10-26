@@ -81,6 +81,25 @@ class FleetTelegramBot:
             return chat_s in self.allow_users or (bool(user_s) and user_s in self.allow_users)
         return chat_s == str(self.client.chat_id)
 
+    @staticmethod
+    def _is_group_chat(chat_id: Any) -> bool:
+        """Telegram group/supergroup/channel IDs are negative."""
+        s = str(chat_id or "").strip()
+        if s.startswith("-"):
+            return True
+        try:
+            return int(s) < 0
+        except ValueError:
+            return False
+
+    def mutating_allowed(self, chat_id: Any, user_id: Any = None) -> bool:
+        """Stricter gate for attack/release/unlock: groups need a user allowlist."""
+        if not self.allowed(chat_id, user_id):
+            return False
+        if self._is_group_chat(chat_id) and not self.allow_users:
+            return False
+        return True
+
     def scope_keyboard(self) -> dict:
         st = self.store.load()
         rows: list[list[dict]] = [[_btn("ALL fleet", "scope|all")]]
@@ -175,21 +194,53 @@ class FleetTelegramBot:
             self._run_status(chat_id)
             return
         if cmd in ("/unlock_locked", "/unlock-locked"):
+            if not self.mutating_allowed(chat_id, user_id):
+                self.client.send_message(
+                    self.prefix(
+                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
+                    ),
+                    chat_id=chat_id,
+                )
+                return
             self._run_unlock(chat_id)
             return
         if cmd == "/attack":
+            if not self.mutating_allowed(chat_id, user_id):
+                self.client.send_message(
+                    self.prefix(
+                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
+                    ),
+                    chat_id=chat_id,
+                )
+                return
             level = (args[0] if args else "L2").upper()
-            self._run_attack(chat_id, level)
+            self._run_attack(chat_id, level, user_id=user_id)
             return
         if cmd == "/confirm_l3":
             pend = self._pending_l3
             self._pending_l3 = None
+            pend_user = str(pend.get("user_id") or "") if pend else ""
+            req_user = str(user_id or "")
             if (
                 not pend
                 or str(pend.get("chat_id")) != str(chat_id)
+                or not pend_user
+                or not req_user
+                or pend_user != req_user
                 or time.time() - float(pend.get("ts") or 0) > 60
             ):
-                self.client.send_message(self.prefix("no pending L3 confirm (or expired)"), chat_id=chat_id)
+                self.client.send_message(
+                    self.prefix("no pending L3 confirm (or expired / wrong user)"),
+                    chat_id=chat_id,
+                )
+                return
+            if not self.mutating_allowed(chat_id, user_id):
+                self.client.send_message(
+                    self.prefix(
+                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
+                    ),
+                    chat_id=chat_id,
+                )
                 return
             self.scope = str(pend.get("scope") or self.scope)
             # Force through as confirmed L3
@@ -209,6 +260,14 @@ class FleetTelegramBot:
             threading.Thread(target=job, daemon=True).start()
             return
         if cmd == "/release":
+            if not self.mutating_allowed(chat_id, user_id):
+                self.client.send_message(
+                    self.prefix(
+                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
+                    ),
+                    chat_id=chat_id,
+                )
+                return
             self._run_release(chat_id)
             return
         self.client.send_message(self.prefix("unknown — /menu"), chat_id=chat_id)
@@ -241,15 +300,42 @@ class FleetTelegramBot:
             self.client.answer_callback(cq_id, "status")
             self._run_status(chat_id)
         elif data == "cmd|unlock":
+            if not self.mutating_allowed(chat_id, user_id):
+                self.client.answer_callback(cq_id, "need allowlist")
+                self.client.send_message(
+                    self.prefix(
+                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
+                    ),
+                    chat_id=chat_id,
+                )
+                return
             self.client.answer_callback(cq_id, "unlock")
             self._run_unlock(chat_id)
         elif data == "cmd|release":
+            if not self.mutating_allowed(chat_id, user_id):
+                self.client.answer_callback(cq_id, "need allowlist")
+                self.client.send_message(
+                    self.prefix(
+                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
+                    ),
+                    chat_id=chat_id,
+                )
+                return
             self.client.answer_callback(cq_id, "release")
             self._run_release(chat_id)
         elif data.startswith("cmd|attack_"):
+            if not self.mutating_allowed(chat_id, user_id):
+                self.client.answer_callback(cq_id, "need allowlist")
+                self.client.send_message(
+                    self.prefix(
+                        "group chat needs FLEET_TELEGRAM_ALLOW_USERS (user IDs) for mutating ops"
+                    ),
+                    chat_id=chat_id,
+                )
+                return
             level = data.split("_", 1)[1]
             self.client.answer_callback(cq_id, level)
-            self._run_attack(chat_id, level)
+            self._run_attack(chat_id, level, user_id=user_id)
         else:
             self.client.answer_callback(cq_id, "ok")
 
@@ -291,14 +377,27 @@ class FleetTelegramBot:
 
         threading.Thread(target=job, daemon=True).start()
 
-    def _run_attack(self, chat_id: str, level: str) -> None:
+    def _run_attack(self, chat_id: str, level: str, *, user_id: str | None = None) -> None:
         level_u = (level or "L2").upper()
         if level_u == "L3":
-            # Second gate: Telegram L3 needs /confirm_l3 after pressing the button once.
-            self._pending_l3 = {"chat_id": str(chat_id), "scope": self.scope, "ts": time.time()}
+            uid = str(user_id or "").strip()
+            if not uid:
+                self.client.send_message(
+                    self.prefix("L3 requires a Telegram user id (cannot confirm anonymously)"),
+                    chat_id=chat_id,
+                )
+                return
+            # Second gate: same user must reply /confirm_l3 within 60s (not just same chat).
+            self._pending_l3 = {
+                "chat_id": str(chat_id),
+                "user_id": uid,
+                "scope": self.scope,
+                "ts": time.time(),
+            }
             self.client.send_message(
                 self.prefix(
-                    f"Confirm ATTACK L3 on scope={self.scope}: reply /confirm_l3 within 60s"
+                    f"Confirm ATTACK L3 on scope={self.scope}: "
+                    f"same user reply /confirm_l3 within 60s"
                 ),
                 chat_id=chat_id,
             )

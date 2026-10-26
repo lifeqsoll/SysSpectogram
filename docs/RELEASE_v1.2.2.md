@@ -278,10 +278,16 @@ Mass ops (explicit):
 
 ---
 
-## Fixes in this release (CI / docs)
+## Fixes in this release (CI / docs / review follow-ups)
 
 - Document `edge` in the CLI parity matrix ([CONTROL_CENTER.md](CONTROL_CENTER.md))
 - Fleet `public_dict()` test expects `token_set`, not masked `device_token` string
+- Fleet Center: `profile-apply` requires typed `PROFILE` confirm (Rust still passes `--yes` only after UI gate, same as attack/ban)
+- Fleet Telegram: `/confirm_l3` bound to **same user_id** (not just chat); group chats need `FLEET_TELEGRAM_ALLOW_USERS` for mutating ops
+- `fleet warmup` / `mark-fp` require host-key pin (same as other mutating SSH)
+- `fleet keyscan`: IPv6 + non-default port; reject leading-`-` hosts
+- `home seed-never-ban`: refuse corrupt `user-settings.json` unless `--force` (`.bak`); `--ip` for admin egress; TUI default **No**
+- `.gitignore`: `/bin/sysspectogram-agent`; fleet-center lock synced (`npm ci`); drop unused `uplot`
 
 ---
 
