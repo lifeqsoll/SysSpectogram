@@ -48,7 +48,7 @@ def test_nft_ban_unban_uses_named_set_elements():
 
     with patch.object(backend, "_run", side_effect=fake_run), patch(
         "sysspectogram.response.actions.shutil.which", return_value="/usr/sbin/nft"
-    ):
+    ), patch("sysspectogram.response.actions.os.geteuid", return_value=0):
         msg = backend.ban_ip("203.0.113.9", ttl_sec=60)
         assert msg.startswith("banned"), msg
         assert "backend=nft" in msg

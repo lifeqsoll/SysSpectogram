@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -39,6 +40,38 @@ class BanRecord:
     comment: str
     handle: int | None = None
     backend: str = "memory"
+
+
+@dataclass
+class BanResult:
+    """Structured ban outcome (F-05). ``str(result)`` stays CLI/Telegram compatible."""
+
+    ok: bool
+    ip: str
+    backend: str
+    detail: str
+    skipped: bool = False
+
+    def __str__(self) -> str:
+        return self.detail
+
+
+def classify_ban_message(msg: str, *, ip: str = "") -> BanResult:
+    """Parse legacy ban_ip string into BanResult."""
+    text = str(msg or "")
+    low = text.lower()
+    if text.startswith("banned") or text.startswith("dry-run ban"):
+        backend = "nft"
+        if "backend=helper" in text:
+            backend = "helper"
+        elif "backend=iptables" in text or "backend=ip6tables" in text:
+            backend = "iptables"
+        elif "backend=dry-run" in text or text.startswith("dry-run"):
+            backend = "dry-run"
+        return BanResult(ok=True, ip=ip, backend=backend, detail=text, skipped=False)
+    if "never_ban" in low or "skip" in low:
+        return BanResult(ok=False, ip=ip, backend="none", detail=text, skipped=True)
+    return BanResult(ok=False, ip=ip, backend="none", detail=text, skipped=False)
 
 
 class NftBackend:
@@ -232,6 +265,15 @@ class NftBackend:
         if dry_run:
             self.bans[ip] = BanRecord(ip, time.time(), expires, comment, None, "dry-run")
             return f"dry-run ban {ip} ttl={ttl}"
+        # Friend path (F-02): non-root guard bans via helper group auth, not CAP_NET_ADMIN.
+        if os.geteuid() != 0:
+            from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
+
+            if helper_available():
+                return HelperBanBackend(never_ban_cidrs=self.never_ban_cidrs).ban_ip(
+                    ip, ttl_sec=ttl, dry_run=False
+                )
+            return "nft failed: no privileges (install helper and join group sysspectogram)"
         backend = "memory"
         if shutil.which("nft"):
             self._ensure_table()
@@ -324,6 +366,14 @@ class NftBackend:
         self.bans.pop(ip, None)
         if dry_run:
             return f"dry-run unban {ip}"
+        if os.geteuid() != 0:
+            from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
+
+            if helper_available():
+                return HelperBanBackend(never_ban_cidrs=self.never_ban_cidrs).unban_ip(
+                    ip, dry_run=False
+                )
+            return "nft unban failed: no privileges (install helper)"
         if shutil.which("nft"):
             set_name = self._set_name(family)
             code, out = self._run(

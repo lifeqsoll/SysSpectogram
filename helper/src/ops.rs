@@ -40,6 +40,11 @@ pub fn dispatch(op: &str, args: &Value, caller: Caller) -> Value {
         "bundle.install" => bundle_install(args, caller),
         "settings.apply" => settings_apply(args, caller),
         "settings.rollback" => settings_rollback(caller),
+        // Ban path (F-02): group sysspectogram, no polkit — headless guard cannot answer pkcheck.
+        "ban.add" => ban_add(args, caller),
+        "ban.del" => ban_del(args, caller),
+        "ban.list" => ban_list(caller),
+        "ban.selftest" => ban_selftest(caller),
         other => Err(format!("unknown operation {other:?}")),
     };
     match result {
@@ -645,6 +650,549 @@ fn settings_rollback(caller: Caller) -> Result<Value, String> {
     Ok(json!({"keys": previous.len()}))
 }
 
+// ---------------------------------------------------------------- ban (nft sets via helper, F-02)
+
+const NFT: &str = "/usr/sbin/nft";
+const NFT_ALT: &str = "/usr/bin/nft";
+const NEVER_BAN_FILE: &str = "/etc/sysspectogram/never_ban";
+const GUARD_UIDS_FILE: &str = "/etc/sysspectogram/guard-uids";
+const BAN_GROUP: &str = "sysspectogram";
+const MAX_BAN_TTL_SEC: u64 = 7 * 24 * 3600;
+const MIN_BAN_TTL_SEC: u64 = 60;
+const MAX_BAN_ELEMENTS: usize = 50_000;
+const SELFTEST_IP: &str = "192.0.2.1";
+
+fn nft_bin() -> &'static str {
+    if Path::new(NFT).is_file() {
+        NFT
+    } else {
+        NFT_ALT
+    }
+}
+
+/// Authorize ban.* by membership in group `sysspectogram` (or root / guard-uids), not polkit.
+fn authorize_ban_group(caller: Caller) -> Result<(), String> {
+    if caller.uid == 0 {
+        return Ok(());
+    }
+    if guard_uids_allows(caller.uid) {
+        return Ok(());
+    }
+    if uid_in_group(caller.uid, BAN_GROUP)? {
+        return Ok(());
+    }
+    Err(format!(
+        "not authorized: not in group {BAN_GROUP} (and not listed in {GUARD_UIDS_FILE})"
+    ))
+}
+
+fn guard_uids_allows(uid: u32) -> bool {
+    let Ok(text) = fs::read_to_string(GUARD_UIDS_FILE) else {
+        return false;
+    };
+    text.lines().any(|l| {
+        let t = l.split('#').next().unwrap_or("").trim();
+        t.parse::<u32>().ok() == Some(uid)
+    })
+}
+
+fn uid_in_group(uid: u32, group_name: &str) -> Result<bool, String> {
+    // SAFETY: getgrnam / getpwuid return static libc buffers; we only read them.
+    unsafe {
+        let grp = libc::getgrnam(std::ffi::CString::new(group_name).unwrap().as_ptr());
+        if grp.is_null() {
+            return Err(format!("group {group_name} not found"));
+        }
+        let gid = (*grp).gr_gid;
+        let pw = libc::getpwuid(uid);
+        if pw.is_null() {
+            return Err(format!("uid {uid} has no passwd entry"));
+        }
+        let mut groups: Vec<libc::gid_t> = vec![0; 64];
+        let mut ngroups: libc::c_int = groups.len() as libc::c_int;
+        let rc = libc::getgrouplist((*pw).pw_name, (*pw).pw_gid, groups.as_mut_ptr(), &mut ngroups);
+        if rc < 0 {
+            groups.resize(ngroups as usize, 0);
+            let rc2 = libc::getgrouplist((*pw).pw_name, (*pw).pw_gid, groups.as_mut_ptr(), &mut ngroups);
+            if rc2 < 0 {
+                return Err("getgrouplist failed".into());
+            }
+        }
+        Ok(groups[..ngroups as usize].iter().any(|g| *g == gid))
+    }
+}
+
+/// Single-host IP only; reject CIDR, specials, junk (mirrors Python parse_ban_ip).
+pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
+    let token = raw.trim();
+    if token.is_empty() || token.contains('/') || token.contains('%') {
+        return Err(format!("invalid ban ip: {token:?}"));
+    }
+    if token.bytes().any(|b| {
+        matches!(
+            b,
+            b';' | b'|' | b'&' | b'`' | b'$' | b'(' | b')' | b'{' | b'}' | b'[' | b']'
+                | b'<' | b'>' | b'\\' | b'"' | b'\'' | b' ' | b'\t' | b'\n' | b'\r'
+        )
+    }) {
+        return Err(format!("invalid ban ip: {token:?}"));
+    }
+    let addr: std::net::IpAddr = token
+        .parse()
+        .map_err(|_| format!("invalid ban ip: {token:?}"))?;
+    match addr {
+        std::net::IpAddr::V4(v4) if v4.is_unspecified() || v4.is_loopback() || v4.is_multicast() || v4.is_link_local() => {
+            Err(format!("refusing ban of special address: {addr}"))
+        }
+        std::net::IpAddr::V6(v6)
+            if v6.is_unspecified()
+                || v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unicast_link_local() =>
+        {
+            Err(format!("refusing ban of special address: {addr}"))
+        }
+        _ => Ok(addr),
+    }
+}
+
+fn clamp_ttl(raw: Option<u64>) -> Result<u64, String> {
+    let ttl = raw.unwrap_or(3600);
+    if ttl < MIN_BAN_TTL_SEC {
+        return Err(format!("ttl_sec must be >= {MIN_BAN_TTL_SEC}"));
+    }
+    if ttl > MAX_BAN_TTL_SEC {
+        return Err(format!("ttl_sec must be <= {MAX_BAN_TTL_SEC}"));
+    }
+    Ok(ttl)
+}
+
+fn set_for(addr: std::net::IpAddr) -> &'static str {
+    match addr {
+        std::net::IpAddr::V4(_) => "ban4",
+        std::net::IpAddr::V6(_) => "ban6",
+    }
+}
+
+fn ensure_nft_table() -> Result<(), String> {
+    let nft = nft_bin();
+    let _ = run(nft, &["create", "table", "inet", "sysspectogram"]);
+    let _ = run(
+        nft,
+        &[
+            "create",
+            "set",
+            "inet",
+            "sysspectogram",
+            "ban4",
+            "{",
+            "type",
+            "ipv4_addr",
+            ";",
+            "flags",
+            "timeout",
+            ";",
+            "}",
+        ],
+    );
+    let _ = run(
+        nft,
+        &[
+            "create",
+            "set",
+            "inet",
+            "sysspectogram",
+            "ban6",
+            "{",
+            "type",
+            "ipv6_addr",
+            ";",
+            "flags",
+            "timeout",
+            ";",
+            "}",
+        ],
+    );
+    let _ = run(
+        nft,
+        &[
+            "create",
+            "chain",
+            "inet",
+            "sysspectogram",
+            "input",
+            "{",
+            "type",
+            "filter",
+            "hook",
+            "input",
+            "priority",
+            "-10",
+            ";",
+            "policy",
+            "accept",
+            ";",
+            "}",
+        ],
+    );
+    let list = Command::new(nft)
+        .args(["list", "chain", "inet", "sysspectogram", "input"])
+        .output()
+        .map_err(|e| format!("nft list: {e}"))?;
+    let out = String::from_utf8_lossy(&list.stdout);
+    if !out.contains("@ban4") {
+        let _ = run(
+            nft,
+            &[
+                "add",
+                "rule",
+                "inet",
+                "sysspectogram",
+                "input",
+                "ip",
+                "saddr",
+                "@ban4",
+                "drop",
+            ],
+        );
+    }
+    if !out.contains("@ban6") {
+        let _ = run(
+            nft,
+            &[
+                "add",
+                "rule",
+                "inet",
+                "sysspectogram",
+                "input",
+                "ip6",
+                "saddr",
+                "@ban6",
+                "drop",
+            ],
+        );
+    }
+    Ok(())
+}
+
+fn load_never_ban_cidrs() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(text) = fs::read_to_string(NEVER_BAN_FILE) {
+        for part in text.split(|c: char| c == ',' || c == '\n' || c == ' ') {
+            let t = part.trim();
+            if !t.is_empty() && !t.starts_with('#') {
+                out.push(t.to_string());
+            }
+        }
+    }
+    if let Ok(overlay) = read_overlay(Path::new(SETTINGS_FILE)) {
+        if let Some(v) = overlay.get("response.never_ban_cidrs") {
+            match v {
+                Value::String(s) => {
+                    for part in s.split(|c: char| c == ',' || c == ' ') {
+                        let t = part.trim();
+                        if !t.is_empty() {
+                            out.push(t.to_string());
+                        }
+                    }
+                }
+                Value::Array(arr) => {
+                    for item in arr {
+                        if let Some(s) = item.as_str() {
+                            let t = s.trim();
+                            if !t.is_empty() {
+                                out.push(t.to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn ip_in_never_ban(addr: std::net::IpAddr, cidrs: &[String]) -> bool {
+    for raw in cidrs {
+        if let Ok(one) = raw.parse::<std::net::IpAddr>() {
+            if one == addr {
+                return true;
+            }
+            continue;
+        }
+        if let Some((base, bits)) = raw.split_once('/') {
+            let Ok(base_ip) = base.parse::<std::net::IpAddr>() else {
+                continue;
+            };
+            let Ok(prefix) = bits.parse::<u8>() else {
+                continue;
+            };
+            if ip_prefix_contains(base_ip, prefix, addr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn ip_prefix_contains(base: std::net::IpAddr, prefix: u8, addr: std::net::IpAddr) -> bool {
+    match (base, addr) {
+        (std::net::IpAddr::V4(b), std::net::IpAddr::V4(a)) => {
+            if prefix > 32 {
+                return false;
+            }
+            let mask = if prefix == 0 {
+                0u32
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            (u32::from(b) & mask) == (u32::from(a) & mask)
+        }
+        (std::net::IpAddr::V6(b), std::net::IpAddr::V6(a)) => {
+            if prefix > 128 {
+                return false;
+            }
+            let b = u128::from(b);
+            let a = u128::from(a);
+            let mask = if prefix == 0 {
+                0u128
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            (b & mask) == (a & mask)
+        }
+        _ => false,
+    }
+}
+
+fn host_owns_address(addr: std::net::IpAddr) -> bool {
+    // Best-effort: parse `ip -j addr` if present.
+    let out = Command::new("/sbin/ip")
+        .args(["-j", "addr"])
+        .output()
+        .or_else(|_| Command::new("/usr/bin/ip").args(["-j", "addr"]).output());
+    let Ok(out) = out else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else {
+        return false;
+    };
+    let Some(arr) = v.as_array() else {
+        return false;
+    };
+    for iface in arr {
+        let Some(addrs) = iface.get("addr_info").and_then(|a| a.as_array()) else {
+            continue;
+        };
+        for ai in addrs {
+            if let Some(local) = ai.get("local").and_then(|x| x.as_str()) {
+                if local.parse::<std::net::IpAddr>().ok() == Some(addr) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn count_set_elements(set_name: &str) -> Result<usize, String> {
+    let out = Command::new(nft_bin())
+        .args(["-j", "list", "set", "inet", "sysspectogram", set_name])
+        .output()
+        .map_err(|e| format!("nft list set: {e}"))?;
+    if !out.status.success() {
+        return Ok(0);
+    }
+    let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else {
+        return Ok(0);
+    };
+    let mut n = 0usize;
+    if let Some(arr) = v.as_array() {
+        for item in arr {
+            if let Some(elems) = item.pointer("/set/elem").and_then(|e| e.as_array()) {
+                n += elems.len();
+            }
+        }
+    }
+    Ok(n)
+}
+
+fn ban_add(args: &Value, caller: Caller) -> Result<Value, String> {
+    authorize_ban_group(caller)?;
+    let ip_raw = args
+        .get("ip")
+        .and_then(Value::as_str)
+        .ok_or("missing ip")?;
+    let addr = parse_helper_ban_ip(ip_raw)?;
+    let ttl = clamp_ttl(args.get("ttl_sec").and_then(Value::as_u64))?;
+    let reason = args
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("guard")
+        .chars()
+        .take(64)
+        .collect::<String>();
+    if host_owns_address(addr) {
+        return Err("refusing ban of host own address".into());
+    }
+    let never = load_never_ban_cidrs();
+    if ip_in_never_ban(addr, &never) {
+        return Err("never_ban skip".into());
+    }
+    ensure_nft_table()?;
+    let set_name = set_for(addr);
+    let n = count_set_elements(set_name)?;
+    if n >= MAX_BAN_ELEMENTS {
+        return Err(format!("ban set full ({MAX_BAN_ELEMENTS})"));
+    }
+    let ip_s = addr.to_string();
+    let ttl_s = format!("{ttl}s");
+    let nft = nft_bin();
+    // delete+add for refresh timeout
+    let _ = run(
+        nft,
+        &[
+            "delete",
+            "element",
+            "inet",
+            "sysspectogram",
+            set_name,
+            "{",
+            &ip_s,
+            "}",
+        ],
+    );
+    run(
+        nft,
+        &[
+            "add",
+            "element",
+            "inet",
+            "sysspectogram",
+            set_name,
+            "{",
+            &ip_s,
+            "timeout",
+            &ttl_s,
+            "}",
+        ],
+    )?;
+    eprintln!(
+        "sysspectogram-helper ban.add uid={} ip={} ttl={} reason={}",
+        caller.uid, ip_s, ttl, reason
+    );
+    Ok(json!({"ip": ip_s, "ttl_sec": ttl, "set": set_name, "backend": "nft"}))
+}
+
+fn ban_del(args: &Value, caller: Caller) -> Result<Value, String> {
+    authorize_ban_group(caller)?;
+    let ip_raw = args
+        .get("ip")
+        .and_then(Value::as_str)
+        .ok_or("missing ip")?;
+    let addr = parse_helper_ban_ip(ip_raw)?;
+    let ip_s = addr.to_string();
+    let set_name = set_for(addr);
+    let nft = nft_bin();
+    match run(
+        nft,
+        &[
+            "delete",
+            "element",
+            "inet",
+            "sysspectogram",
+            set_name,
+            "{",
+            &ip_s,
+            "}",
+        ],
+    ) {
+        Ok(()) => {}
+        Err(e) if e.contains("No such file") || e.to_lowercase().contains("not found") => {}
+        Err(e) => return Err(e),
+    }
+    eprintln!(
+        "sysspectogram-helper ban.del uid={} ip={}",
+        caller.uid, ip_s
+    );
+    Ok(json!({"ip": ip_s, "set": set_name}))
+}
+
+fn ban_list(caller: Caller) -> Result<Value, String> {
+    authorize_ban_group(caller)?;
+    ensure_nft_table()?;
+    let mut ips = Vec::new();
+    for set_name in ["ban4", "ban6"] {
+        let out = Command::new(nft_bin())
+            .args(["list", "set", "inet", "sysspectogram", set_name])
+            .output()
+            .map_err(|e| format!("nft list: {e}"))?;
+        if !out.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        for token in text.split_whitespace() {
+            if let Ok(addr) = token.trim_matches(|c| c == ',' || c == '{' || c == '}').parse::<std::net::IpAddr>()
+            {
+                ips.push(addr.to_string());
+            }
+        }
+    }
+    Ok(json!({"ips": ips}))
+}
+
+fn ban_selftest(caller: Caller) -> Result<Value, String> {
+    authorize_ban_group(caller)?;
+    ensure_nft_table()?;
+    let nft = nft_bin();
+    let _ = run(
+        nft,
+        &[
+            "delete",
+            "element",
+            "inet",
+            "sysspectogram",
+            "ban4",
+            "{",
+            SELFTEST_IP,
+            "}",
+        ],
+    );
+    run(
+        nft,
+        &[
+            "add",
+            "element",
+            "inet",
+            "sysspectogram",
+            "ban4",
+            "{",
+            SELFTEST_IP,
+            "timeout",
+            "1s",
+            "}",
+        ],
+    )?;
+    let _ = run(
+        nft,
+        &[
+            "delete",
+            "element",
+            "inet",
+            "sysspectogram",
+            "ban4",
+            "{",
+            SELFTEST_IP,
+            "}",
+        ],
+    );
+    Ok(json!({"ok": true, "detail": "nft via helper ok"}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,6 +1222,24 @@ mod tests {
         assert!(parse_manifest(&format!("{h}  sysspectogram-agent\n{h}  sysspectogram-agent\n")).is_err());
         assert!(parse_manifest(&format!("{h}  ../sysspectogram-agent\n")).is_err());
         assert!(parse_manifest("zz  sysspectogram-agent\n").is_err());
+    }
+
+    #[test]
+    fn helper_ban_ip_rules() {
+        assert!(parse_helper_ban_ip("198.51.100.7").is_ok());
+        assert!(parse_helper_ban_ip("2001:db8::1").is_ok());
+        assert!(parse_helper_ban_ip("0.0.0.0/0").is_err());
+        assert!(parse_helper_ban_ip("127.0.0.1").is_err());
+        assert!(parse_helper_ban_ip("1.2.3.4; flush").is_err());
+        assert!(parse_helper_ban_ip("::1").is_err());
+    }
+
+    #[test]
+    fn never_ban_prefix_match() {
+        let addr: std::net::IpAddr = "198.51.100.7".parse().unwrap();
+        assert!(ip_in_never_ban(addr, &["198.51.100.0/24".into()]));
+        assert!(!ip_in_never_ban(addr, &["203.0.113.0/24".into()]));
+        assert!(ip_in_never_ban(addr, &["198.51.100.7".into()]));
     }
 
     #[test]

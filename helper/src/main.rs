@@ -6,7 +6,9 @@
 //!
 //! Security model:
 //! - the caller is identified with SO_PEERCRED, never by anything it sends;
-//! - every mutating operation is checked by polkit (pkcheck) for the caller process;
+//! - service/bundle/settings ops are checked by polkit (pkcheck) for the caller process;
+//! - ban.* ops use group `sysspectogram` (or `/etc/sysspectogram/guard-uids`), not polkit —
+//!   headless guard cannot answer a pkcheck prompt (F-02);
 //! - operations are a fixed allowlist; no shell is ever involved;
 //! - bundles are copied into a root-owned staging area before any verification,
 //!   so the user cannot swap files between verification and installation.

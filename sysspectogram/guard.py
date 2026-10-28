@@ -529,12 +529,21 @@ def run_guard(
             # 0.0 -> 0.5x ttl, 1.0 -> 3x ttl
             ttl = max(300.0, auto_ban_ttl * (0.5 + 2.5 * min(1.0, max(0.0, score))))
         msg = nft.ban_ip(alert.ip, ttl_sec=ttl, dry_run=dry_run_actions)
-        console.print(f"[red]auto-ban[/] {msg} (ttl={ttl:.0f}s score={score})")
+        from sysspectogram.response.actions import classify_ban_message
+
+        ban_res = classify_ban_message(msg, ip=str(alert.ip))
+        if ban_res.ok:
+            console.print(f"[red]auto-ban[/] {msg} (ttl={ttl:.0f}s score={score})")
+            tg_line = f"AUTO-BAN {msg}"
+        elif ban_res.skipped:
+            console.print(f"[yellow]auto-ban skip[/] {msg}")
+            tg_line = f"BAN SKIPPED ({msg})"
+        else:
+            console.print(f"[red]auto-ban FAILED[/] {msg} (ttl={ttl:.0f}s score={score})")
+            tg_line = f"BAN FAILED {alert.ip}: {msg}"
         if bot_holder["bot"] is not None:
             try:
-                bot_holder["bot"].client.send_message(
-                    bot_holder["bot"].prefix(f"AUTO-BAN {msg}")
-                )
+                bot_holder["bot"].client.send_message(bot_holder["bot"].prefix(tg_line))
             except Exception:
                 pass
 

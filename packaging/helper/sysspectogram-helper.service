@@ -13,6 +13,7 @@ Environment=SYSSPECTOGRAM_HELPER_SOCKET=/run/sysspectogram/helper.sock
 NoNewPrivileges=no
 ProtectHome=read-only
 ProtectSystem=strict
+# nft ban sets need netlink; do not set RestrictAddressFamilies without AF_NETLINK.
 ReadWritePaths=/etc/sysspectogram /opt/sysspectogram /usr/local/sbin /var/lib/sysspectogram /run/sysspectogram
 PrivateTmp=yes
 Restart=on-failure

@@ -153,6 +153,7 @@ def test_ban_argv_uses_add_element_not_bare_comment(monkeypatch):
         return 0, ""
 
     monkeypatch.setattr("sysspectogram.response.actions.shutil.which", lambda n: "/usr/sbin/nft" if n == "nft" else None)
+    monkeypatch.setattr("sysspectogram.response.actions.os.geteuid", lambda: 0)
     b = NftBackend(never_ban_cidrs=[])
     monkeypatch.setattr(b, "_run", fake_run)
     monkeypatch.setattr(b, "_nft_stdin", lambda text: (0, ""))
