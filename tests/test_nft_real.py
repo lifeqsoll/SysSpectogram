@@ -19,6 +19,11 @@ def _can_run_nft_real() -> bool:
     return True
 
 
+def _nft(argv: list[str]) -> tuple[int, str]:
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
 skip_no_priv = pytest.mark.skipif(
     not _can_run_nft_real(),
     reason="needs root + nft (use: sudo unshare -n pytest -m nft_real)",
@@ -33,23 +38,13 @@ def test_ban_ipv4_set_timeout_and_unban():
     msg = b.ban_ip("198.51.100.7", ttl_sec=60)
     assert msg.startswith("banned"), msg
     assert "backend=nft" in msg
-    code, out = subprocess.run(
-        ["nft", "list", "set", "inet", "sysspectogram", "ban4"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    code, out = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban4"])
     assert code == 0, out
     assert "198.51.100.7" in out
     assert "expires" in out or "timeout" in out
     umsg = b.unban_ip("198.51.100.7")
     assert "unbanned" in umsg, umsg
-    code2, out2 = subprocess.run(
-        ["nft", "list", "set", "inet", "sysspectogram", "ban4"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    code2, out2 = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban4"])
     assert code2 == 0, out2
     assert "198.51.100.7" not in out2
 
@@ -61,12 +56,7 @@ def test_ban_ipv6_set():
     b = NftBackend(never_ban_cidrs=[])
     msg = b.ban_ip("2001:db8::7", ttl_sec=60)
     assert msg.startswith("banned"), msg
-    code, out = subprocess.run(
-        ["nft", "list", "set", "inet", "sysspectogram", "ban6"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    code, out = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban6"])
     assert code == 0, out
     assert "2001:db8::7" in out
     b.unban_ip("2001:db8::7")
@@ -79,12 +69,7 @@ def test_rebban_updates_element():
     b = NftBackend(never_ban_cidrs=[])
     assert b.ban_ip("198.51.100.8", ttl_sec=60).startswith("banned")
     assert b.ban_ip("198.51.100.8", ttl_sec=120).startswith("banned")
-    code, out = subprocess.run(
-        ["nft", "list", "set", "inet", "sysspectogram", "ban4"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    code, out = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban4"])
     assert code == 0
     assert out.count("198.51.100.8") == 1
     b.unban_ip("198.51.100.8")
@@ -97,12 +82,7 @@ def test_never_ban_skip_no_element():
     b = NftBackend(never_ban_cidrs=["198.51.100.0/24"])
     msg = b.ban_ip("198.51.100.9", ttl_sec=60)
     assert "never_ban" in msg
-    code, out = subprocess.run(
-        ["nft", "list", "set", "inet", "sysspectogram", "ban4"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    code, out = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban4"])
     # table may exist from ensure; element must not
     if code == 0:
         assert "198.51.100.9" not in out
@@ -133,12 +113,7 @@ def test_ensure_table_idempotent():
     b = NftBackend(never_ban_cidrs=[])
     b._ensure_table()
     b._ensure_table()
-    code, _ = subprocess.run(
-        ["nft", "list", "table", "inet", "sysspectogram"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    code, _ = _nft(["nft", "list", "table", "inet", "sysspectogram"])
     assert code == 0
 
 
