@@ -8,6 +8,28 @@ from dataclasses import dataclass
 from ipaddress import ip_address, ip_network
 from pathlib import Path
 
+# Kernel set timeout upper bound for auto-bans (D-1 / F-01). Forever bans forbidden.
+DEFAULT_MAX_BAN_TTL_SEC = 7 * 24 * 3600
+DEFAULT_MIN_BAN_TTL_SEC = 60
+
+_NFT_TABLE_SCRIPT = """\
+table inet sysspectogram {
+  set ban4 {
+    type ipv4_addr
+    flags timeout
+  }
+  set ban6 {
+    type ipv6_addr
+    flags timeout
+  }
+  chain input {
+    type filter hook input priority -10; policy accept;
+    ip saddr @ban4 drop
+    ip6 saddr @ban6 drop
+  }
+}
+"""
+
 
 @dataclass
 class BanRecord:
@@ -20,7 +42,7 @@ class BanRecord:
 
 
 class NftBackend:
-    """nft/iptables ban manager with handle-based unban and TTL."""
+    """nft/iptables ban manager using named sets with kernel timeouts (fail2ban-style)."""
 
     def __init__(
         self,
@@ -28,13 +50,15 @@ class NftBackend:
         chain: str = "sysspectogram",
         *,
         never_ban_cidrs: list[str] | None = None,
+        max_ban_ttl_sec: float = DEFAULT_MAX_BAN_TTL_SEC,
     ) -> None:
         self.table = table
         self.chain = chain
         self.bans: dict[str, BanRecord] = {}
         self.never_ban_cidrs: list[str] = list(never_ban_cidrs or [])
+        self.max_ban_ttl_sec = float(max_ban_ttl_sec)
         self._kirk_expires: float | None = None
-        self._ensure_chain()
+        self._ensure_table()
 
     def is_never_ban(self, ip: str) -> bool:
         try:
@@ -53,6 +77,14 @@ class NftBackend:
                 continue
         return False
 
+    def _clamp_ttl(self, ttl_sec: float | None) -> float:
+        if ttl_sec is None:
+            return self.max_ban_ttl_sec
+        ttl = float(ttl_sec)
+        if ttl <= 0:
+            return self.max_ban_ttl_sec
+        return max(DEFAULT_MIN_BAN_TTL_SEC, min(ttl, self.max_ban_ttl_sec))
+
     def _run(self, cmd: list[str]) -> tuple[int, str]:
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=False)
@@ -60,38 +92,130 @@ class NftBackend:
         except (OSError, subprocess.SubprocessError) as exc:
             return 1, str(exc)
 
-    def _ensure_chain(self) -> None:
+    def _nft_stdin(self, text: str) -> tuple[int, str]:
+        """Apply nft ruleset text via argv ``nft -f -`` (no shell)."""
+        if not shutil.which("nft"):
+            return 1, "nft missing"
+        try:
+            proc = subprocess.run(
+                ["nft", "-f", "-"],
+                input=text,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        except (OSError, subprocess.SubprocessError) as exc:
+            return 1, str(exc)
+
+    def _ensure_table(self) -> None:
+        """Idempotent table/sets/chain. Create-or-ignore via create + flush-safe adds."""
         if not shutil.which("nft"):
             return
-        self._run(["nft", "add", "table", "inet", "sysspectogram"])
+        # Prefer create; ignore "File exists". Then ensure sets/chain pieces.
+        self._run(["nft", "create", "table", "inet", "sysspectogram"])
         self._run(
             [
                 "nft",
-                "add",
+                "create",
+                "set",
+                "inet",
+                "sysspectogram",
+                "ban4",
+                "{",
+                "type",
+                "ipv4_addr",
+                ";",
+                "flags",
+                "timeout",
+                ";",
+                "}",
+            ]
+        )
+        self._run(
+            [
+                "nft",
+                "create",
+                "set",
+                "inet",
+                "sysspectogram",
+                "ban6",
+                "{",
+                "type",
+                "ipv6_addr",
+                ";",
+                "flags",
+                "timeout",
+                ";",
+                "}",
+            ]
+        )
+        self._run(
+            [
+                "nft",
+                "create",
                 "chain",
                 "inet",
                 "sysspectogram",
                 "input",
-                "{ type filter hook input priority 0 ; }",
+                "{",
+                "type",
+                "filter",
+                "hook",
+                "input",
+                "priority",
+                "-10",
+                ";",
+                "policy",
+                "accept",
+                ";",
+                "}",
             ]
         )
+        # Drop rules referencing sets (idempotent: ignore duplicates by checking list).
+        code, out = self._run(["nft", "list", "chain", "inet", "sysspectogram", "input"])
+        if code == 0 and "@ban4" not in out:
+            self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "ip",
+                    "saddr",
+                    "@ban4",
+                    "drop",
+                ]
+            )
+        if code == 0 and "@ban6" not in out:
+            self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "ip6",
+                    "saddr",
+                    "@ban6",
+                    "drop",
+                ]
+            )
+        # Fallback if create pieces failed oddly: full script once.
+        code_t, _ = self._run(["nft", "list", "table", "inet", "sysspectogram"])
+        if code_t != 0:
+            self._nft_stdin(_NFT_TABLE_SCRIPT)
 
-    def _find_nft_handle(self, ip: str) -> int | None:
-        code, out = self._run(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
-        if code != 0:
-            return None
-        # ip saddr 1.2.3.4 drop comment "..." # handle 12
-        for line in out.splitlines():
-            if ip not in line or "handle" not in line:
-                continue
-            if f"saddr {ip}" not in line and f"ip saddr {ip}" not in line:
-                # also match comment containing ip
-                if f"sysspectogram:{ip}:" not in line:
-                    continue
-            m = re.search(r"#\s*handle\s+(\d+)", line)
-            if m:
-                return int(m.group(1))
-        return None
+    # Back-compat alias used by lockdown/quarantine helpers.
+    def _ensure_chain(self) -> None:
+        self._ensure_table()
+
+    def _set_name(self, family: str) -> str:
+        return "ban6" if family == "ip6" else "ban4"
 
     def ban_ip(self, ip: str, ttl_sec: float | None = 3600.0, dry_run: bool = False) -> str:
         from sysspectogram.net_ip import nft_saddr_family
@@ -102,42 +226,71 @@ class NftBackend:
             return f"refuse ban: {exc}"
         if self.is_never_ban(ip):
             return f"never_ban skip {ip}"
-        # replace existing
-        if ip in self.bans and not dry_run:
-            self.unban_ip(ip, dry_run=False)
-        expires = None if ttl_sec is None else time.time() + ttl_sec
-        comment = f"sysspectogram:{ip}:{int(expires or 0)}"
+        ttl = self._clamp_ttl(ttl_sec)
+        expires = time.time() + ttl
+        comment = f"sysspectogram:{ip}:{int(expires)}"
         if dry_run:
             self.bans[ip] = BanRecord(ip, time.time(), expires, comment, None, "dry-run")
-            return f"dry-run ban {ip} ttl={ttl_sec}"
-        handle = None
+            return f"dry-run ban {ip} ttl={ttl}"
         backend = "memory"
         if shutil.which("nft"):
-            # Pass argv list (no shell); family is ip/ip6 from parse only.
+            self._ensure_table()
+            set_name = self._set_name(family)
+            # Named set + kernel timeout (fail2ban-style). No comment argv (F-01).
             code, out = self._run(
                 [
                     "nft",
                     "add",
-                    "rule",
+                    "element",
                     "inet",
                     "sysspectogram",
-                    "input",
-                    family,
-                    "saddr",
+                    set_name,
+                    "{",
                     ip,
-                    "drop",
-                    "comment",
-                    comment,
+                    "timeout",
+                    f"{int(ttl)}s",
+                    "}",
                 ]
             )
             if code != 0:
+                # Element may already exist — try delete+add once.
+                self._run(
+                    [
+                        "nft",
+                        "delete",
+                        "element",
+                        "inet",
+                        "sysspectogram",
+                        set_name,
+                        "{",
+                        ip,
+                        "}",
+                    ]
+                )
+                code, out = self._run(
+                    [
+                        "nft",
+                        "add",
+                        "element",
+                        "inet",
+                        "sysspectogram",
+                        set_name,
+                        "{",
+                        ip,
+                        "timeout",
+                        f"{int(ttl)}s",
+                        "}",
+                    ]
+                )
+            if code != 0:
                 return f"nft failed: {out.strip()}"
-            handle = self._find_nft_handle(ip)
             backend = "nft"
         elif shutil.which("iptables") or shutil.which("ip6tables"):
             ipt = "ip6tables" if family == "ip6" and shutil.which("ip6tables") else "iptables"
             if family == "ip6" and ipt != "ip6tables":
                 return "no ip6tables available for IPv6 ban"
+            # Replace existing DROP for this source if present.
+            self._run([ipt, "-D", "INPUT", "-s", ip, "-j", "DROP"])
             code, out = self._run(
                 [
                     ipt,
@@ -158,8 +311,8 @@ class NftBackend:
             backend = ipt
         else:
             return "no nft/iptables available"
-        self.bans[ip] = BanRecord(ip, time.time(), expires, comment, handle, backend)
-        return f"banned {ip} ttl={ttl_sec} backend={backend} handle={handle}"
+        self.bans[ip] = BanRecord(ip, time.time(), expires, comment, None, backend)
+        return f"banned {ip} ttl={ttl} backend={backend}"
 
     def unban_ip(self, ip: str, dry_run: bool = False) -> str:
         from sysspectogram.net_ip import nft_saddr_family
@@ -168,21 +321,30 @@ class NftBackend:
             family, ip = nft_saddr_family(ip)
         except ValueError as exc:
             return f"refuse unban: {exc}"
-        rec = self.bans.pop(ip, None)
+        self.bans.pop(ip, None)
         if dry_run:
             return f"dry-run unban {ip}"
         if shutil.which("nft"):
-            handle = rec.handle if rec else None
-            if handle is None:
-                handle = self._find_nft_handle(ip)
-            if handle is not None:
-                code, out = self._run(
-                    ["nft", "delete", "rule", "inet", "sysspectogram", "input", "handle", str(handle)]
-                )
-                if code != 0:
-                    return f"nft unban failed handle={handle}: {out.strip()}"
-                return f"unbanned {ip} nft handle={handle}"
-            return f"unban: no nft handle found for {ip} (memory cleared)"
+            set_name = self._set_name(family)
+            code, out = self._run(
+                [
+                    "nft",
+                    "delete",
+                    "element",
+                    "inet",
+                    "sysspectogram",
+                    set_name,
+                    "{",
+                    ip,
+                    "}",
+                ]
+            )
+            if code != 0:
+                # Already gone is ok for idempotent unban.
+                if "No such file" in out or "does not exist" in out or "not found" in out.lower():
+                    return f"unbanned {ip} nft (absent)"
+                return f"nft unban failed: {out.strip()}"
+            return f"unbanned {ip} nft set={set_name}"
         ipt = "ip6tables" if family == "ip6" and shutil.which("ip6tables") else "iptables"
         if shutil.which(ipt):
             for _ in range(8):

@@ -48,3 +48,6 @@ sysspectogram = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "nft_real: real nft named-set bans (needs root + nft; run under unshare -n)",
+]

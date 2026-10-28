@@ -33,28 +33,31 @@ def test_parse_ipv6_word_endian():
     assert _parse_ipv6(ip_hex) in {"::1", "0:0:0:0:0:0:0:1"}
 
 
-def test_nft_unban_uses_handle():
+def test_nft_ban_unban_uses_named_set_elements():
+    """F-01: bans go through set elements with timeout, not comment rules + handle."""
     backend = NftBackend()
     calls: list[list[str]] = []
 
     def fake_run(cmd):
-        calls.append(cmd)
-        if cmd[:2] == ["nft", "-a"] or (len(cmd) > 1 and cmd[1] == "-a"):
-            return 0, 'ip saddr 203.0.113.9 drop comment "sysspectogram:203.0.113.9:0" # handle 42\n'
-        if "delete" in cmd:
-            return 0, ""
-        if cmd[:2] == ["nft", "add"]:
-            return 0, ""
+        calls.append(list(cmd))
+        if cmd[:3] == ["nft", "list", "chain"]:
+            return 0, "ip saddr @ban4 drop\nip6 saddr @ban6 drop\n"
+        if cmd[:3] == ["nft", "list", "table"]:
+            return 0, "table inet sysspectogram\n"
         return 0, ""
 
     with patch.object(backend, "_run", side_effect=fake_run), patch(
         "sysspectogram.response.actions.shutil.which", return_value="/usr/sbin/nft"
     ):
         msg = backend.ban_ip("203.0.113.9", ttl_sec=60)
-        assert "handle=42" in msg or "banned" in msg
+        assert msg.startswith("banned"), msg
+        assert "backend=nft" in msg
+        assert any(c[:3] == ["nft", "add", "element"] and "203.0.113.9" in c for c in calls)
+        assert any("timeout" in c and "60s" in c for c in calls)
+        assert not any(len(c) > 1 and c[-2:] == ["comment", c[-1]] and ":" in c[-1] for c in calls if len(c) >= 2)
         umsg = backend.unban_ip("203.0.113.9")
-        assert any("delete" in c and "42" in c for c in calls)
-        assert "42" in umsg or "unbanned" in umsg
+        assert any(c[:3] == ["nft", "delete", "element"] and "203.0.113.9" in c for c in calls)
+        assert "unbanned" in umsg
 
 
 def test_lockdown_flag_applies_nft(tmp_path: Path):
