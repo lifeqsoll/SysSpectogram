@@ -2,14 +2,14 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-Самостоятельная **защита Linux VPS и хоста**: понятные алерты, Telegram, графики в десктоп-приложении, по желанию — веб, Rust-агент целостности и host ML (учите модель на другой машине, на VPS крутите ONNX).
+**Beta** · самостоятельная **защита Linux VPS/хоста**: понятные алерты, периметр SSH, по желанию nft auto-ban, Telegram — без облачного SIEM. **Для кого:** один или несколько VPS (AppImage / `friend-day0.sh`). Не SIEM — [сравнение](docs/COMPARISON.md).
 
 [![CI](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml/badge.svg)](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/lifeqsoll/SysSpectogram)](https://github.com/lifeqsoll/SysSpectogram/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 
-[Установка](#установка) · [Как устроено](#как-устроено) · [CLI](#справочник-cli) · [Telegram](#telegram) · [Docker](#docker) · [FAQ](#типичные-проблемы)
+[Быстрый старт](#быстрый-старт-один-vps) · [Установка](#установка) · [FAQ](docs/FAQ_RU.md) · [Ограничения](#ограничения-и-безопасность) · [Сравнение](docs/COMPARISON.md)
 
 **Демо:** [lifeqsoll.github.io/SysSpectogram/demo](https://lifeqsoll.github.io/SysSpectogram/demo/)
 
@@ -19,14 +19,34 @@
 
 ---
 
+## Быстрый старт (один VPS)
+
+Как **[INSTALL_RU.md §1](docs/INSTALL_RU.md)**. Тег — [releases/latest](https://github.com/lifeqsoll/SysSpectogram/releases/latest).
+
+```bash
+sudo apt-get update && sudo apt-get install -y python3 python3-venv curl minisign
+TAG=<LATEST_TAG>
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh.minisig"
+minisign -Vm friend-day0.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
+bash friend-day0.sh "$TAG"
+export SYSSPECTOGRAM_HOME="${SYSSPECTOGRAM_HOME:-$HOME/.local/share/sysspectogram}"
+source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
+python -m sysspectogram configure
+python -m sysspectogram seed-never-ban --ip "$(curl -fsS -4 ifconfig.me)"
+loginctl enable-linger "$USER" && python -m sysspectogram protect enable
+```
+
+Host ML **эксперимент** — [EVAL.md](docs/EVAL.md). История: [CHANGELOG.md](CHANGELOG.md).
+
+---
+
 ## С чего начать
 
 **Установка?**
 
 - **[Ставлю сам → docs/INSTALL_RU.md](docs/INSTALL_RU.md)** (EN: [INSTALL.md](docs/INSTALL.md))
-- **[Ставлю с ИИ-агентом → docs/INSTALL_WITH_AI.md](docs/INSTALL_WITH_AI.md)** — скопируй промпт в начале файла в чат с агентом
-
-Краткие три пути ниже; полный гайд и FAQ — в INSTALL. Всё «для гиков» спрятано за **Advanced**. Релизы: **[v1.3.3](docs/RELEASE_v1.3.3.md) · [v1.3.2](docs/RELEASE_v1.3.2.md) · [v1.3.1](docs/RELEASE_v1.3.1.md) · [v1.3.0](docs/RELEASE_v1.3.0.md)** · [v1.2.2](docs/RELEASE_v1.2.2.md) · [v1.2.1](docs/RELEASE_v1.2.1.md).
+- **[Ставлю с ИИ-агентом → docs/INSTALL_WITH_AI.md](docs/INSTALL_WITH_AI.md)**
 
 ### 1. Десктоп (AppImage / `.deb`)
 
@@ -103,7 +123,7 @@ python -m sysspectogram guard --telegram --dry-run
 
 Root на том же хосте может остановить сервис и стереть локальные логи. Удалённые sinks и подписи манифестов усложняют «тихую» подмену, но **не** делают инструмент неуязвимым.
 
-Полный список: **[Ограничения и безопасность](#ограничения-и-безопасность)** · [SECURITY.md](SECURITY.md).
+Полный список: **[Ограничения и безопасность](#ограничения-и-безопасность)** · [SECURITY.md](SECURITY.md) · [COMPARISON.md](docs/COMPARISON.md) · [FAQ_RU.md](docs/FAQ_RU.md).
 
 ### Документы по темам
 
@@ -847,4 +867,4 @@ MIT. См. [LICENSE](LICENSE).
 
 ## Участие
 
-PR приветствуются. По безопасности — [SECURITY.md](SECURITY.md).
+См. [CONTRIBUTING.md](CONTRIBUTING.md). По безопасности — [SECURITY.md](SECURITY.md).

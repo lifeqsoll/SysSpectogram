@@ -1,0 +1,40 @@
+name: Bug report
+description: Something broke on a host you control
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `python -m sysspectogram doctor --json` and paste the redacted output below when possible.
+        For security issues use [Private vulnerability reporting](https://github.com/lifeqsoll/SysSpectogram/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: Version / tag
+      placeholder: v1.3.3 or pip show sysspectogram
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install path
+      options:
+        - friend-day0.sh (headless VPS)
+        - Control Center AppImage / deb
+        - git / editable dev
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: What you ran, what you expected, what happened
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: doctor output (optional)
+      render: shell

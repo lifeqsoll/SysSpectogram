@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement (not a security report)
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: Who is this for (solo VPS, fleet, desktop friend path)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I read COMPARISON.md — this is not already covered by fail2ban-only workflow
+          required: false
+        - label: Willing to test on a lab VPS
+          required: false

@@ -1,4 +1,4 @@
-/* SysSpectogram fake demo — no backend, synthetic metrics only. v1.1.1 friend path. */
+/* SysSpectogram fake demo — no backend, synthetic metrics only. */
 (() => {
   "use strict";
 
@@ -11,14 +11,14 @@
     en: {
       simBadge: "SIMULATION — not connected to your machine",
       tagline:
-        "Press a scenario. Watch metrics, fuse risk, and Telegram-style alerts — friend path v1.1.1 (AppImage / VPS menu), without touching your host.",
+        "Press a scenario. Watch metrics, fuse risk, and Telegram-style alerts — friend path (AppImage / VPS menu), without touching your host.",
       chip1: "AppImage / day-0",
       chip2: "Background protect",
       chip3: "Never-ban IP",
       chip4: "CNN + IF fuse",
       chip5: "TG unlock / SOAR",
       ctaTry: "Try scenarios",
-      ctaRelease: "Download v1.1.1",
+      ctaRelease: "Download latest release",
       ctaFriend: "Friend path",
       scenarios: "Scenarios",
       asideNote:
@@ -36,14 +36,14 @@
     ru: {
       simBadge: "СИМУЛЯЦИЯ — не подключено к вашей машине",
       tagline:
-        "Выберите сценарий. Метрики, fuse risk и алерты как в Telegram — friend path v1.1.1 (AppImage / меню на VPS), без доступа к хосту.",
+        "Выберите сценарий. Метрики, fuse risk и алерты как в Telegram — friend path (AppImage / меню на VPS), без доступа к хосту.",
       chip1: "AppImage / day-0",
       chip2: "Фоновая защита",
       chip3: "Never-ban IP",
       chip4: "CNN + IF",
       chip5: "TG unlock / SOAR",
       ctaTry: "Сценарии",
-      ctaRelease: "Скачать v1.1.1",
+      ctaRelease: "Скачать последний релиз",
       ctaFriend: "Friend path",
       scenarios: "Сценарии",
       asideNote:

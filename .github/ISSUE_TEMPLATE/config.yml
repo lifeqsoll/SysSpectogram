@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security advisory (private)
+    url: https://github.com/lifeqsoll/SysSpectogram/security/advisories/new
+    about: Report vulnerabilities privately — do not file public issues for exploits.
+  - name: Documentation
+    url: https://github.com/lifeqsoll/SysSpectogram/tree/main/docs
+    about: Install guides, FAQ, threat model.

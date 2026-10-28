@@ -1,6 +1,6 @@
 # Interactive demo (GitHub Pages)
 
-Synthetic browser demo of SysSpectogram **v1.1.1**: host ML, perimeter, never-ban skip,
+Synthetic browser demo of SysSpectogram: perimeter, never-ban skip, optional host ML,
 background protect, EN/RU toggle, fake TG buttons. **No real host metrics, models, or Telegram.**
 
 Live: https://lifeqsoll.github.io/SysSpectogram/demo/

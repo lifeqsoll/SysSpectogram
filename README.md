@@ -2,18 +2,55 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts in a desktop app, optional web UI, Rust integrity agent, and optional host ML (train elsewhere — run ONNX on the VPS).
+**Beta** · self-hosted **Linux VPS / host guard** for operators who want understandable alerts, SSH perimeter rules, optional nft auto-ban, Telegram (and optional web) control — without shipping logs to a vendor cloud.
+
+**For:** solo devs and small teams on one or a few VPS boxes (friend AppImage path or headless `friend-day0.sh`). **Not** a full SIEM — see [Comparison](docs/COMPARISON.md).
 
 [![CI](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml/badge.svg)](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/lifeqsoll/SysSpectogram)](https://github.com/lifeqsoll/SysSpectogram/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 
-[Install](#install) · [How it works](#how-it-works) · [CLI](#cli-reference) · [Telegram](#telegram-bot) · [Docker](#docker) · [FAQ](#troubleshooting)
+[Quick start](#quick-start-one-vps) · [Install](#install) · [FAQ](docs/FAQ.md) · [Limitations](#limitations-and-safety) · [Comparison](docs/COMPARISON.md) · [CLI](#cli-reference)
 
 <p align="center">
   <img src="docs/assets/v1.1/home.png" alt="Home — Start protection" width="720" />
 </p>
+
+---
+
+## Quick start (one VPS)
+
+Matches **[docs/INSTALL.md §1](docs/INSTALL.md#1-quick-start-one-ubuntudebian-vps)** (RU: [INSTALL_RU.md §1](docs/INSTALL_RU.md)). Pick `<LATEST_TAG>` from [releases/latest](https://github.com/lifeqsoll/SysSpectogram/releases/latest).
+
+```bash
+sudo apt-get update
+sudo apt-add-repository -y universe 2>/dev/null || true
+sudo apt-get install -y python3 python3-venv curl minisign
+
+TAG=<LATEST_TAG>
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh.minisig"
+minisign -Vm friend-day0.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
+bash friend-day0.sh "$TAG"
+
+export SYSSPECTOGRAM_HOME="${SYSSPECTOGRAM_HOME:-$HOME/.local/share/sysspectogram}"
+source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
+python -m sysspectogram configure
+python -m sysspectogram seed-never-ban --ip "$(curl -fsS -4 ifconfig.me)"
+loginctl enable-linger "$USER"
+python -m sysspectogram protect enable
+```
+
+Optional **helper** (soft auto-ban on non-root guard): `curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh"` and `install-helper-from-release.sh.minisig`, verify minisign, `sudo bash install-helper-from-release.sh "$TAG"`. [INSTALL.md](docs/INSTALL.md#helper-from-release).
+
+**Other paths:** [Control Center AppImage / `.deb`](#1-desktop-appimage--deb) · [source / dev](#3-source-install) · [AI-assisted install](docs/INSTALL_WITH_AI.md)
+
+Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md) and older `docs/RELEASE_*.md`.
+
+### Host ML (optional, experimental)
+
+Guard works in **observe** without PyTorch. ONNX host ML is **experimental** — run offline gates in **[docs/EVAL.md](docs/EVAL.md)** before trusting precision/recall on your CSVs. Do not cite headline F1 numbers without that eval on **your** data.
 
 ---
 
@@ -24,8 +61,6 @@ Self-hosted **Linux VPS / host guard**: plain-language alerts, Telegram, charts 
 - **[I install myself → docs/INSTALL.md](docs/INSTALL.md)** (RU: [INSTALL_RU.md](docs/INSTALL_RU.md))
 - **[I install with an AI agent → docs/INSTALL_WITH_AI.md](docs/INSTALL_WITH_AI.md)** — copy the prompt at the top of that file into your agent
 
-Three ways in (short). Full paths and troubleshooting live in INSTALL.md. Geek tools stay behind **Advanced**. Release notes: **[v1.3.3](docs/RELEASE_v1.3.3.md) · [v1.3.2](docs/RELEASE_v1.3.2.md) · [v1.3.1](docs/RELEASE_v1.3.1.md) · [v1.3.0](docs/RELEASE_v1.3.0.md)** · [v1.2.2](docs/RELEASE_v1.2.2.md) · [v1.2.1](docs/RELEASE_v1.2.1.md).
-
 ### 1. Desktop (AppImage / `.deb`)
 
 **For most people:** download the Linux **AppImage** or **`.deb`** from the [GitHub Release](https://github.com/lifeqsoll/SysSpectogram/releases) → **Install stack** if prompted → short onboarding → protect.
@@ -35,37 +70,13 @@ Friend story: **[Friend path](docs/FRIEND.md)** · **[Simple home](docs/HOME.md)
 From a source checkout (dev):
 
 ```bash
-# helper once (polkit + systemd)
 sudo scripts/install-helper.sh
-
 cd control-center && npm install && npm run tauri dev
-# complete onboarding → Home → Start protection
 ```
 
 ### 2. Headless VPS (SSH, no git)
 
-Full steps: **[docs/INSTALL.md](docs/INSTALL.md)**. Short version (signed release assets only — never pipe raw git):
-
-```bash
-TAG=<LATEST_TAG>   # from https://github.com/lifeqsoll/SysSpectogram/releases/latest
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh"
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/friend-day0.sh.minisig"
-minisign -Vm friend-day0.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
-bash friend-day0.sh "$TAG"
-loginctl enable-linger $USER   # else protect stops on logout
-```
-
-Optional privileged helper (polkit; no local checkout):
-
-```bash
-TAG=<LATEST_TAG>
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh"
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/install-helper-from-release.sh.minisig"
-minisign -Vm install-helper-from-release.sh -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
-sudo bash install-helper-from-release.sh "$TAG"
-```
-
-Full friend story: [docs/FRIEND.md](docs/FRIEND.md). Geek git Day-0: [DAY0_VPS.md](docs/DAY0_VPS.md). ONNX after training elsewhere: [TRAIN_BRIDGE.md](docs/TRAIN_BRIDGE.md).
+Full steps: **[docs/INSTALL.md](docs/INSTALL.md)** — same flow as [Quick start](#quick-start-one-vps) above.
 
 ### 3. Source install
 
@@ -73,15 +84,9 @@ Clone, venv, editable install — see **[Install](#install)**.
 
 ```bash
 source .venv/bin/activate
-# Day-0: terminal configure UI (Rich menu in THIS terminal — not a browser)
-python -m sysspectogram configure
-# or non-interactive:
-# python -m sysspectogram configure --accept-recommended --role ssh
-
+python -m sysspectogram configure --accept-recommended --role ssh
 cd agent && cargo build --release && cd ..
-python -m sysspectogram kirk trust
-python -m sysspectogram supply-chain verify artifacts/real_v3
-python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
+python -m sysspectogram guard --telegram --dry-run
 ```
 
 ### Never-ban your own IP
@@ -103,13 +108,13 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 - **Telegram + optional web** — Clear alerts; `/charts`; Ban/Kill after console unlock; optional fleet hub bot; web off by default
 - **Guard + Rust agent** — Perimeter (SSH brute, …), FIM/process signals, timeseries charts
 - **Privileged helper** — polkit allowlist for settings / service / signed bundles
-- **Optional host ML** — Train on a builder PC; import ONNX weights on the VPS ([HOME.md](docs/HOME.md))
+- **Optional host ML (experimental)** — Train on a builder PC; ONNX on VPS; validate with [EVAL.md](docs/EVAL.md) ([HOME.md](docs/HOME.md))
 
 ### Limitations
 
 Same-host root can still stop services and wipe local logs. Remote alert sinks and signed manifests reduce silence/subversion; they do **not** make the tool unkillable. Optional kernel helper is off by default and often unavailable on locked-down cloud kernels.
 
-Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md](SECURITY.md).
+Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md](SECURITY.md) · **[Comparison vs fail2ban / SIEM](docs/COMPARISON.md)** · **[FAQ](docs/FAQ.md)**.
 
 ### Docs by topic
 
@@ -894,4 +899,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Contributing
 
-PRs welcome. For security issues, follow [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). For security issues, follow [SECURITY.md](SECURITY.md).
