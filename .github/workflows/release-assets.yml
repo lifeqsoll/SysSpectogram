@@ -567,11 +567,18 @@ jobs:
       - name: Install minisign
         run: |
           set -euo pipefail
+          # ubuntu apt often has no minisign — same fallback as sign jobs
           if ! command -v minisign >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq minisign
+            sudo apt-get update -qq || true
+            if ! sudo apt-get install -y -qq minisign; then
+              curl -fsSL -o /tmp/minisign.tgz \
+                "https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz"
+              tar -xzf /tmp/minisign.tgz -C /tmp
+              sudo install -m755 /tmp/minisign-linux/x86_64/minisign /usr/local/bin/minisign
+            fi
           fi
           command -v minisign
+          minisign -v
       - name: Download release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
