@@ -147,10 +147,11 @@ systemctl --no-pager status sysspectogram-helper.service
 ```bash
 # 1 — example for AppImage; repeat for .deb if you use the package instead
 TAG=<LATEST_TAG>
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${TAG}_amd64.AppImage.minisig"
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${TAG}_amd64.AppImage"
+VER="${TAG#v}"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${VER}_amd64.AppImage.minisig"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${VER}_amd64.AppImage"
 # 2 — verify (adjust filename to match the asset you downloaded)
-minisign -Vm "SysSpectogram_Control_Center_${TAG}_amd64.AppImage" -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
+minisign -Vm "SysSpectogram_Control_Center_${VER}_amd64.AppImage" -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
 ```
 
    Optional: `SHA256SUMS.desktop` + `.minisig` when published.
@@ -260,10 +261,7 @@ More: [TELEGRAM.md](TELEGRAM.md). Destructive actions need console **unlock** co
 
 ## Web dashboard
 
-```bash
-python -m sysspectogram guard --web --dry-run
-# or combine: --telegram --web
-```
+Web is **off** by default (`web.enabled: false`). Enable it in Settings / `home settings` (`web.enabled: true`), then **restart protect** so the guard picks up the change — do not rely on a one-off `guard --web --dry-run` for production.
 
 Bind is loopback by default. If you expose via tunnel, set `public_url` and auth (Mini App / session). Mutations need a session or Bearer from `state/web.token` (0600). See [SECURITY.md](../SECURITY.md).
 
@@ -335,12 +333,19 @@ Desktop: Settings → **Update stack from GitHub**, or re-run Install stack. Hel
 ## Stop / remove / rollback
 
 ```bash
-# 1 — stop friend protect (user systemd)
+# friend stack: stop protect + drop nft table inet sysspectogram (keeps SYSSPECTOGRAM_HOME)
+python -m sysspectogram home uninstall
+# optional: python -m sysspectogram home uninstall --purge-data
+```
+
+```bash
+# manual — stop friend protect (user systemd)
 python -m sysspectogram protect stop
 python -m sysspectogram protect disable
 systemctl --user disable --now sysspectogram-protect.service 2>/dev/null || true
 rm -f ~/.config/systemd/user/sysspectogram-protect.service
 systemctl --user daemon-reload
+sudo nft delete table inet sysspectogram 2>/dev/null || true
 ```
 
 ```bash

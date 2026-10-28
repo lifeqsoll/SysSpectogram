@@ -311,3 +311,30 @@ def test_friend_day0_and_helper_assets_in_workflow(release_yml_text: str):
         "sysspectogram-agent-x86_64-linux-musl",
     ):
         assert name in release_yml_text
+
+
+_DESKTOP_TAG_IN_FILENAME_RE = re.compile(
+    r"Control_Center_\$\{TAG\}_|Control_Center_\$\{tag\}_",
+    re.I,
+)
+
+
+def test_install_desktop_urls_use_ver_not_tag_in_filename():
+    bad: list[str] = []
+    for path in (INSTALL, INSTALL_RU):
+        text = path.read_text(encoding="utf-8")
+        if _DESKTOP_TAG_IN_FILENAME_RE.search(text):
+            bad.append(path.name)
+        if "VER=\"${TAG#v}\"" not in text and "VER=${TAG#v}" not in text:
+            bad.append(f"{path.name} (missing VER=${{TAG#v}})")
+        if "Control_Center_${VER}_" not in text:
+            bad.append(f"{path.name} (missing Control_Center_${{VER}}_)")
+    assert not bad, f"desktop asset naming: {bad}"
+
+
+def test_install_with_ai_desktop_version_without_v_prefix():
+    ai = INSTALL_AI.read_text(encoding="utf-8")
+    assert "without" in ai.lower() and "leading `v`" in ai
+    assert "Control_Center_1." in ai or "1.3.3_amd64" in ai
+    assert "Control_Center_v1." not in ai
+    assert "releases/download/${TAG}/" in INSTALL.read_text(encoding="utf-8")

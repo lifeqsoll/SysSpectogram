@@ -145,10 +145,11 @@ systemctl --no-pager status sysspectogram-helper.service
 ```bash
 # 1 — пример AppImage; для .deb замени имена файлов
 TAG=<LATEST_TAG>
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${TAG}_amd64.AppImage.minisig"
-curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${TAG}_amd64.AppImage"
+VER="${TAG#v}"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${VER}_amd64.AppImage.minisig"
+curl -fsSL -O "https://github.com/lifeqsoll/SysSpectogram/releases/download/${TAG}/SysSpectogram_Control_Center_${VER}_amd64.AppImage"
 # 2 — verify
-minisign -Vm "SysSpectogram_Control_Center_${TAG}_amd64.AppImage" -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
+minisign -Vm "SysSpectogram_Control_Center_${VER}_amd64.AppImage" -P 'RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F'
 ```
 
    Опционально: `SHA256SUMS.desktop` + `.minisig`.
@@ -258,9 +259,7 @@ python -m sysspectogram guard --telegram --dry-run
 
 ## Веб-дашборд
 
-```bash
-python -m sysspectogram guard --web --dry-run
-```
+Web **выключен** по умолчанию (`web.enabled: false`). Включи в Settings / `home settings` (`web.enabled: true`) и **перезапусти protect** — не полагайся на разовый `guard --web --dry-run` для продакшена.
 
 По умолчанию loopback. Туннель → нужен `public_url` и auth. Мутации: сессия или Bearer из `state/web.token` (0600). [SECURITY.md](../SECURITY.md).
 
@@ -317,7 +316,8 @@ python -m sysspectogram home warmup
 ## Обновление
 
 ```bash
-source "${SYSSPECTOGRAM_HOME:-$HOME/.local/share/sysspectogram}/.venv/bin/activate"
+export SYSSPECTOGRAM_HOME="${SYSSPECTOGRAM_HOME:-$HOME/.local/share/sysspectogram}"
+source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
 python -m sysspectogram home update --tag <LATEST_TAG>
 ```
 
@@ -328,12 +328,19 @@ python -m sysspectogram home update --tag <LATEST_TAG>
 ## Остановка и удаление
 
 ```bash
-# 1 — user systemd protect
+# friend: stop protect + nft table inet sysspectogram (SYSSPECTOGRAM_HOME остаётся)
+python -m sysspectogram home uninstall
+# опционально: python -m sysspectogram home uninstall --purge-data
+```
+
+```bash
+# вручную — user systemd protect
 python -m sysspectogram protect stop
 python -m sysspectogram protect disable
 systemctl --user disable --now sysspectogram-protect.service 2>/dev/null || true
 rm -f ~/.config/systemd/user/sysspectogram-protect.service
 systemctl --user daemon-reload
+sudo nft delete table inet sysspectogram 2>/dev/null || true
 ```
 
 ```bash

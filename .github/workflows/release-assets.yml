@@ -392,12 +392,37 @@ jobs:
             cp -v "$f" "dist/fleet-center/$safe"
           done
           test -n "$(ls -A dist/fleet-center)" || { echo "no Fleet Center bundles produced"; exit 1; }
-          (cd dist/fleet-center && sha256sum * 2>/dev/null | sort -k2 > SHA256SUMS.fleet-center) \
-            || (cd dist/fleet-center && sha256sum.exe * 2>/dev/null | sort -k2 > SHA256SUMS.fleet-center) \
-            || (cd dist/fleet-center && shasum -a 256 * | sort -k2 > SHA256SUMS.fleet-center)
           ls -la dist/fleet-center
-      - name: Sign Fleet Center bundles (minisign)
-        if: runner.os == 'Linux'
+      - name: Upload Fleet Center bundles (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fleet-center-${{ matrix.platform }}
+          path: dist/fleet-center/*
+          if-no-files-found: error
+
+  fleet-sign:
+    runs-on: ubuntu-22.04
+    needs: fleet-center
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fleet-center-*
+          merge-multiple: true
+          path: dist/fleet-center
+      - name: Build fleet checksums
+        run: |
+          set -euo pipefail
+          cd dist/fleet-center
+          shopt -s nullglob
+          bins=( *.AppImage *.deb *.dmg *.exe *.msi )
+          if (( ${#bins[@]} == 0 )); then
+            echo "no fleet bundles in merged artifact"
+            exit 1
+          fi
+          sha256sum "${bins[@]}" | sort -k2 > SHA256SUMS.fleet-center
+          ls -la
+      - name: Sign Fleet Center release assets (minisign)
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
@@ -415,6 +440,7 @@ jobs:
               sudo install -m755 /tmp/minisign-linux/x86_64/minisign /usr/local/bin/minisign
             fi
           fi
+          command -v minisign
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -526,3 +552,60 @@ jobs:
             dist/SysSpectogram.minisign.pub
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-release:
+    runs-on: ubuntu-22.04
+    needs:
+      - musl-agent
+      - helper
+      - control-center
+      - fleet-sign
+      - profile-packs
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install minisign
+        run: |
+          set -euo pipefail
+          if ! command -v minisign >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq minisign
+          fi
+          command -v minisign
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "${RELEASE_TAG}" -D release-assets --repo "${{ github.repository }}"
+          ls -la release-assets
+      - name: Verify signatures, trusted comments, and checksums
+        env:
+          VERIFY_RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          PUB="$(ls release-assets/SysSpectogram.minisign.pub release-assets/*.minisign.pub 2>/dev/null | head -1)"
+          test -n "${PUB:-}" && test -f "$PUB"
+          shopt -s nullglob
+          for sums in release-assets/SHA256SUMS*; do
+            [[ -f "$sums" ]] || continue
+            case "$sums" in
+              *.minisig) continue ;;
+            esac
+            (cd release-assets && sha256sum -c "$(basename "$sums")")
+          done
+          to_verify=()
+          for asset in release-assets/*; do
+            base="$(basename "$asset")"
+            case "$base" in
+              *.minisig|*.pub|*.sha256) continue ;;
+              SHA256SUMS*) continue ;;
+            esac
+            to_verify+=("$asset")
+          done
+          if (( ${#to_verify[@]} == 0 )); then
+            echo "no release assets to verify"
+            exit 1
+          fi
+          bash scripts/verify-release.sh "$PUB" "${to_verify[@]}"

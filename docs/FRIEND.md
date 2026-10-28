@@ -27,7 +27,7 @@ bash friend-day0.sh "$TAG"
 loginctl enable-linger "$USER"
 ```
 
-Day-0 verifies **SHA-256 and minisign** (embedded pubkey, same as Control Center). Missing `.minisig` on the release → install refuses.
+Day-0 verifies **SHA-256 and minisign** (embedded pubkey, same as Control Center). Each `.minisig` must carry trusted comment `sysspectogram <TAG> <filename>` (wheel, agent, scripts). Missing `.minisig` on the release → install refuses.
 
 This downloads the release wheel into `~/.local/share/sysspectogram`, creates a venv, installs, then opens `python -m sysspectogram menu`. Press **0** to quit the menu and continue [INSTALL.md](INSTALL.md) §1.3, or use `bash friend-day0.sh "$TAG" --no-menu` when your release script supports it.
 
@@ -47,6 +47,8 @@ Non-interactive:
 ```bash
 export SYSSPECTOGRAM_HOME=~/.local/share/sysspectogram
 source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
+# Brute-force signals need journal access without root: add user to systemd-journal (re-login), or use helper auth.tail.
+sudo usermod -aG systemd-journal "$USER"
 python -m sysspectogram home seed-never-ban --ip "${SSH_CONNECTION%% *}"
 python -m sysspectogram protect enable
 python -m sysspectogram home update --tag <LATEST_TAG>
