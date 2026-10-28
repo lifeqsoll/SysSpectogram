@@ -167,7 +167,10 @@ def _linger_hint() -> str | None:
             return None
     except OSError:
         pass
-    return "On SSH/VPS run once: loginctl enable-linger $USER (else protect stops on logout)"
+    return (
+        "On SSH/VPS run once: loginctl enable-linger $(id -un) "
+        "(or sudo loginctl enable-linger $(id -un); else protect stops on logout)"
+    )
 
 
 def disable_and_stop() -> dict[str, Any]:

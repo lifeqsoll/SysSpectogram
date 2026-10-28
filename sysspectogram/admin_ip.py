@@ -292,14 +292,16 @@ def seed_never_ban(
             path.chmod(0o600)
         except OSError:
             pass
-    return {
+    out: dict[str, Any] = {
         "ok": True,
         "written": bool(write),
         "ip": detected,
         "never_ban_cidrs": merged,
         "reason": "seeded",
-        "hint": (
+    }
+    if not raw_ip:
+        out["hint"] = (
             "seeds THIS machine egress IP — on a VPS that is the VPS, not your laptop; "
             "pass --ip from admin PC if needed; may be shared NAT"
-        ),
-    }
+        )
+    return out

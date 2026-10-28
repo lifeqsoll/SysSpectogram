@@ -237,6 +237,26 @@ def _cmd_watch_perimeter(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_perimeter_replay(args: argparse.Namespace) -> int:
+    """Parse auth lines offline; print parsed events (no nft ban)."""
+    import json
+    from dataclasses import asdict
+
+    from sysspectogram.perimeter.auth import parse_auth_lines
+
+    path = Path(args.file)
+    if not path.is_file():
+        console.print(f"[red]missing file[/] {path}")
+        return 2
+    text = path.read_text(encoding="utf-8", errors="replace")
+    events = parse_auth_lines(text.splitlines())
+    for ev in events:
+        row = asdict(ev)
+        print(json.dumps(row, ensure_ascii=False))
+    console.print(f"[dim]parsed {len(events)} auth event(s) from {path} (replay only — no ban)[/]")
+    return 0
+
+
 def _cmd_recon(args: argparse.Namespace) -> int:
     from sysspectogram.osint.recon import run_full_recon, save_report
 
@@ -469,8 +489,9 @@ def _cmd_setup(args: argparse.Namespace) -> int:
 def _cmd_configure(args: argparse.Namespace) -> int:
     from sysspectogram.configure_tui import run_configure
 
+    prefix = state_root() if args.prefix is None else _resolve(args.prefix)
     run_configure(
-        prefix=_resolve(args.prefix),
+        prefix=prefix,
         config_path=_resolve(args.config) if args.config else None,
         accept_recommended=bool(args.accept_recommended),
         non_interactive=bool(args.non_interactive or args.accept_recommended),
@@ -920,7 +941,80 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
     else:
         add("mode", True, f"response.mode={mode}")
 
-    ok = all(c["ok"] or c.get("severity") == "info" for c in checks if c["id"] in ("helper", "guard", "metrics"))
+    # Ban backend (F-04): can we actually ban?
+    ban_detail = "unknown"
+    ban_ok = False
+    try:
+        from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
+
+        if os.geteuid() == 0:
+            from sysspectogram.response.actions import NftBackend
+
+            # Avoid mutating host sets in health: dry self-check of nft binary only.
+            import shutil
+
+            if shutil.which("nft"):
+                ban_ok = True
+                ban_detail = "nft as root ok"
+            else:
+                ban_detail = "nft missing"
+        elif helper_available():
+            detail = HelperBanBackend().selftest()
+            if detail.startswith("nft via helper") or detail == "ok" or "ok" in detail.lower():
+                ban_ok = True
+                ban_detail = detail if detail.startswith("nft") else "nft via helper ok"
+            else:
+                ban_detail = detail
+        else:
+            ban_detail = "no privileges (run helper install)"
+    except Exception as exc:
+        ban_detail = f"ban check error: {exc}"
+    enforcing = mode.lower() in {"soft", "full", "isolate", "shield", "aggressive"}
+    add(
+        "ban_backend",
+        ban_ok,
+        ban_detail,
+        severity="warn" if enforcing and not ban_ok else ("info" if not ban_ok else "ok"),
+    )
+
+    ssh_detail = "unknown"
+    ssh_ok = False
+    try:
+        from sysspectogram.perimeter.auth import ssh_auth_lines
+
+        auth_lines, auth_src = ssh_auth_lines(50)
+        if auth_lines:
+            ssh_ok = True
+            ssh_detail = f"{auth_src} ok ({len(auth_lines)} lines)"
+        elif auth_src == "none":
+            ssh_detail = (
+                "no access: add user to systemd-journal group or install helper (auth.tail)"
+            )
+        else:
+            ssh_detail = "no sshd journal lines yet"
+    except Exception as exc:
+        ssh_detail = f"ssh_source check error: {exc}"
+    add(
+        "ssh_source",
+        ssh_ok,
+        ssh_detail,
+        severity="warn" if enforcing and not ssh_ok else ("info" if not ssh_ok else "ok"),
+    )
+
+    required = ["helper", "guard", "metrics"]
+    if enforcing:
+        required.append("ban_backend")
+        required.append("ssh_source")
+    ok = all(
+        c["ok"] or c.get("severity") == "info"
+        for c in checks
+        if c["id"] in required
+    )
+    # Soft/full without ban capability must be ok=false (F-04).
+    if enforcing and not ban_ok:
+        ok = False
+    if enforcing and not ssh_ok:
+        ok = False
     print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False))
     return 0 if ok else 1
 
@@ -1240,6 +1334,127 @@ def _cmd_home_update(args: argparse.Namespace) -> int:
     return 0 if res.get("ok") else 1
 
 
+def _cmd_bans(args: argparse.Namespace) -> int:
+    """list | unban | test-ban via NftBackend (helper when non-root)."""
+    import json
+
+    from sysspectogram.config import load_config
+    from sysspectogram.response.actions import NftBackend
+
+    cfg = load_config()
+    never = [str(x) for x in ((cfg.get("response") or {}).get("never_ban_cidrs") or [])]
+    nft = NftBackend(never_ban_cidrs=never)
+    action = str(getattr(args, "bans_action", "") or "")
+    if action == "list":
+        # Prefer helper list when available
+        try:
+            from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
+
+            if helper_available() and os.geteuid() != 0:
+                ips = HelperBanBackend(never_ban_cidrs=never).list_bans()
+            else:
+                ips = [b.ip for b in nft.list_bans()]
+        except Exception:
+            ips = [b.ip for b in nft.list_bans()]
+        print(json.dumps({"ok": True, "ips": ips}, ensure_ascii=False))
+        return 0
+    if action == "unban":
+        msg = nft.unban_ip(str(args.ip))
+        ok = msg.startswith("unbanned") or "absent" in msg
+        print(json.dumps({"ok": ok, "detail": msg}, ensure_ascii=False))
+        return 0 if ok else 1
+    if action == "test-ban":
+        if getattr(args, "force", False):
+            nft._force_ban = True  # type: ignore[attr-defined]
+        msg = nft.ban_ip(str(args.ip), ttl_sec=float(getattr(args, "ttl", 60) or 60))
+        ok = msg.startswith("banned")
+        print(json.dumps({"ok": ok, "detail": msg}, ensure_ascii=False))
+        return 0 if ok else 1
+    print(json.dumps({"ok": False, "error": f"unknown action {action}"}))
+    return 2
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Collect versions + health checks; redact secrets by default (8.13)."""
+    import json
+    import platform
+    import re
+    import shutil
+
+    from sysspectogram import __version__
+
+    redact = not bool(getattr(args, "no_redact", False))
+
+    def _mask_ip(text: str) -> str:
+        if not redact:
+            return text
+        return re.sub(
+            r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b",
+            lambda m: f"{m.group(1)}.{m.group(2)}.{m.group(3)}.x"
+            if not m.group(1).startswith("192") and m.group(1) not in {"127", "10", "0"}
+            else m.group(0)
+            if m.group(1) in {"127", "10"} or (m.group(1) == "192" and m.group(2) == "0" and m.group(3) == "2")
+            or (m.group(1) == "198" and m.group(2) == "51")
+            or (m.group(1) == "203" and m.group(2) == "0")
+            else f"{m.group(1)}.{m.group(2)}.{m.group(3)}.x",
+            text,
+        )
+
+    # Reuse health
+    import io
+    import contextlib
+    from argparse import Namespace as Ns
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        health_rc = _cmd_home_health(Ns(ping=False))
+    try:
+        health = json.loads(buf.getvalue())
+    except json.JSONDecodeError:
+        health = {"ok": False, "checks": [], "raw": buf.getvalue()}
+
+    report = {
+        "ok": health_rc == 0 and bool(health.get("ok")),
+        "version": __version__,
+        "python": platform.python_version(),
+        "os": platform.platform(),
+        "state_root": str(state_root()),
+        "nft": bool(shutil.which("nft")),
+        "helper_socket": os.environ.get("SYSSPECTOGRAM_HELPER_SOCKET", "/run/sysspectogram/helper.sock"),
+        "health": health,
+        "hints": [],
+    }
+    for c in health.get("checks") or []:
+        if c.get("ok"):
+            continue
+        cid = c.get("id")
+        if cid == "ban_backend":
+            report["hints"].append("install helper + usermod -aG sysspectogram $USER; re-login")
+        elif cid == "helper":
+            report["hints"].append("sudo bash scripts/install-helper-from-release.sh <TAG>")
+        elif cid == "guard":
+            report["hints"].append("python -m sysspectogram protect enable")
+        elif cid == "ssh_source":
+            report["hints"].append("sudo usermod -aG systemd-journal $USER && re-login")
+    text = json.dumps(report, ensure_ascii=False, indent=2)
+    print(_mask_ip(text) if redact else text)
+    return 0 if report["ok"] else 1
+
+
+def _cmd_home_confirm_mode(args: argparse.Namespace) -> int:
+    """Clear mode_pending.json after operator confirms soft/full."""
+    import json
+    from pathlib import Path
+
+    path = state_root() / "state" / "mode_pending.json"
+    if path.is_file():
+        path.unlink()
+        print(json.dumps({"ok": True, "cleared": str(path)}))
+        return 0
+    print(json.dumps({"ok": True, "cleared": None, "detail": "no pending mode"}))
+    return 0
+
+
 def _cmd_protect(args: argparse.Namespace) -> int:
     import json
 
@@ -1299,6 +1514,16 @@ def _cmd_home_seed_never_ban(args: argparse.Namespace) -> int:
         force=bool(getattr(args, "force", False)),
         ip=getattr(args, "ip", None) or None,
     )
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0 if out.get("ok") else 1
+
+
+def _cmd_home_uninstall(args: argparse.Namespace) -> int:
+    import json
+
+    from sysspectogram.home_uninstall import uninstall_stack
+
+    out = uninstall_stack(purge_data=bool(getattr(args, "purge_data", False)))
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0 if out.get("ok") else 1
 
@@ -1419,6 +1644,27 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
         elif not isinstance(value, (bool, int, float, str)):
             rejected.append(str(key))
             continue
+        if key == "response.mode" and str(value).lower() in {
+            "soft",
+            "full",
+            "isolate",
+            "shield",
+            "aggressive",
+        }:
+            from sysspectogram.response.helper_ban import helper_available
+
+            if os.geteuid() != 0 and not helper_available():
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "soft/full/isolate require helper (nft bans)",
+                            "hint": "sudo bash scripts/install-helper-from-release.sh <TAG> "
+                            "&& usermod -aG sysspectogram $USER; re-login",
+                        }
+                    )
+                )
+                return 2
         current[str(key)] = value
         applied[str(key)] = value
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1426,7 +1672,37 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
         os.chmod(path, 0o600)
     except OSError:
         pass
-    print(json.dumps({"ok": True, "path": str(path), "applied": applied, "rejected": rejected}))
+    rollback_info = None
+    mode_applied = applied.get("response.mode")
+    if (
+        mode_applied is not None
+        and str(mode_applied).lower() not in {"observe", "notify", ""}
+        and not getattr(args, "no_rollback", False)
+    ):
+        from sysspectogram.response.mode_rollback import schedule_mode_pending
+
+        rollback_info = schedule_mode_pending(str(mode_applied))
+    out = {"ok": True, "path": str(path), "applied": applied, "rejected": rejected}
+    if rollback_info is not None:
+        out["mode_pending"] = rollback_info
+    print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
+def _cmd_home_confirm_mode(args: argparse.Namespace) -> int:
+    """Clear mode auto-rollback deadline after confirming enforcing mode."""
+    import json
+
+    from sysspectogram.response.mode_rollback import clear_mode_pending, load_mode_pending
+
+    pending = load_mode_pending()
+    clear_mode_pending()
+    print(
+        json.dumps(
+            {"ok": True, "cleared": pending is not None, "was": pending},
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
@@ -2037,7 +2313,12 @@ def _cmd_labels(args: argparse.Namespace) -> int:
     from sysspectogram.process_labels import ProcessLabelStore
     from sysspectogram.role_fp import list_seed_roles, seed_role_labels
 
-    store = ProcessLabelStore(_resolve(args.store))
+    store_path = (
+        state_root() / "state" / "process_labels.json"
+        if args.store is None
+        else _resolve(args.store)
+    )
+    store = ProcessLabelStore(store_path)
     if args.labels_action == "list":
         for r in store.list_rules():
             console.print(f"{r.id} {r.label} {r.match} {r.pattern} src={r.source}")
@@ -2278,6 +2559,12 @@ def build_parser() -> argparse.ArgumentParser:
     wp.add_argument("--no-recon", action="store_true")
     wp.set_defaults(func=_cmd_watch_perimeter)
 
+    per_p = sub.add_parser("perimeter", help="offline perimeter tools")
+    per_sub = per_p.add_subparsers(dest="perimeter_action", required=True)
+    per_rep = per_sub.add_parser("replay", help="parse auth log; print events (no ban)")
+    per_rep.add_argument("--file", required=True, help="auth.log or journal export (one line per entry)")
+    per_rep.set_defaults(func=_cmd_perimeter_replay)
+
     rc = sub.add_parser("recon", help="OSINT + optional nmap on an IP")
     rc.add_argument("ip")
     rc.add_argument("--out", default=None)
@@ -2409,7 +2696,11 @@ def build_parser() -> argparse.ArgumentParser:
     st.set_defaults(func=_cmd_setup)
 
     cfg = sub.add_parser("configure", help="unified Day-0 TUI: probe + profile + agent + TG + labels")
-    cfg.add_argument("--prefix", default=".", help="install prefix")
+    cfg.add_argument(
+        "--prefix",
+        default=None,
+        help="install prefix (default: SYSSPECTOGRAM_HOME / state root)",
+    )
     cfg.add_argument("--config", default=None, help="yaml config to write (default configs/default.yaml)")
     cfg.add_argument("--role", default=None)
     cfg.add_argument(
@@ -2424,15 +2715,27 @@ def build_parser() -> argparse.ArgumentParser:
     lb = sub.add_parser("labels", help="process label rules (As normal / As anomaly store)")
     lb_sub = lb.add_subparsers(dest="labels_action", required=True)
     lb_list = lb_sub.add_parser("list")
-    lb_list.add_argument("--store", default="state/process_labels.json")
+    lb_list.add_argument(
+        "--store",
+        default=None,
+        help="label store path (default: state_root()/state/process_labels.json)",
+    )
     lb_list.set_defaults(func=_cmd_labels)
     lb_seed = lb_sub.add_parser("seed", help="seed role FP baselines")
     lb_seed.add_argument("--role", required=True)
-    lb_seed.add_argument("--store", default="state/process_labels.json")
+    lb_seed.add_argument(
+        "--store",
+        default=None,
+        help="label store path (default: state_root()/state/process_labels.json)",
+    )
     lb_seed.set_defaults(func=_cmd_labels)
     lb_del = lb_sub.add_parser("del")
     lb_del.add_argument("id")
-    lb_del.add_argument("--store", default="state/process_labels.json")
+    lb_del.add_argument(
+        "--store",
+        default=None,
+        help="label store path (default: state_root()/state/process_labels.json)",
+    )
     lb_del.set_defaults(func=_cmd_labels)
 
     spec = sub.add_parser("spectro", help="render a metrics spectrogram for an incident or a time")
@@ -2618,6 +2921,11 @@ def build_parser() -> argparse.ArgumentParser:
     hm_ob_done.set_defaults(func=_cmd_home_onboarding)
     hm_set = hm_sub.add_parser("settings", help="write state/user-settings.json (home overlay)")
     hm_set.add_argument("--changes", required=True, help="JSON object of dotted keys")
+    hm_set.add_argument(
+        "--no-rollback",
+        action="store_true",
+        help="do not schedule auto-rollback when switching to soft/full/isolate",
+    )
     hm_set.set_defaults(func=_cmd_home_settings)
     hm_warm = hm_sub.add_parser("warmup", help="shield readiness checklist (never_ban, labels, …)")
     hm_warm.set_defaults(func=_cmd_home_warmup)
@@ -2637,6 +2945,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite corrupt user-settings.json (writes .bak first)",
     )
     hm_snb.set_defaults(func=_cmd_home_seed_never_ban)
+    hm_un = hm_sub.add_parser(
+        "uninstall",
+        help="stop protect, drop inet sysspectogram nft table; optional --purge-data",
+    )
+    hm_un.add_argument(
+        "--purge-data",
+        action="store_true",
+        help="delete SYSSPECTOGRAM_HOME after stop (irreversible)",
+    )
+    hm_un.set_defaults(func=_cmd_home_uninstall)
     hm_feed = hm_sub.add_parser("feed-tail", help="tail alerts/incidents JSONL (fleet aggregation)")
     hm_feed.add_argument("--limit", type=int, default=40)
     hm_feed.add_argument("--host-id", default=None)
@@ -2648,6 +2966,11 @@ def build_parser() -> argparse.ArgumentParser:
     hm_health = hm_sub.add_parser("health", help="quick health: helper, guard, metrics, telegram")
     hm_health.add_argument("--ping", action="store_true", help="send a Telegram test message")
     hm_health.set_defaults(func=_cmd_home_health)
+    hm_confirm = hm_sub.add_parser(
+        "confirm-mode",
+        help="confirm pending soft/full/isolate (cancel auto-rollback)",
+    )
+    hm_confirm.set_defaults(func=_cmd_home_confirm_mode)
     hm_digest = hm_sub.add_parser("digest", help="plain-language summary of recent activity")
     hm_digest.add_argument("--hours", type=float, default=24.0)
     hm_digest.add_argument("--lang", choices=["en", "ru"], default="en")
@@ -2881,6 +3204,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     menu_p = sub.add_parser("menu", help="friend interactive menu for VPS/SSH (zapret-like)")
     menu_p.set_defaults(func=_cmd_menu)
+
+    bans_p = sub.add_parser("bans", help="list/test/unban nft bans (via helper or root)")
+    bans_sub = bans_p.add_subparsers(dest="bans_action", required=True)
+    bans_list = bans_sub.add_parser("list", help="list active ban set members")
+    bans_list.set_defaults(func=_cmd_bans)
+    bans_un = bans_sub.add_parser("unban", help="remove IP from ban set")
+    bans_un.add_argument("--ip", required=True)
+    bans_un.set_defaults(func=_cmd_bans)
+    bans_tb = bans_sub.add_parser("test-ban", help="ban an IP briefly (self-test / lab)")
+    bans_tb.add_argument("--ip", required=True)
+    bans_tb.add_argument("--ttl", type=int, default=60)
+    bans_tb.add_argument("--force", action="store_true", help="bypass active-session protect")
+    bans_tb.set_defaults(func=_cmd_bans)
+
+    doc_p = sub.add_parser("doctor", help="redacted health dump for bug reports")
+    doc_p.add_argument("--json", action="store_true")
+    doc_p.add_argument("--no-redact", action="store_true")
+    doc_p.set_defaults(func=_cmd_doctor)
 
     ln = sub.add_parser("lab-nmap", help="nmap allowlisted lab targets only")
     ln.add_argument("target")

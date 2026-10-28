@@ -113,3 +113,4 @@ def test_seed_explicit_ip_skips_detect(tmp_path, monkeypatch):
     det.assert_not_called()
     assert out["ok"] is True
     assert "203.0.113.55/32" in out["never_ban_cidrs"]
+    assert "hint" not in out

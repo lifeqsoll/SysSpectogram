@@ -73,6 +73,20 @@ def _normalize_auth_ip(raw: str) -> str | None:
     return str(addr)
 
 
+def _sanitize_cert_id(raw: str | None) -> str | None:
+    """Drop forged ``from … port …`` tails that leaked into the cert ID capture."""
+    if raw is None:
+        return None
+    s = raw.strip().strip('"')
+    for sep in (" from ", " port "):
+        idx = s.find(sep)
+        if idx >= 0:
+            s = s[:idx].rstrip()
+    if not s or s.lower().startswith("from"):
+        return None
+    return s
+
+
 def _kind_from_match(kind_token: str) -> str:
     low = (kind_token or "").lower()
     if "invalid user" in low:
@@ -92,9 +106,18 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
         ip = _normalize_auth_ip(m.group("ip"))
         if ip is None:
             return None
-        cert_id = m.groupdict().get("cert_id")
-        if cert_id is not None:
-            cert_id = cert_id.strip().strip('"')
+        cert_id = _sanitize_cert_id(m.groupdict().get("cert_id"))
+        cert_serial = m.groupdict().get("cert_serial")
+        if cert_id is None and cert_serial and "ID " in text:
+            loose = _ACCEPTED_LOOSE_RE.search(text)
+            if loose and _normalize_auth_ip(loose.group("ip")) == ip:
+                return AuthEvent(
+                    "accepted_unparsed",
+                    ip,
+                    m.group("user"),
+                    text,
+                    ts,
+                )
         return AuthEvent(
             _kind_from_match(m.group("kind")),
             ip,
@@ -102,7 +125,7 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
             text,
             ts,
             cert_id=cert_id,
-            cert_serial=m.groupdict().get("cert_serial"),
+            cert_serial=cert_serial,
         )
     # Accepted with unusual cert ID (spaces / quotes) that broke the strict tail.
     if re.search(r"(?i)\bAccepted \S+ for ", text):
@@ -143,10 +166,17 @@ def _tail_file(path: Path, max_bytes: int = 65536) -> list[str]:
 
 
 def _journal_ssh(lines: int = 200) -> list[str]:
-    for unit in ("sshd", "ssh"):
+    specs: list[list[str]] = [
+        ["-u", "sshd"],
+        ["-u", "sshd-session"],
+        ["-u", "ssh"],
+        ["_COMM=sshd-session"],
+        ["_COMM=sshd"],
+    ]
+    for spec in specs:
         try:
             proc = subprocess.run(
-                ["journalctl", "-u", unit, "-n", str(lines), "-o", "cat", "--no-pager"],
+                ["journalctl", *spec, "-n", str(lines), "-o", "cat", "--no-pager"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -159,6 +189,33 @@ def _journal_ssh(lines: int = 200) -> list[str]:
     return []
 
 
+def _auth_tail_helper(lines: int = 200, cursor: str | None = None) -> list[str]:
+    from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
+
+    if not helper_available():
+        return []
+    args: dict[str, object] = {"limit": int(lines)}
+    if cursor:
+        args["cursor"] = cursor
+    reply = HelperBanBackend()._call("auth.tail", args)
+    if not reply.get("ok"):
+        return []
+    data = reply.get("data") or {}
+    raw = data.get("lines") or []
+    return [str(x) for x in raw if str(x).strip()]
+
+
+def ssh_auth_lines(lines: int = 200) -> tuple[list[str], str]:
+    """Recent sshd journal lines and a short source tag (journal | helper | none)."""
+    got = _journal_ssh(lines)
+    if got:
+        return got, "journal"
+    got = _auth_tail_helper(lines)
+    if got:
+        return got, "helper"
+    return [], "none"
+
+
 class AuthWatcher:
     """Poll auth sources and yield only newly seen lines."""
 
@@ -169,7 +226,8 @@ class AuthWatcher:
 
     def poll(self) -> list[AuthEvent]:
         lines: list[str] = []
-        lines.extend(_journal_ssh())
+        journal_lines, _src = ssh_auth_lines()
+        lines.extend(journal_lines)
         for path in (Path("/var/log/auth.log"), Path("/var/log/secure"), *self.extra_paths):
             lines.extend(_tail_file(path))
 
