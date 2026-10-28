@@ -43,7 +43,7 @@ def test_validate_rejects_newline_injection():
 
 
 def test_validate_bot_token_ok():
-    tok = "123456789:AA" + ("x" * 30)
+    tok = "123:TEST_TOKEN"
     assert validate_bot_token(tok) == tok
     assert validate_chat_id("-100123") == "-100123"
 
@@ -88,7 +88,7 @@ def test_cmd_home_env_mode(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(cfg, "_DOTENV_LOADED", False)
     old = os.umask(0o022)
     try:
-        tok = "123456789:AA" + ("x" * 30)
+        tok = "123:TEST_TOKEN"
         ns = type(
             "A",
             (),

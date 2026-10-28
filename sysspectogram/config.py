@@ -43,15 +43,67 @@ def resolve_config_path(path: str | Path | None = None) -> Path:
 DEFAULT_CONFIG = default_config_path()
 
 
+def _dev_checkout_root() -> Path | None:
+    """Source tree (editable install or ``python -m`` from checkout)."""
+    pkg = _PKG_DIR
+    for candidate in (pkg.parent, *pkg.parents):
+        if (candidate / "configs" / "default.yaml").is_file() and (
+            candidate / "sysspectogram" / "__init__.py"
+        ).is_file():
+            return candidate
+    return None
+
+
+def _user_data_root() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "sysspectogram"
+    return Path.home() / ".local" / "share" / "sysspectogram"
+
+
+def _installed_in_site_packages() -> bool:
+    p = str(_PKG_DIR)
+    return "site-packages" in p or "dist-packages" in p
+
+
+def _running_from_home_venv() -> bool:
+    import sys
+
+    prefix = Path(sys.prefix).resolve()
+    home_root = _user_data_root().resolve()
+    try:
+        prefix.relative_to(home_root)
+        return True
+    except ValueError:
+        return False
+
+
 def state_root() -> Path:
     """Directory that holds runtime state (state/, reports/, artifacts/).
 
-    Defaults to the source tree. Set SYSSPECTOGRAM_HOME to the installed state
-    directory (/var/lib/sysspectogram). The Control Center reads the same variable,
-    so the guard and the dashboards always use the same timeseries file.
+    Resolution: ``SYSSPECTOGRAM_HOME``, else source checkout, else friend/wheel
+    home (``~/.local/share/sysspectogram`` or ``/var/lib/sysspectogram`` as root).
     """
     env = os.environ.get(STATE_ENV)
-    return Path(env) if env else ROOT
+    if env:
+        return Path(env)
+    checkout = _dev_checkout_root()
+    if checkout is not None:
+        return checkout
+    if _installed_in_site_packages() or _running_from_home_venv():
+        if os.geteuid() == 0:
+            system = Path("/var/lib/sysspectogram")
+            if system.joinpath("configs/default.yaml").is_file() or Path(
+                "/opt/sysspectogram/venv/bin/python"
+            ).is_file():
+                return system
+        return _user_data_root()
+    user = _user_data_root()
+    if user.joinpath(".venv/bin/python").is_file() or user.joinpath(
+        "configs/default.yaml"
+    ).is_file():
+        return user
+    return checkout if checkout is not None else ROOT
 
 
 def dotenv_path() -> Path:

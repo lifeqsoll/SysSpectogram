@@ -32,7 +32,7 @@ SECURITY_CSP = (
     "connect-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
-    "frame-ancestors 'none'"
+    "frame-ancestors 'self' https://web.telegram.org"
 )
 UNLOCK_RATE_MAX = 5
 UNLOCK_RATE_WINDOW_SEC = 60.0
@@ -397,24 +397,32 @@ def _make_handler(app: WebAppState):
                 code = str(payload.get("code") or "")
                 if not code.strip():
                     return self._json(401, {"ok": False, "error": "unauthorized"})
-                # Unauthenticated callers: only a correct code mints a session.
-                # Wrong guesses must not burn fail_count (local uid lockout DoS).
+                # Unauthenticated callers: correct code always wins; rate-limit wrong guesses only.
                 if not authed:
+                    if app.unlock.code_matches(code) and app.unlock.try_unlock(code):
+                        return self._json(
+                            200,
+                            {
+                                "ok": True,
+                                "unlocked": True,
+                                "status": app.controllers.status() if app.controllers else {},
+                            },
+                            extra=_session_extra(),
+                        )
                     ip = self._client_ip()
                     allowed, backoff, _n = app._unlock_rate_status(ip)
-                    if backoff > 0:
-                        time.sleep(backoff)
                     if not allowed:
+                        retry = str(max(1, int(backoff) if backoff >= 1 else 1))
                         return self._json(
                             429,
                             {"ok": False, "error": "rate limited", "unlocked": False},
+                            extra={"Retry-After": retry},
                         )
-                    if not app.unlock.code_matches(code):
-                        app._unlock_record_fail(ip)
-                        return self._json(
-                            403,
-                            {"ok": False, "error": "bad unlock code", "unlocked": False},
-                        )
+                    app._unlock_record_fail(ip)
+                    return self._json(
+                        403,
+                        {"ok": False, "error": "bad unlock code", "unlocked": False},
+                    )
                 if app.unlock.try_unlock(code):
                     return self._json(
                         200,

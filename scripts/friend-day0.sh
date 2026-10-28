@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Headless day-0: wheel + venv + menu (no git clone).
 #
-# ALWAYS use a *tagged* raw URL (never floating main):
-#   curl -fsSL https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/v1.3.3/scripts/friend-day0.sh | bash -s -- v1.3.3
-#
-# Or download friend-day0.sh from the GitHub Release assets and run locally.
+# Download friend-day0.sh + friend-day0.sh.minisign from the GitHub Release for your tag,
+# then: minisign -Vm friend-day0.sh -P '…' && bash friend-day0.sh v1.3.3
+# Minisign trusted comment must match: sysspectogram <TAG> friend-day0.sh
 # Requires: curl, python3-venv, sha256sum, minisign (signatures are mandatory).
 #
 # Env: SYSSPECTOGRAM_GITHUB_REPO (default lifeqsoll/SysSpectogram)
@@ -124,9 +123,30 @@ if [[ -z "${AEXP}" || "${AEXP}" != "${AGOT}" ]]; then
 fi
 echo "==> sha256 agent ok"
 
+verify_minisign_asset() {
+  local file="$1" sig="$2" asset_name="$3"
+  local out tc want
+  if ! out="$(minisign -Vm "${file}" -p "${PUB_PATH}" -x "${sig}" 2>&1)"; then
+    echo "${out}" >&2
+    exit 1
+  fi
+  tc=""
+  while IFS= read -r line; do
+    if [[ "${line}" == Trusted\ comment:* ]]; then
+      tc="${line#Trusted comment:}"
+      tc="${tc#"${tc%%[![:space:]]*}"}"
+    fi
+  done <<< "${out}"
+  want="sysspectogram ${TAG} ${asset_name}"
+  if [[ -z "${tc}" || "${tc}" != "${want}" ]]; then
+    echo "minisign trusted comment mismatch: got '${tc}', want '${want}'" >&2
+    exit 1
+  fi
+}
+
 echo "==> minisign verify"
-minisign -Vm "${WHEEL_PATH}" -p "${PUB_PATH}" -x "${WHEEL_SIG_PATH}"
-minisign -Vm "${AGENT_PATH}" -p "${PUB_PATH}" -x "${AGENT_SIG_PATH}"
+verify_minisign_asset "${WHEEL_PATH}" "${WHEEL_SIG_PATH}" "${WHEEL_NAME}"
+verify_minisign_asset "${AGENT_PATH}" "${AGENT_SIG_PATH}" "sysspectogram-agent-x86_64-linux-musl"
 echo "==> minisign ok"
 
 VENV="${HOME_DIR}/.venv"
@@ -138,6 +158,15 @@ fi
 "${VENV}/bin/python" -m pip install -q --upgrade pip
 "${VENV}/bin/python" -m pip install -q --force-reinstall "${WHEEL_PATH}"
 
+ACTIVATE="${VENV}/bin/activate"
+if [[ -f "${ACTIVATE}" ]] && ! grep -qF "export SYSSPECTOGRAM_HOME=${HOME_DIR}" "${ACTIVATE}"; then
+  {
+    echo ""
+    echo "# sysspectogram friend-day0"
+    echo "export SYSSPECTOGRAM_HOME=${HOME_DIR}"
+  } >> "${ACTIVATE}"
+fi
+
 AGENT_DIR="${HOME_DIR}/bin"
 mkdir -p "${AGENT_DIR}"
 cp -f "${AGENT_PATH}" "${AGENT_DIR}/sysspectogram-agent"
@@ -146,7 +175,7 @@ echo "==> agent -> ${AGENT_DIR}/sysspectogram-agent"
 
 if command -v loginctl >/dev/null 2>&1; then
   if ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
-    echo '==> tip: loginctl enable-linger $USER   # else protect dies on SSH logout'
+    echo '==> tip: loginctl enable-linger $(id -un)   # or: sudo loginctl enable-linger $(id -un)'
   fi
 fi
 
@@ -155,6 +184,7 @@ echo "    export SYSSPECTOGRAM_HOME=${HOME_DIR}"
 echo "    ${VENV}/bin/python -m sysspectogram …"
 
 if [[ "${NO_MENU}" -eq 1 ]] || [[ ! -t 0 ]]; then
+  echo '==> tip: sudo usermod -aG systemd-journal "$USER"   # sshd journal without root (re-login)'
   echo "==> skipping menu (non-interactive / --no-menu)"
   exit 0
 fi

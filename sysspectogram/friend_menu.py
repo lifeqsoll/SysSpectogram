@@ -245,6 +245,21 @@ def _cmd_telegram() -> None:
 
 
 def _cmd_unlock() -> None:
+    from sysspectogram.console_unlock import SESSION_MARKER
+
+    marker = state_root() / "state" / SESSION_MARKER
+    if marker.is_file():
+        try:
+            if marker.read_text(encoding="utf-8").strip() == "1":
+                console.print(
+                    _t(
+                        "Control is already unlocked (session open until /lock or guard restart).",
+                        "Control уже разблокирован (сессия до /lock или перезапуска guard).",
+                    )
+                )
+                return
+        except OSError:
+            pass
     code_path = state_root() / "state" / "unlock.code"
     if code_path.is_file():
         console.print(Panel(code_path.read_text(encoding="utf-8").strip(), title="unlock.code"))

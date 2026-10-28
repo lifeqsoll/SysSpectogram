@@ -22,6 +22,15 @@ from sysspectogram.web.server import start_web_server
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_friend_day0_enforces_trusted_comment():
+    script = (ROOT / "scripts" / "friend-day0.sh").read_text(encoding="utf-8")
+    assert "verify_minisign_asset" in script
+    assert "trusted comment mismatch" in script
+    assert "sysspectogram ${TAG}" in script
+    header = script.split("set -euo pipefail", 1)[0]
+    assert "curl" not in header or "| bash" not in header
+
+
 def test_h01_install_helper_mentions_minisign():
     script = (ROOT / "scripts" / "install-helper-from-release.sh").read_text(encoding="utf-8")
     assert script.count("minisign") > 0
@@ -236,6 +245,7 @@ def test_m03_ssh_cert_accepted():
     )
     evs5 = parse_auth_lines([inject])
     assert len(evs5) == 1 and evs5[0].ip == "203.0.113.51"
+    assert evs5[0].cert_id is None
 
 
 def test_m01_action_requires_auth():
@@ -339,6 +349,70 @@ def test_r04_unauth_unlock_rate_limited(tmp_path: Path):
             assert "ss_session" not in _cookie
         assert statuses[-1] == 429, statuses
         assert unlock.fail_count == 0
+    finally:
+        httpd.shutdown()
+
+
+def test_r04_ten_wrong_then_correct_unlocks(tmp_path: Path):
+    from sysspectogram.console_unlock import ConsoleUnlock
+
+    bus = LiveBus()
+    unlock = ConsoleUnlock(enabled=True, ttl_sec=3600)
+    good = unlock.pending_code
+    assert good
+    httpd = start_web_server(
+        bus, host="127.0.0.1", port=0, unlock=unlock, token_path=False
+    )
+    port = httpd.server_address[1]
+    try:
+        for _ in range(10):
+            st, _data, cookie = _post_unlock(port, {"code": "WRONGWRONG"})
+            assert st in (403, 429)
+            assert "ss_session" not in cookie
+        st_ok, data_ok, cookie_ok = _post_unlock(port, {"code": good})
+        assert st_ok == 200, data_ok
+        assert data_ok.get("unlocked") is True
+        assert "ss_session=" in cookie_ok
+    finally:
+        httpd.shutdown()
+
+
+def test_r04_wrong_unlock_responds_quickly(tmp_path: Path):
+    from sysspectogram.console_unlock import ConsoleUnlock
+
+    bus = LiveBus()
+    unlock = ConsoleUnlock(enabled=True, ttl_sec=3600)
+    httpd = start_web_server(
+        bus, host="127.0.0.1", port=0, unlock=unlock, token_path=False
+    )
+    port = httpd.server_address[1]
+    try:
+        t0 = time.perf_counter()
+        st, _data, _cookie = _post_unlock(port, {"code": "WRONGWRONG"})
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        assert st == 403
+        assert elapsed_ms < 100.0
+    finally:
+        httpd.shutdown()
+
+
+def test_r14_csp_allows_telegram_frame_ancestors(tmp_path: Path):
+    bus = LiveBus()
+    httpd = start_web_server(bus, host="127.0.0.1", port=0, token_path=False)
+    port = httpd.server_address[1]
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=2)
+        conn.putrequest("GET", "/", skip_host=True)
+        conn.putheader("Host", "127.0.0.1")
+        conn.endheaders()
+        resp = conn.getresponse()
+        csp = ""
+        for k, v in resp.getheaders():
+            if k.lower() == "content-security-policy":
+                csp = v
+        resp.read()
+        conn.close()
+        assert "frame-ancestors 'self' https://web.telegram.org" in csp
     finally:
         httpd.shutdown()
 

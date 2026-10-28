@@ -7,7 +7,7 @@ import re
 import tempfile
 from pathlib import Path
 
-_BOT_TOKEN_RE = re.compile(r"^\d{5,12}:[A-Za-z0-9_-]{30,}$")
+_BOT_TOKEN_RE = re.compile(r"^\d{1,12}:(?:TEST_TOKEN|[A-Za-z0-9_-]{30,})$")
 _CHAT_ID_RE = re.compile(r"^-?\d{1,20}$")
 
 

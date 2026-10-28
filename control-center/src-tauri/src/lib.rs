@@ -290,8 +290,6 @@ fn install_helper_release(tag: Option<String>) -> Result<Value, String> {
     }
 
     let mut child = Command::new(pkexec)
-        .arg("--action")
-        .arg("org.sysspectogram.install-helper")
         .args(&env_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
