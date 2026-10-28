@@ -154,5 +154,5 @@ Full write-up: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 | [ROOT_WATCH.md](docs/ROOT_WATCH.md) | Unexpected root |
 | [KIRK.md](docs/KIRK.md) | Integrity / isolate |
 | [CONTROL_CENTER.md](docs/CONTROL_CENTER.md) | Helper + polkit surface |
-| [RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md) | Latest release notes |
+| [RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md) | Latest release notes |
 | [FRIEND.md](docs/FRIEND.md) | Friend install path |

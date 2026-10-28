@@ -52,7 +52,7 @@ https://raw.githubusercontent.com/lifeqsoll/SysSpectogram/<LATEST_TAG>/docs/INST
 10. **Windows admin PC:** user may SSH from laptop; map `${SSH_CONNECTION%% *}` on the VPS to their public IP; on Windows they can run `curl.exe -4 ifconfig.me` locally to double-check.
 11. **Ubuntu VPS:** remind about `universe` before `apt install minisign` (INSTALL §1.1).
 12. **Missing desktop assets** on latest release → stop; do not invent download URLs.
-13. **Desktop bundle filenames** use the version **without** a leading `v` (e.g. `SysSpectogram_Control_Center_1.3.3_amd64.AppImage`, not `_v1.3.3_`). Read exact names from the GitHub release asset list for `<LATEST_TAG>`; use `VER="${TAG#v}"` when building URLs like INSTALL.md §B.
+13. **Desktop bundle filenames** use the version **without** a leading `v` (e.g. `SysSpectogram_Control_Center_1.4.0_amd64.AppImage`, not `_v1.4.0_`). Read exact names from the GitHub release asset list for `<LATEST_TAG>`; use `VER="${TAG#v}"` when building URLs like INSTALL.md §B.
 
 ---
 

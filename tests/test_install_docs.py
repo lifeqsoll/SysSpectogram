@@ -335,6 +335,6 @@ def test_install_desktop_urls_use_ver_not_tag_in_filename():
 def test_install_with_ai_desktop_version_without_v_prefix():
     ai = INSTALL_AI.read_text(encoding="utf-8")
     assert "without" in ai.lower() and "leading `v`" in ai
-    assert "Control_Center_1." in ai or "1.3.3_amd64" in ai
+    assert "Control_Center_1." in ai or "1.4.0_amd64" in ai or "1.3.3_amd64" in ai
     assert "Control_Center_v1." not in ai
     assert "releases/download/${TAG}/" in INSTALL.read_text(encoding="utf-8")

@@ -2,7 +2,7 @@
 
 **Tag:** replace `<LATEST_TAG>` with the newest release name from
 [github.com/lifeqsoll/SysSpectogram/releases/latest](https://github.com/lifeqsoll/SysSpectogram/releases/latest)
-(example shape: `v1.3.2`). Do **not** install from floating `main`.
+(example shape: `v1.4.0`). Do **not** install from floating `main`.
 
 **Pubkey (minisign):** `RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F`  
 (same as release asset `SysSpectogram.minisign.pub` and scripts’ `MINISIGN_PUB_B64`)

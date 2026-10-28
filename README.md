@@ -46,7 +46,7 @@ Optional **helper** (soft auto-ban on non-root guard): `curl -fsSL -O "https://g
 
 **Other paths:** [Control Center AppImage / `.deb`](#1-desktop-appimage--deb) · [source / dev](#3-source-install) · [AI-assisted install](docs/INSTALL_WITH_AI.md)
 
-Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md) and older `docs/RELEASE_*.md`.
+Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md) · [v1.3.3](docs/RELEASE_v1.3.3.md) and older `docs/RELEASE_*.md`.
 
 ### Host ML (optional, experimental)
 
@@ -120,7 +120,7 @@ Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md
 
 | Topic | Links |
 | --- | --- |
-| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.3.3](docs/RELEASE_v1.3.3.md) |
+| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.4.0](docs/RELEASE_v1.4.0.md) |
 | Many VPS | [Fleet](docs/FLEET.md) · Control Center Fleet tab · `fleet` / `home pair-*` CLI |
 | Geek / advanced | [Configure](docs/CONFIGURE.md) · [Day-0 CLI (git)](docs/DAY0_VPS.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Defense | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |

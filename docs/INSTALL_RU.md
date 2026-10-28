@@ -2,7 +2,7 @@
 
 **Тег:** вместо `<LATEST_TAG>` подставь имя последнего релиза со страницы
 [github.com/lifeqsoll/SysSpectogram/releases/latest](https://github.com/lifeqsoll/SysSpectogram/releases/latest)
-(вид: `v1.3.2`). **Не** ставь с плавающего `main`.
+(вид: `v1.4.0`). **Не** ставь с плавающего `main`.
 
 **Публичный ключ minisign:** `RWQpTS7f641bPCuKPgJc2mbA/oBkH2Yen4gN1JTofbwvyfbS6yYmLD8F`  
 (тот же, что в ассете `SysSpectogram.minisign.pub` и в `MINISIGN_PUB_B64` скриптов)

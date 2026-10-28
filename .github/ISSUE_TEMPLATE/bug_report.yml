@@ -12,7 +12,7 @@ body:
     id: version
     attributes:
       label: Version / tag
-      placeholder: v1.3.3 or pip show sysspectogram
+      placeholder: v1.4.0 or pip show sysspectogram
     validations:
       required: true
   - type: dropdown

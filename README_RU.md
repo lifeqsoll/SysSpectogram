@@ -37,7 +37,7 @@ python -m sysspectogram seed-never-ban --ip "$(curl -fsS -4 ifconfig.me)"
 loginctl enable-linger "$USER" && python -m sysspectogram protect enable
 ```
 
-Host ML **эксперимент** — [EVAL.md](docs/EVAL.md). История: [CHANGELOG.md](CHANGELOG.md).
+Host ML **эксперимент** — [EVAL.md](docs/EVAL.md). История: [CHANGELOG.md](CHANGELOG.md) · [RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md).
 
 ---
 
@@ -129,7 +129,7 @@ Root на том же хосте может остановить сервис и
 
 | Тема | Ссылки |
 | --- | --- |
-| Простой путь | [Установка без гиковщины](docs/FRIEND.md) · [Домашний экран](docs/HOME.md) · [Релиз v1.3.3](docs/RELEASE_v1.3.3.md) |
+| Простой путь | [Установка без гиковщины](docs/FRIEND.md) · [Домашний экран](docs/HOME.md) · [Релиз v1.4.0](docs/RELEASE_v1.4.0.md) |
 | Несколько VPS | [Флот](docs/FLEET.md) · вкладка Флот в Control Center · CLI `fleet` / `home pair-*` |
 | Для гиков | [Configure](docs/CONFIGURE.md) · [Day-0 через git](docs/DAY0_VPS.md) · [Холодная установка](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Защита | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |

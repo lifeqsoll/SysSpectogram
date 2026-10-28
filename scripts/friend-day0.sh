@@ -2,7 +2,7 @@
 # Headless day-0: wheel + venv + menu (no git clone).
 #
 # Download friend-day0.sh + friend-day0.sh.minisign from the GitHub Release for your tag,
-# then: minisign -Vm friend-day0.sh -P '…' && bash friend-day0.sh v1.3.3
+# then: minisign -Vm friend-day0.sh -P '…' && bash friend-day0.sh v1.4.0
 # Minisign trusted comment must match: sysspectogram <TAG> friend-day0.sh
 # Requires: curl, python3-venv, sha256sum, minisign (signatures are mandatory).
 #
@@ -17,7 +17,7 @@ for arg in "$@"; do
     --no-menu) NO_MENU=1 ;;
     -h|--help)
       echo "Usage: friend-day0.sh [TAG] [--no-menu]"
-      echo "  TAG        release tag (default v1.3.3)"
+      echo "  TAG        release tag (default v1.4.0)"
       echo "  --no-menu  install only; do not exec interactive menu (also default when stdin is not a TTY)"
       exit 0
       ;;
@@ -30,7 +30,7 @@ for arg in "$@"; do
       ;;
   esac
 done
-TAG="${TAG:-v1.3.3}"
+TAG="${TAG:-v1.4.0}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
 REPO="${SYSSPECTOGRAM_GITHUB_REPO:-lifeqsoll/SysSpectogram}"
 HOME_DIR="${SYSSPECTOGRAM_HOME:-${HOME}/.local/share/sysspectogram}"

@@ -5,14 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Older release write-ups: [docs/RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md),
+Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
+[docs/RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md),
 [docs/RELEASE_v1.3.2.md](docs/RELEASE_v1.3.2.md),
 [docs/RELEASE_v1.3.1.md](docs/RELEASE_v1.3.1.md),
 [docs/RELEASE_v1.3.0.md](docs/RELEASE_v1.3.0.md) (and earlier `docs/RELEASE_*.md`).
 
 ## [Unreleased]
 
-## [1.4.0] - TBD
+## [1.4.0] - 2026-10-28
+
+Full notes: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md).
 
 ### Added
 
