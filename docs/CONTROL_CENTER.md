@@ -116,6 +116,7 @@ Every top-level subcommand of `python -m sysspectogram` has a row. `scripts/chec
 | `audit` | Overview | Processes, ports, host snapshot |
 | `simulate` | Tests and Lab | Localhost only, through `lab run` |
 | `watch-perimeter` | Perimeter | |
+| `perimeter` | cli-only | Offline auth log replay (`perimeter replay --file …`) |
 | `recon` | Perimeter | Requires confirmation |
 | `supply-chain` | Install and Updates | Manifest, sign, SBOM, verify |
 | `guard` | Install and Updates | Start, stop and restart go through the helper |
@@ -141,6 +142,8 @@ Every top-level subcommand of `python -m sysspectogram` has a row. `scripts/chec
 | `home` | Settings / Home | Onboarding, `.env`, model import, health/digest/checklist, user-settings overlay, `home update` |
 | `protect` | Home / Onboarding | User systemd unit (real mode); Start + finish enable it |
 | `menu` | cli-only | Friend interactive menu for VPS/SSH (zapret-like) |
+| `bans` | cli-only | `list` / `unban` / `test-ban` via helper or root nft sets |
+| `doctor` | cli-only | Redacted health dump for bug reports |
 | `fleet` | Fleet | Multi-VPS: graph, profiles, warmup, SSH fan-out (`list` / `graph` / `status` / `unlock-locked` / `attack` / `release` / `profile-*` / `warmup` / `tg` / `incidents` / `mark-fp` / `ban` / `pair-*` / `pin-host`) |
 | `edge` | Fleet | CDN/WAF hub adapter (Cloudflare Under Attack / clear / playbook M) — not a scrubber; see [EDGE.md](EDGE.md) |
 | `eval` | cli-only | Offline ML eval report / `schema_version` stamp |

@@ -1,0 +1,35 @@
+# Phase 5 skeleton: friend-path smoke on ubuntu-24.04.
+# Full container+systemd e2e can expand later; this catches wheel+CLI regressions.
+name: e2e-install
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  friend-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install package + nftables
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nftables
+          pip install -U pip build
+          pip install -e ".[dev]"
+      - name: wheel contains web static
+        run: python -m pytest -q tests/test_wheel_contents.py
+      - name: doctor + bans CLI smoke
+        run: |
+          export SYSSPECTOGRAM_HOME="$HOME/.local/share/sysspectogram"
+          mkdir -p "$SYSSPECTOGRAM_HOME/state"
+          python -m sysspectogram bans --help
+          python -m sysspectogram doctor --json || true
+          python -m sysspectogram home health || true
+      - name: nft_real in netns
+        run: sudo unshare -n env PATH="$PATH" "$(which python)" -m pytest -q -m nft_real
