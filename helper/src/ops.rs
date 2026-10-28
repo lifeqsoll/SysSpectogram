@@ -45,6 +45,7 @@ pub fn dispatch(op: &str, args: &Value, caller: Caller) -> Value {
         "ban.del" => ban_del(args, caller),
         "ban.list" => ban_list(caller),
         "ban.selftest" => ban_selftest(caller),
+        "auth.tail" => auth_tail(args, caller),
         other => Err(format!("unknown operation {other:?}")),
     };
     match result {
@@ -1143,6 +1144,82 @@ fn ban_list(caller: Caller) -> Result<Value, String> {
         }
     }
     Ok(json!({"ips": ips}))
+}
+
+const JOURNALCTL: &str = "/usr/bin/journalctl";
+const JOURNALCTL_ALT: &str = "/bin/journalctl";
+const MAX_AUTH_TAIL: u64 = 2000;
+
+fn journalctl_bin() -> &'static str {
+    if Path::new(JOURNALCTL).is_file() {
+        JOURNALCTL
+    } else {
+        JOURNALCTL_ALT
+    }
+}
+
+fn auth_tail(args: &Value, caller: Caller) -> Result<Value, String> {
+    authorize_ban_group(caller)?;
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(200);
+    if limit == 0 || limit > MAX_AUTH_TAIL {
+        return Err(format!("limit must be 1..={MAX_AUTH_TAIL}"));
+    }
+    let cursor = args
+        .get("cursor")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let limit_s = limit.to_string();
+    let specs: &[&[&str]] = &[
+        &["-u", "sshd"],
+        &["-u", "sshd-session"],
+        &["-u", "ssh"],
+        &["_COMM=sshd-session"],
+        &["_COMM=sshd"],
+    ];
+    let j = journalctl_bin();
+    for spec in specs {
+        let mut argv: Vec<&str> = Vec::with_capacity(spec.len() + 8);
+        argv.extend_from_slice(spec);
+        if let Some(c) = cursor {
+            argv.push("--cursor");
+            argv.push(c);
+        }
+        argv.push("-n");
+        argv.push(&limit_s);
+        argv.push("-o");
+        argv.push("cat");
+        argv.push("--no-pager");
+        argv.push("--show-cursor");
+        let out = Command::new(j)
+            .args(&argv)
+            .output()
+            .map_err(|e| format!("journalctl: {e}"))?;
+        if !out.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut lines: Vec<String> = Vec::new();
+        let mut next_cursor: Option<String> = None;
+        for line in text.lines() {
+            if line.starts_with("-- cursor:") {
+                next_cursor = Some(line.trim_start_matches("-- cursor:").trim().to_string());
+                continue;
+            }
+            if !line.trim().is_empty() {
+                lines.push(line.to_string());
+            }
+        }
+        if !lines.is_empty() {
+            let mut data = Map::new();
+            data.insert("lines".into(), json!(lines));
+            if let Some(c) = next_cursor {
+                data.insert("cursor".into(), json!(c));
+            }
+            return Ok(Value::Object(data));
+        }
+    }
+    Ok(json!({"lines": [], "cursor": null}))
 }
 
 fn ban_selftest(caller: Caller) -> Result<Value, String> {

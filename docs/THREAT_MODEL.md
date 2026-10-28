@@ -40,9 +40,26 @@ Honest scope for SysSpectogram on a single Linux VPS / host. This is **not** a c
 | `kirk.auto_isolate*` default off + CIDR gate | Self-lockout |
 | HTTPS/syslog sinks block private/link-local after DNS resolve | SSRF via hostname / metadata |
 
+## Helper ban path (`sysspectogram` group)
+
+Friend / headless installs run `guard` without root. Auto-ban uses helper ops
+`ban.add` / `ban.del` / `ban.list` / `ban.selftest`, authorized by **Unix group
+`sysspectogram`** (SO_PEERCRED + `getgrouplist`), not polkit — a headless unit
+cannot answer a desktop password prompt.
+
+| Can | Cannot |
+| --- | --- |
+| Ban / unban **unprotected** external IPs into nft sets `ban4`/`ban6` (TTL capped) | Ban loopback, host addresses, `/etc/sysspectogram/never_ban`, active SSH session IPs |
+| Rate-limited per caller uid; ops logged to journald | Escalate to root shell or rewrite helper policy |
+
+**Residual:** membership in `sysspectogram` ≈ partial network admin (DoS via ban).
+Give the group only to the guard service user / operator. See [SECURITY.md](../SECURITY.md)
+§ Ban operations.
+
 ## Residual risks (accepted)
 
 - Same-host root can still `systemctl stop`, delete local files, or `rmmod` an optional helper module.
+- Members of group `sysspectogram` can disrupt inbound connectivity via helper bans (by design).
 - Advanced kernel malware can lie about `/proc` without out-of-guest visibility (see [VMI.md](VMI.md) for v1.0 ceiling).
 - Telegram is a pager, not WORM storage — configure remote sinks for evidence off-box.
 - Optional DKMS `sysspectogram_wd` is a PID registry scaffold; many cloud kernels will not load it.

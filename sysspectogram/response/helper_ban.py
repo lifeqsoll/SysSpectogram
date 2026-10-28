@@ -75,6 +75,13 @@ class HelperBanBackend:
             return f"refuse ban: {exc}"
         if self.is_never_ban(ip):
             return f"never_ban skip {ip}"
+        force = bool(getattr(self, "_force_ban", False))
+        if not force:
+            from sysspectogram.response.protect import is_protected
+
+            reason = is_protected(ip, never_ban_cidrs=self.never_ban_cidrs)
+            if reason:
+                return f"protected skip {ip} ({reason})"
         if dry_run:
             return f"dry-run ban {ip} ttl={ttl_sec} backend=helper"
         ttl = int(ttl_sec) if ttl_sec is not None else 3600

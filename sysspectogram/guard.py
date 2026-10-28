@@ -528,6 +528,22 @@ def run_guard(
         if score is not None:
             # 0.0 -> 0.5x ttl, 1.0 -> 3x ttl
             ttl = max(300.0, auto_ban_ttl * (0.5 + 2.5 * min(1.0, max(0.0, score))))
+        # fail2ban-style repeated-offender multiplier (response.ban_increment)
+        try:
+            from sysspectogram.response.actions import DEFAULT_MAX_BAN_TTL_SEC
+            from sysspectogram.response.ban_increment import next_ttl
+
+            resp_cfg = cfg.get("response") or {}
+            incr_on = bool(resp_cfg.get("ban_increment", True))
+            max_ttl = float(resp_cfg.get("max_ban_ttl_sec", DEFAULT_MAX_BAN_TTL_SEC))
+            ttl = next_ttl(
+                str(alert.ip),
+                base_ttl=ttl,
+                max_ban_ttl_sec=max_ttl,
+                enabled=incr_on,
+            )
+        except Exception:
+            pass
         msg = nft.ban_ip(alert.ip, ttl_sec=ttl, dry_run=dry_run_actions)
         from sysspectogram.response.actions import classify_ban_message
 
@@ -756,6 +772,13 @@ def run_guard(
         t0 = time.monotonic()
         while not stop.is_set():
             try:
+                from sysspectogram.response.mode_rollback import maybe_rollback_mode
+
+                if maybe_rollback_mode(watcher=watcher, nft=nft):
+                    console.print(
+                        "[yellow]mode rollback[/] response.mode reverted to observe "
+                        "(deadline passed; run: home confirm-mode before next switch)"
+                    )
                 watcher.tick()
             except Exception as exc:
                 console.print(f"[yellow]perimeter tick[/] {exc}")

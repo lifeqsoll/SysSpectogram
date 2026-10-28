@@ -44,6 +44,7 @@ sysspectogram = [
     "resources/configs/*.txt",
     "resources/configs/scenarios/*.yaml",
     "resources/keys/*.pub",
+    "web/static/*",
 ]
 
 [tool.pytest.ini_options]

@@ -8,11 +8,12 @@ For the deeper model (assets, adversaries, residual risk) see [docs/THREAT_MODEL
 
 | Version | Supported |
 | --- | --- |
-| **1.1.x** | Full support (fixes + hardening) |
-| 1.0.x | Security fixes |
-| 0.9.x | Security fixes only |
-| 0.8.x | Security fixes only |
-| &lt; 0.8 | Best-effort; please upgrade |
+| **1.4.x** | Full support (fixes + hardening) |
+| **1.3.x** | Security fixes |
+| **1.2.x** | Security fixes |
+| 1.1.x | Security fixes only |
+| 1.0.x | Best-effort; please upgrade |
+| &lt; 1.0 | Unsupported |
 
 Prefer the latest tagged release from [GitHub Releases](https://github.com/lifeqsoll/SysSpectogram/releases). Friend installs should use the matching **AppImage** / **`.deb`** plus the signed wheel/agent for that same tag — not a random `main` checkout on a production VPS.
 
@@ -22,7 +23,7 @@ Prefer the latest tagged release from [GitHub Releases](https://github.com/lifeq
 
 Preferred channels:
 
-1. **GitHub private security advisory** on this repository (Maintainers → Security → Advisories → New draft).
+1. **[Private vulnerability reporting](https://github.com/lifeqsoll/SysSpectogram/security/advisories/new)** (GitHub Security Advisories — preferred).
 2. Or email the maintainer address listed on the GitHub profile / release notes.
 
 Please include:
@@ -104,6 +105,12 @@ Defaults are intentionally cautious.
 - Home / Day-0 overlays can live in user-owned `state/user-settings.json` without the helper.
 - Distro units for guard/monitor run as the dedicated `sysspectogram` account; the packaged agent defaults to userspace and does not get eBPF capabilities unless an operator adds a reviewed drop-in.
 
+### Ban operations (`sysspectogram` group)
+
+On friend / headless installs the guard often runs **without root**. Auto-ban then uses the helper’s **nft set** path, authorized by Unix group membership (`sysspectogram`), not polkit — so a headless unit never blocks on a desktop pkcheck dialog.
+
+**Threat note:** any local user in group `sysspectogram` (or any process running as that user) can ask the helper to add/remove ban-set members within the helper’s allowlist. Treat group membership like **partial network admin**: do not add untrusted accounts to `sysspectogram`; keep the helper binary and unit files root-owned; prefer a dedicated service user over sharing the group with human login accounts. Compromise of a group member can disrupt SSH reachability to your VPS (DoS), not remote code execution in the helper itself.
+
 ### Evidence and sinks
 
 - Local JSONL is convenient, not WORM storage. Remote `alerts.sinks` (HTTPS / syslog) can mirror events off-box; private/link-local sink hosts are blocked unless explicitly allowed.
@@ -134,7 +141,7 @@ Full write-up: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 - Claims of being rootkit-proof or unkillable
 - Mandatory phone-home telemetry (see [TRUST.md](docs/TRUST.md))
 - Runtime `git pull` / clone as the supported friend install path
-- Putting nft ban / process kill into the helper without the unlock gate (destructive actions stay unlock-gated in the guard)
+- Process kill / isolate from Telegram without the unlock gate (helper `ban.*` is group-gated for headless auto-ban; interactive SOAR stays unlock-gated in the guard)
 
 ## Related docs
 
@@ -147,5 +154,5 @@ Full write-up: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 | [ROOT_WATCH.md](docs/ROOT_WATCH.md) | Unexpected root |
 | [KIRK.md](docs/KIRK.md) | Integrity / isolate |
 | [CONTROL_CENTER.md](docs/CONTROL_CENTER.md) | Helper + polkit surface |
-| [RELEASE_v1.1.1.md](docs/RELEASE_v1.1.1.md) | Current release notes |
+| [RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md) | Latest release notes |
 | [FRIEND.md](docs/FRIEND.md) | Friend install path |

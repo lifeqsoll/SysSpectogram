@@ -69,7 +69,9 @@ def classify_ban_message(msg: str, *, ip: str = "") -> BanResult:
         elif "backend=dry-run" in text or text.startswith("dry-run"):
             backend = "dry-run"
         return BanResult(ok=True, ip=ip, backend=backend, detail=text, skipped=False)
-    if "never_ban" in low or "skip" in low:
+    if "never_ban" in low or "protected skip" in low or text.startswith("protected"):
+        return BanResult(ok=False, ip=ip, backend="none", detail=text, skipped=True)
+    if "skip" in low and "refuse" not in low:
         return BanResult(ok=False, ip=ip, backend="none", detail=text, skipped=True)
     return BanResult(ok=False, ip=ip, backend="none", detail=text, skipped=False)
 
@@ -259,6 +261,13 @@ class NftBackend:
             return f"refuse ban: {exc}"
         if self.is_never_ban(ip):
             return f"never_ban skip {ip}"
+        force = bool(getattr(self, "_force_ban", False))
+        if not force:
+            from sysspectogram.response.protect import is_protected
+
+            reason = is_protected(ip, never_ban_cidrs=self.never_ban_cidrs)
+            if reason:
+                return f"protected skip {ip} ({reason})"
         ttl = self._clamp_ttl(ttl_sec)
         expires = time.time() + ttl
         comment = f"sysspectogram:{ip}:{int(expires)}"
