@@ -32,4 +32,5 @@ jobs:
           python -m sysspectogram doctor --json || true
           python -m sysspectogram home health || true
       - name: nft_real in netns
-        run: sudo unshare -n env PATH="$PATH" "$(which python)" -m pytest -q -m nft_real
+        # Do not collect the full suite (test_core imports torch / optional [ml]).
+        run: sudo unshare -n env PATH="$PATH" "$(which python)" -m pytest -q -m nft_real tests/test_nft_real.py

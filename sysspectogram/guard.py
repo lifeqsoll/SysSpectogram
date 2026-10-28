@@ -533,7 +533,7 @@ def run_guard(
             from sysspectogram.response.actions import DEFAULT_MAX_BAN_TTL_SEC
             from sysspectogram.response.ban_increment import next_ttl
 
-            resp_cfg = cfg.get("response") or {}
+            # resp_cfg closed over from run_guard (config["response"])
             incr_on = bool(resp_cfg.get("ban_increment", True))
             max_ttl = float(resp_cfg.get("max_ban_ttl_sec", DEFAULT_MAX_BAN_TTL_SEC))
             ttl = next_ttl(
