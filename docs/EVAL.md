@@ -61,6 +61,18 @@ python scripts/check_ml_ready.py \
 
 Gate requires **fuse PR-AUC > best baseline PR-AUC** and **fuse recall@FPR1% ≥ best baseline**, with no near-constant score warnings. Baselines always include zscore, robust_z (MAD), EWMA residual, IForest-on-stats, PCA reconstruction — fit on **train normal only**.
 
+### Operator metrics (Phase 7.5)
+
+`eval_offline` writes `user_metrics` when predictions exist:
+
+| Field | Meaning |
+| --- | --- |
+| `false_alerts_per_day` | FP episodes / day with 60s cooldown (same idea as runtime) |
+| `time_to_detect_sec` | latency from anomaly episode start to first TP |
+| `heavy_legit_flag_rate` | optional; fraction of legit-heavy windows flagged |
+
+Fill a dated table here after each honest campaign (commit + command). Until then ML stays experimental.
+
 ## Methods
 
 | Method | Meaning |

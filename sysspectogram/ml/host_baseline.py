@@ -58,7 +58,10 @@ def _median(xs: list[float]) -> float:
 
 
 def _mad(xs: list[float], med: float) -> float:
-    return _median([abs(x - med) for x in xs]) or 1e-9
+    raw = _median([abs(x - med) for x in xs])
+    # Floor so perfectly flat baselines do not treat tiny noise as infinite-z.
+    floor = max(1e-3, 0.05 * abs(med))
+    return max(raw, floor)
 
 
 class HostBaseline:

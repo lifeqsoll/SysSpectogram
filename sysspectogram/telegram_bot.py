@@ -1117,6 +1117,14 @@ class TelegramBot:
                     )
                 except Exception as exc:
                     extra = f" learn_err={exc}"
+            if kind == "baseline" and self.last_host_window is not None:
+                try:
+                    from sysspectogram.ml.feedback_suppress import mark_normal
+
+                    mark_normal(self.last_host_window)
+                    extra = (extra or "") + " fp-suppress=on"
+                except Exception:
+                    pass
             rules_s = ",".join(f"{c.match}:{c.pattern}" for c in created) if created else entry.key
             # optional IF refit (debounced)
             if_extra = ""

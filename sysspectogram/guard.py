@@ -1133,7 +1133,23 @@ def run_guard(
             tops = list_top_processes(limit=max(top_n, 5))
             means = matrix.mean(axis=0)
             col_map = {c: float(means[i]) for i, c in enumerate(columns)}
+            # FP suppress after operator «this is normal»
+            try:
+                from sysspectogram.ml.feedback_suppress import should_suppress
+
+                if should_suppress(matrix):
+                    return
+            except Exception:
+                pass
             feats = feature_attribution(matrix, columns, top_k=3)
+            plain = None
+            try:
+                from sysspectogram.ml.explain import plain_ml_line
+
+                plain = plain_ml_line(matrix, columns, lang=str(notify_lang))
+                feats = plain.get("top_features") or feats
+            except Exception:
+                plain = None
             expl_kw = {
                 "cpu": col_map.get("cpu_percent"),
                 "mem": col_map.get("mem_percent"),
@@ -1144,6 +1160,8 @@ def run_guard(
             }
             pattern = detect_host_pattern(top_procs=tops, **{k: v for k, v in expl_kw.items() if k != "top_features"})
             body = explain_host_anomaly(top_procs=tops, **expl_kw)
+            if plain and plain.get("sentence"):
+                body = f"{body}\n{plain['sentence']}"
             body = f"{body}\nrisk={risk:.2f} host={host_score:.2f} agent={ascore:.2f}"
             console.print(f"[red bold]HOST ALERT[/] pattern={pattern}\n{body}")
             host_plain = describe("host_anomaly", lang=notify_lang)  # type: ignore[arg-type]

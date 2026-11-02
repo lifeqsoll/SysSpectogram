@@ -77,12 +77,13 @@ def detect_drift(state: CalibrationState, recent_scores: list[float], z_thresh: 
 
 
 def feature_attribution(window: np.ndarray, columns: list[str], top_k: int = 5) -> list[dict]:
-    """Rank features by mean absolute deviation from column median (template-friendly)."""
+    """Rank features by sustained level + variation (works for flat high CPU too)."""
     if window.ndim != 2 or not columns:
         return []
     means = window.mean(axis=0)
-    med = np.median(window, axis=0)
-    scores = np.abs(means - med)
+    stds = window.std(axis=0)
+    # |mean| catches sustained spikes; std catches bursty channels.
+    scores = np.abs(means) + 0.5 * stds
     order = np.argsort(-scores)[:top_k]
     out = []
     for i in order:

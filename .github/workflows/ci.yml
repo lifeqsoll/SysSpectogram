@@ -164,4 +164,9 @@ jobs:
             tests/test_feedback_iforest_scale.py \
             tests/test_check_ml_ready_gate.py \
             tests/test_host_baseline.py \
-            tests/test_collect_labeled.py
+            tests/test_collect_labeled.py \
+            tests/test_eval_user_metrics.py \
+            tests/test_alert_explain.py \
+            tests/test_feedback_loop.py \
+            tests/test_drift_refit.py \
+            tests/test_onnx_parity.py

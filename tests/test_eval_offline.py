@@ -24,6 +24,10 @@ def test_eval_offline_zscore(tmp_path, monkeypatch):
             ds / "val" / "anomaly" / f"a{i}.npy",
             (rng.normal(size=(60, 4)) + 5).astype(np.float32),
         )
+    (ds / "meta.json").write_text(
+        json.dumps({"schema_version": 2, "windows_format": "raw", "stride": 5}),
+        encoding="utf-8",
+    )
     out = tmp_path / "eval"
     import subprocess
     import sys

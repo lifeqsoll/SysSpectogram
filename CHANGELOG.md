@@ -16,6 +16,7 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 ### Added
 
 - Phase 7 ML honesty: leak-free train/val/test (+ gap), lab filters/balance opt-in, `ml.baselines`, gate vs best baseline, `docs/DATASET.md`, `collect_labeled` scaffold.
+- Phase 7.5–7.9: `user_metrics` (FP/day, TTD), plain ML explain, FP suppress after «normal», drift refit controller, ONNX↔torch parity test.
 
 ### Changed
 

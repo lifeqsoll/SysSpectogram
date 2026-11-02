@@ -207,6 +207,7 @@ def main() -> int:
         "warnings": [],
         "best_baseline": None,
     }
+    pred_cache: dict[str, np.ndarray] = {}
 
     baseline_names = {"zscore", "robust_z", "ewma", "iforest_stats", "pca"}
     want_base = [m for m in methods if m in baseline_names]
@@ -225,6 +226,7 @@ def main() -> int:
                 results["warnings"].append(f"{name} failed: {exc}")
                 continue
             pred = (br.scores >= br.threshold).astype(np.int32)
+            pred_cache[name] = pred
             row = {
                 "threshold": br.threshold,
                 **_metrics(y, pred),
@@ -257,12 +259,35 @@ def main() -> int:
                 print(f"warning: {msg}", file=sys.stderr)
             thr = _method_threshold(model_meta, name, float(getattr(infer, "threshold", 0.5)))
             if name in methods:
+                pred = (arr >= thr).astype(np.int32)
+                pred_cache[name] = pred
                 results["methods"][name] = {
                     "threshold": thr,
                     "threshold_from": "model_meta",
-                    **_metrics(y, (arr >= thr).astype(np.int32)),
+                    **_metrics(y, pred),
                     **_auc_metrics(y, arr),
                 }
+
+    try:
+        from sysspectogram.ml.user_metrics import summarize_user_metrics
+
+        primary = next(
+            (c for c in ("fuse", "robust_z", "zscore", "iforest") if c in pred_cache),
+            None,
+        )
+        if primary is not None:
+            stride = float(ds_meta.get("stride") or 5)
+            results["user_metrics"] = {
+                "method": primary,
+                **summarize_user_metrics(
+                    y,
+                    pred_cache[primary],
+                    window_stride_sec=stride,
+                    cooldown_sec=60.0,
+                ),
+            }
+    except Exception as exc:
+        results["warnings"].append(f"user_metrics: {exc}")
 
     args.out.mkdir(parents=True, exist_ok=True)
     out_json = args.out / "metrics.json"
