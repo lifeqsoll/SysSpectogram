@@ -1,6 +1,8 @@
 # Offline evaluation
 
-Reproduce Precision / Recall / F1 / FPR for host ML methods on a labeled window dataset.
+Reproduce Precision / Recall / F1 / FPR / ROC-AUC / PR-AUC for host ML methods on a labeled window dataset.
+
+**Status (v1.4.x):** host ML stays **experimental**. Default runtime is `notorch`. Per-host MAD baseline (`ml.host_baseline`) may learn quietly with **no alerts** until the baseline period ends. Enable CNN/fuse only after `check_ml_ready.py` shows the model beats the best statistical baseline (robust z / EWMA / IForest-stats / PCA / zscore) on **PR-AUC** and **recall@FPR 1%**.
 
 ## Window contract (schema v2)
 
@@ -9,8 +11,9 @@ Train and live `predict_window` each apply the scaler **once**. Meta fields:
 
 - `windows_format: "raw"`
 - `schema_version: 2`
+- train / val / **test** with gap ≥ window; lab filters and class balance **off** by default (`--lab-filters` / `--balance` opt-in)
 
-Legacy datasets without these fields are treated as pre-scaled; rebuild before trusting eval.
+Legacy `windows_format=scaled` datasets are a **hard error** in `eval_offline.py` (double-scale risk). Rebuild before trusting eval.
 Do **not** enable host ML in production until the gate below passes.
 
 ## Prepare data
@@ -45,7 +48,7 @@ python -m sysspectogram eval run --dataset dataset/ --model artifacts/live --out
 
 Writes `reports/eval/metrics.json` and `reports/eval/metrics.md` (includes per-class score mean/std and near-constant warnings). Artifact `meta.json` should carry `schema_version` (and `windows_format: raw`).
 
-### Enablement gate (safety)
+### Enablement gate (safety) — Phase 7.4
 
 Default config stays `runtime.prefer: notorch`. Only flip to `onnx` / `torch_ml` after:
 
@@ -56,7 +59,7 @@ python scripts/check_ml_ready.py \
   --runtime onnx
 ```
 
-Gate requires fuse recall ≥ 0.7, fuse FPR **strictly better** than zscore, and no near-constant score warnings.
+Gate requires **fuse PR-AUC > best baseline PR-AUC** and **fuse recall@FPR1% ≥ best baseline**, with no near-constant score warnings. Baselines always include zscore, robust_z (MAD), EWMA residual, IForest-on-stats, PCA reconstruction — fit on **train normal only**.
 
 ## Methods
 

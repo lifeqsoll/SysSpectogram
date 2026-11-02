@@ -48,6 +48,14 @@ def _cmd_build_dataset(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     win = cfg.get("window", {})
     train = cfg.get("train", {})
+    lab = bool(getattr(args, "lab_filters", False))
+    # Defaults: no lab filters, no balance. Opt-in via --lab-filters / --balance.
+    max_n = getattr(args, "max_normal_cpu_mean", None)
+    min_a = getattr(args, "min_anomaly_cpu_mean", None)
+    if max_n is not None and float(max_n) < 0:
+        max_n = None
+    if min_a is not None and float(min_a) < 0:
+        min_a = None
     meta = build_dataset(
         normal_csvs=[Path(p) for p in args.normal],
         anomaly_csvs=[Path(p) for p in args.anomaly],
@@ -55,11 +63,13 @@ def _cmd_build_dataset(args: argparse.Namespace) -> int:
         window_size=int(args.window or win.get("size", 60)),
         stride=int(args.stride or win.get("stride", 5)),
         write_png=args.png,
-        val_ratio=float(train.get("val_ratio", 0.2)),
+        val_ratio=float(train.get("val_ratio", 0.15)),
+        test_ratio=float(getattr(args, "test_ratio", None) or train.get("test_ratio", 0.15)),
         seed=int(train.get("seed", 42)),
-        max_normal_cpu_mean=None if args.max_normal_cpu_mean < 0 else args.max_normal_cpu_mean,
-        min_anomaly_cpu_mean=None if args.min_anomaly_cpu_mean < 0 else args.min_anomaly_cpu_mean,
-        balance=not args.no_balance,
+        max_normal_cpu_mean=None if max_n is None else float(max_n),
+        min_anomaly_cpu_mean=None if min_a is None else float(min_a),
+        balance=bool(getattr(args, "balance", False)),
+        lab_filters=lab,
     )
     console.print(meta)
     return 0
@@ -1000,6 +1010,27 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
         ssh_detail,
         severity="warn" if enforcing and not ssh_ok else ("info" if not ssh_ok else "ok"),
     )
+
+    # Host ML baseline (Phase 7.2) — informational; experimental by default
+    try:
+        from sysspectogram.ml.host_baseline import HostBaseline
+
+        ml_cfg = cfg.get("ml") or {}
+        days = float(ml_cfg.get("baseline_days", 3) or 3)
+        hb = HostBaseline(baseline_sec=max(86400.0, days * 86400.0))
+        st = hb.status()
+        if st.ready:
+            add("ml_baseline", True, "ready (experimental host MAD baseline)", severity="info")
+        else:
+            hrs = st.remaining_sec / 3600.0
+            add(
+                "ml_baseline",
+                True,
+                f"ML: learning, ~{hrs:.1f}h left (experimental; no alerts yet)",
+                severity="info",
+            )
+    except Exception as exc:
+        add("ml_baseline", False, f"unavailable: {exc}", severity="info")
 
     required = ["helper", "guard", "metrics"]
     if enforcing:
@@ -2489,7 +2520,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--duration", type=float, default=None)
     c.set_defaults(func=_cmd_collect)
 
-    b = sub.add_parser("build-dataset", help="cut CSV logs into train/val windows")
+    b = sub.add_parser("build-dataset", help="cut CSV logs into train/val/test windows")
     b.add_argument("--normal", nargs="+", required=True)
     b.add_argument("--anomaly", nargs="+", required=True)
     b.add_argument("--out", required=True)
@@ -2497,18 +2528,33 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--stride", type=int, default=None)
     b.add_argument("--png", action="store_true")
     b.add_argument(
+        "--lab-filters",
+        action="store_true",
+        help="enable legacy lab CPU/mem/pkt filters (makes classes easier; off by default)",
+    )
+    b.add_argument(
         "--max-normal-cpu-mean",
         type=float,
-        default=25.0,
-        help="drop normal windows with mean cpu_percent above this (None via -1)",
+        default=None,
+        help="drop normal windows above this mean cpu (implies filter; -1 clears)",
     )
     b.add_argument(
         "--min-anomaly-cpu-mean",
         type=float,
-        default=45.0,
-        help="drop anomaly windows with mean cpu_percent below this (-1 disables)",
+        default=None,
+        help="drop anomaly windows below this mean cpu (implies filter; -1 clears)",
     )
-    b.add_argument("--no-balance", action="store_true", help="do not undersample to equal class counts")
+    b.add_argument(
+        "--balance",
+        action="store_true",
+        help="undersample train only to equal class counts (after split; off by default)",
+    )
+    b.add_argument(
+        "--no-balance",
+        action="store_true",
+        help="deprecated no-op (balance is already off by default)",
+    )
+    b.add_argument("--test-ratio", type=float, default=None, help="test hold-out fraction")
     b.set_defaults(func=_cmd_build_dataset)
 
     t = sub.add_parser("train", help="train CNN + IsolationForest ensemble")

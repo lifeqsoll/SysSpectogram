@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline evaluation: fuse / cnn / iforest / zscore on labeled windows."""
+"""Offline evaluation: models + statistical baselines on labeled windows."""
 
 from __future__ import annotations
 
@@ -29,29 +29,8 @@ def _load_split(dataset: Path, split: str) -> tuple[list[np.ndarray], np.ndarray
             windows.append(w)
             labels.append(label)
     if not windows:
-        raise SystemExit(f"no windows under {dataset}/{split}/{{normal,anomaly}}")
+        return [], np.asarray([], dtype=np.int32)
     return windows, np.asarray(labels, dtype=np.int32)
-
-
-def _zscore_fit(windows: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-    from sysspectogram.preprocess.heatmap import tabular_features
-
-    feats = np.vstack([tabular_features(w) for w in windows])
-    mu = feats.mean(axis=0)
-    sigma = feats.std(axis=0)
-    sigma = np.where(sigma < 1e-6, 1.0, sigma)
-    return mu, sigma
-
-
-def _zscore_score(windows: list[np.ndarray], mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
-    from sysspectogram.preprocess.heatmap import tabular_features
-
-    out = []
-    for w in windows:
-        f = tabular_features(w)
-        z = np.abs((f - mu) / sigma)
-        out.append(float(np.clip(z.max() / 6.0, 0.0, 1.0)))
-    return np.asarray(out, dtype=np.float64)
 
 
 def _metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
@@ -75,6 +54,28 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     }
 
 
+def _auc_metrics(y: np.ndarray, scores: np.ndarray) -> dict:
+    out: dict = {"roc_auc": None, "pr_auc": None, "recall_at_fpr_1pct": None, "recall_at_fpr_5pct": None}
+    if y.size < 2 or len(np.unique(y)) < 2:
+        return out
+    try:
+        from sklearn.metrics import (
+            average_precision_score,
+            roc_auc_score,
+            roc_curve,
+        )
+
+        out["roc_auc"] = round(float(roc_auc_score(y, scores)), 4)
+        out["pr_auc"] = round(float(average_precision_score(y, scores)), 4)
+        fpr, tpr, _ = roc_curve(y, scores)
+        for key, target in (("recall_at_fpr_1pct", 0.01), ("recall_at_fpr_5pct", 0.05)):
+            ok = np.where(fpr <= target)[0]
+            out[key] = round(float(tpr[ok[-1]]), 4) if ok.size else 0.0
+    except Exception:
+        pass
+    return out
+
+
 def _score_stats(scores: np.ndarray, y: np.ndarray) -> dict:
     def _side(mask: np.ndarray) -> dict:
         s = scores[mask]
@@ -93,107 +94,175 @@ def _near_constant(scores: np.ndarray, eps: float = 1e-4) -> bool:
     return float(np.std(scores)) < eps
 
 
+def _method_threshold(meta: dict, name: str, default: float = 0.5) -> float:
+    thr_map = meta.get("thresholds") if isinstance(meta.get("thresholds"), dict) else {}
+    if name in thr_map:
+        try:
+            return float(thr_map[name])
+        except (TypeError, ValueError):
+            pass
+    if name == "iforest" and meta.get("iforest_threshold") is not None:
+        try:
+            return float(meta["iforest_threshold"])
+        except (TypeError, ValueError):
+            pass
+    if name == "cnn" and meta.get("cnn_threshold") is not None:
+        try:
+            return float(meta["cnn_threshold"])
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(meta.get("threshold", default))
+    except (TypeError, ValueError):
+        return default
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", type=Path, required=True)
-    ap.add_argument("--model", type=Path, default=None, help="artifacts dir for cnn/iforest")
+    ap.add_argument("--model", type=Path, default=None, help="artifacts dir for cnn/iforest/fuse")
     ap.add_argument(
         "--methods",
-        default="fuse,cnn,iforest,zscore",
-        help="comma list: fuse,cnn,iforest,zscore",
+        default="fuse,cnn,iforest,zscore,robust_z,ewma,iforest_stats,pca",
+        help="comma list of methods / baselines",
     )
     ap.add_argument("--out", type=Path, default=Path("reports/eval"))
     ap.add_argument("--runtime", default="onnx", help="onnx|torch_ml for model methods")
     ap.add_argument(
+        "--split",
+        default="test",
+        help="eval split: test (preferred) or val",
+    )
+    ap.add_argument(
         "--gate",
         action="store_true",
-        help="exit 1 unless fuse beats zscore on FPR at recall>=0.7 (safety enablement check)",
+        help="exit 1 unless fuse beats best baseline on PR-AUC and recall@FPR1%%",
     )
     args = ap.parse_args()
 
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     meta_path = args.dataset / "meta.json"
     windows_format = "scaled"
+    ds_meta: dict = {}
     if meta_path.exists():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        windows_format = str(meta.get("windows_format") or "scaled").strip().lower()
-        if windows_format == "scaled":
-            print(
-                "warning: dataset windows_format=scaled (legacy). "
-                "Rebuild with build-dataset (schema v2 raw) for honest eval.",
-                file=sys.stderr,
-            )
+        ds_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        windows_format = str(ds_meta.get("windows_format") or "scaled").strip().lower()
+    if windows_format == "scaled":
+        print(
+            "error: dataset windows_format=scaled (legacy double-scale risk). "
+            "Rebuild with build-dataset (schema v2 raw).",
+            file=sys.stderr,
+        )
+        return 2
 
     train_w, train_y = _load_split(args.dataset, "train")
-    val_w, y = _load_split(args.dataset, "val")
+    if not train_w:
+        raise SystemExit(f"no train windows under {args.dataset}/train")
+
+    eval_split = args.split
+    eval_w, y = _load_split(args.dataset, eval_split)
+    if not eval_w and eval_split == "test":
+        eval_split = "val"
+        eval_w, y = _load_split(args.dataset, "val")
     if y.size == 0:
-        raise SystemExit("empty val labels")
+        raise SystemExit(f"empty {eval_split} labels")
 
     normal_train = [w for w, lab in zip(train_w, train_y) if int(lab) == 0] or train_w
-    mu, sigma = _zscore_fit(normal_train)
 
+    scaler = None
+    scaler_path = args.dataset / "scaler.json"
+    if scaler_path.is_file():
+        from sysspectogram.preprocess.scaler import WindowScaler
+
+        scaler = WindowScaler.load(scaler_path)
+
+    model_meta: dict = {}
     infer = None
-    thr = 0.5
     if any(m in methods for m in ("fuse", "cnn", "iforest")):
         if args.model is None:
             raise SystemExit("--model required for fuse/cnn/iforest")
         from sysspectogram.ml.infer import load_inferencer
 
+        meta_m = args.model / "meta.json"
+        if meta_m.is_file():
+            try:
+                model_meta = json.loads(meta_m.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                model_meta = {}
         try:
             infer = load_inferencer(args.model, runtime=args.runtime)
-            thr = float(getattr(infer, "threshold", 0.5))
         except Exception as exc:
             print(f"warning: model load failed ({exc}); model methods skipped", file=sys.stderr)
-            methods = [m for m in methods if m == "zscore"]
+            methods = [m for m in methods if m not in {"fuse", "cnn", "iforest"}]
 
     results: dict = {
         "dataset": str(args.dataset),
         "windows_format": windows_format,
-        "n_val": int(y.size),
+        "eval_split": eval_split,
+        "n_eval": int(y.size),
+        "threshold_source": "val_artifacts_or_normal_quantile",
         "methods": {},
+        "baselines": {},
         "score_stats": {},
         "warnings": [],
+        "best_baseline": None,
     }
 
-    if "zscore" in methods:
-        scores = _zscore_score(val_w, mu, sigma)
-        z_thr = 0.5
-        pred = (scores >= z_thr).astype(np.int32)
-        results["methods"]["zscore"] = {"threshold": z_thr, **_metrics(y, pred)}
-        results["score_stats"]["zscore"] = _score_stats(scores, y)
+    baseline_names = {"zscore", "robust_z", "ewma", "iforest_stats", "pca"}
+    want_base = [m for m in methods if m in baseline_names]
+    if want_base:
+        from sysspectogram.ml.baselines import BASELINE_FITTERS
+
+        best_name = None
+        best_pr = -1.0
+        for name in want_base:
+            fn = BASELINE_FITTERS.get(name)
+            if fn is None:
+                continue
+            try:
+                br = fn(normal_train, eval_w, scaler=scaler)
+            except Exception as exc:
+                results["warnings"].append(f"{name} failed: {exc}")
+                continue
+            pred = (br.scores >= br.threshold).astype(np.int32)
+            row = {
+                "threshold": br.threshold,
+                **_metrics(y, pred),
+                **_auc_metrics(y, br.scores),
+            }
+            results["baselines"][name] = row
+            results["methods"][name] = row
+            results["score_stats"][name] = _score_stats(br.scores, y)
+            pr = row.get("pr_auc")
+            if pr is not None and float(pr) > best_pr:
+                best_pr = float(pr)
+                best_name = name
+        results["best_baseline"] = best_name
 
     if infer is not None:
         cnn_s, if_s, fuse_s = [], [], []
-        for w in val_w:
-            # predict_window expects raw (T, F) and applies scaler once.
+        for w in eval_w:
             pred = infer.predict_window(w.reshape(w.shape[-2], w.shape[-1]))
             cnn_s.append(pred.cnn_prob)
             if_s.append(pred.iforest_score)
             fuse_s.append(pred.score)
-        cnn_s = np.asarray(cnn_s)
-        if_s = np.asarray(if_s)
-        fuse_s = np.asarray(fuse_s)
+        cnn_s = np.asarray(cnn_s, dtype=np.float64)
+        if_s = np.asarray(if_s, dtype=np.float64)
+        fuse_s = np.asarray(fuse_s, dtype=np.float64)
         for name, arr in (("cnn", cnn_s), ("iforest", if_s), ("fuse", fuse_s)):
             results["score_stats"][name] = _score_stats(arr, y)
             if _near_constant(arr):
-                msg = f"{name} scores near-constant on val (std<{1e-4}); model not separating"
+                msg = f"{name} scores near-constant on {eval_split} (std<{1e-4})"
                 results["warnings"].append(msg)
                 print(f"warning: {msg}", file=sys.stderr)
-        if "cnn" in methods:
-            results["methods"]["cnn"] = {
-                "threshold": thr,
-                **_metrics(y, (cnn_s >= thr).astype(np.int32)),
-            }
-        if "iforest" in methods:
-            results["methods"]["iforest"] = {
-                "threshold": thr,
-                **_metrics(y, (if_s >= thr).astype(np.int32)),
-            }
-        if "fuse" in methods:
-            results["methods"]["fuse"] = {
-                "threshold": thr,
-                **_metrics(y, (fuse_s >= thr).astype(np.int32)),
-            }
+            thr = _method_threshold(model_meta, name, float(getattr(infer, "threshold", 0.5)))
+            if name in methods:
+                results["methods"][name] = {
+                    "threshold": thr,
+                    "threshold_from": "model_meta",
+                    **_metrics(y, (arr >= thr).astype(np.int32)),
+                    **_auc_metrics(y, arr),
+                }
 
     args.out.mkdir(parents=True, exist_ok=True)
     out_json = args.out / "metrics.json"
@@ -201,15 +270,17 @@ def main() -> int:
     lines = [
         "# Offline eval results",
         "",
-        f"Dataset: `{args.dataset}` (n_val={y.size}, windows_format={windows_format})",
+        f"Dataset: `{args.dataset}` (n={y.size}, split={eval_split}, windows_format={windows_format})",
+        f"Best baseline: `{results.get('best_baseline')}`",
         "",
-        "| Method | Precision | Recall | F1 | FPR |",
-        "| --- | ---: | ---: | ---: | ---: |",
+        "| Method | Precision | Recall | F1 | FPR | ROC-AUC | PR-AUC | R@FPR1% |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for name, row in results["methods"].items():
         lines.append(
-            f"| {name} | {row['precision']:.4f} | {row['recall']:.4f} | "
-            f"{row['f1']:.4f} | {row['fpr']:.4f} |"
+            f"| {name} | {row.get('precision', 0):.4f} | {row.get('recall', 0):.4f} | "
+            f"{row.get('f1', 0):.4f} | {row.get('fpr', 0):.4f} | "
+            f"{row.get('roc_auc')} | {row.get('pr_auc')} | {row.get('recall_at_fpr_1pct')} |"
         )
     if results["warnings"]:
         lines.extend(["", "## Warnings", ""])
@@ -218,24 +289,58 @@ def main() -> int:
     print(json.dumps(results, indent=2))
 
     if args.gate:
-        fuse = results["methods"].get("fuse")
-        z = results["methods"].get("zscore")
-        if not fuse or not z:
-            print("gate fail: need fuse and zscore methods", file=sys.stderr)
-            return 1
-        if fuse["recall"] < 0.7:
-            print(f"gate fail: fuse recall {fuse['recall']} < 0.7", file=sys.stderr)
-            return 1
-        if fuse["fpr"] >= z["fpr"]:
-            print(
-                f"gate fail: fuse FPR {fuse['fpr']} not better than zscore {z['fpr']}",
-                file=sys.stderr,
-            )
-            return 1
-        if results["warnings"]:
-            print("gate fail: score separation warnings present", file=sys.stderr)
-            return 1
-        print("gate ok: fuse usable vs zscore baseline", file=sys.stderr)
+        return _gate(results)
+    return 0
+
+
+def _gate(results: dict) -> int:
+    """Enablement: fuse must beat best baseline on PR-AUC and recall@FPR 1%."""
+    fuse = results["methods"].get("fuse")
+    if not fuse:
+        print("gate fail: need fuse method", file=sys.stderr)
+        return 1
+    baselines = results.get("baselines") or {
+        k: v
+        for k, v in results["methods"].items()
+        if k in {"zscore", "robust_z", "ewma", "iforest_stats", "pca"}
+    }
+    if not baselines:
+        print("gate fail: no baselines computed", file=sys.stderr)
+        return 1
+    best_name = results.get("best_baseline")
+    best = baselines.get(best_name) if best_name else None
+    if best is None:
+        best_name, best = max(
+            baselines.items(),
+            key=lambda kv: (kv[1].get("pr_auc") is not None, kv[1].get("pr_auc") or -1),
+        )
+        results["best_baseline"] = best_name
+    fuse_pr = fuse.get("pr_auc")
+    best_pr = best.get("pr_auc")
+    fuse_r1 = fuse.get("recall_at_fpr_1pct")
+    best_r1 = best.get("recall_at_fpr_1pct")
+    if fuse_pr is None or best_pr is None:
+        print("gate fail: missing PR-AUC (need both classes in eval split)", file=sys.stderr)
+        return 1
+    if float(fuse_pr) <= float(best_pr):
+        print(
+            f"gate fail: fuse PR-AUC {fuse_pr} <= best baseline {best_name} {best_pr}",
+            file=sys.stderr,
+        )
+        return 1
+    if fuse_r1 is None or best_r1 is None or float(fuse_r1) < float(best_r1):
+        print(
+            f"gate fail: fuse recall@FPR1% {fuse_r1} < baseline {best_name} {best_r1}",
+            file=sys.stderr,
+        )
+        return 1
+    if results.get("warnings"):
+        print("gate fail: score separation warnings present", file=sys.stderr)
+        return 1
+    print(
+        f"gate ok: fuse beats baseline {best_name} (PR-AUC {fuse_pr} > {best_pr})",
+        file=sys.stderr,
+    )
     return 0
 
 

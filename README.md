@@ -50,7 +50,7 @@ Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.4.0.md](docs/R
 
 ### Host ML (optional, experimental)
 
-Guard works in **observe** without PyTorch. ONNX host ML is **experimental** — run offline gates in **[docs/EVAL.md](docs/EVAL.md)** before trusting precision/recall on your CSVs. Do not cite headline F1 numbers without that eval on **your** data.
+Guard works in **observe** without PyTorch. Default stays `notorch`: by our gates, CNN/fuse is **not** enabled until it beats statistical baselines on your data ([EVAL.md](docs/EVAL.md), `check_ml_ready.py`). A quiet per-host MAD baseline may learn with no alerts during the warm-up. Do not cite headline F1 without EVAL on **your** CSVs.
 
 ---
 

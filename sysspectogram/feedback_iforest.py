@@ -10,21 +10,21 @@ from typing import Any
 
 import numpy as np
 
-from sysspectogram.preprocess.heatmap import tabular_features
+from sysspectogram.ml.features import features_for_iforest
+from sysspectogram.preprocess.scaler import WindowScaler
 
 
-def windows_to_tabular(windows: list[np.ndarray]) -> np.ndarray:
+def windows_to_tabular(
+    windows: list[np.ndarray],
+    scaler: WindowScaler | None = None,
+) -> np.ndarray:
+    """Tabular features in the **same** space as live infer (scaled if scaler set)."""
     rows = []
     for w in windows:
-        arr = np.asarray(w, dtype=np.float32)
-        if arr.ndim == 1:
-            arr = arr.reshape(1, -1)
-        if arr.ndim == 3:
-            # (1, H, W) spectrogram-ish — flatten time x feat if needed
-            arr = arr.reshape(arr.shape[0], -1) if arr.shape[0] > 1 else arr.reshape(arr.shape[1], arr.shape[2])
-        if arr.ndim != 2:
+        try:
+            rows.append(features_for_iforest(w, scaler))
+        except ValueError:
             continue
-        rows.append(tabular_features(arr))
     if not rows:
         return np.zeros((0, 1), dtype=np.float32)
     return np.stack(rows).astype(np.float32)
@@ -103,7 +103,15 @@ def refit_host_iforest(
             f"need >=2 normal .npy under {feedback_dir}/normal (got {len(normal_w)})"
         )
 
-    tab_n = windows_to_tabular(normal_w)
+    scaler: WindowScaler | None = None
+    for cand in (model_dir / "scaler.json", model_dir / "scaler.joblib"):
+        if cand.is_file():
+            try:
+                scaler = WindowScaler.load(cand)
+                break
+            except Exception:
+                scaler = None
+    tab_n = windows_to_tabular(normal_w, scaler=scaler)
     if tab_n.shape[0] == 0:
         raise RuntimeError("could not extract tabular features from normal windows")
 

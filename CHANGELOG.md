@@ -13,6 +13,14 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 
 ## [Unreleased]
 
+### Added
+
+- Phase 7 ML honesty: leak-free train/val/test (+ gap), lab filters/balance opt-in, `ml.baselines`, gate vs best baseline, `docs/DATASET.md`, `collect_labeled` scaffold.
+
+### Changed
+
+- `build-dataset` defaults: no lab filters, no balance; `eval_offline` hard-errors on `windows_format=scaled`; `check_ml_ready` requires fuse > best baseline (PR-AUC + recall@FPR1%).
+
 ## [1.4.0] - 2026-10-28
 
 Full notes: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md).

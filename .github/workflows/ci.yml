@@ -144,3 +144,24 @@ jobs:
         # Only collect test_nft_real.py — full suite import pulls torch (optional [ml]).
         run: |
           sudo unshare -n env PATH="$PATH" "$(which python)" -m pytest -q -m nft_real tests/test_nft_real.py
+
+  ml-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        run: |
+          pip install -U pip
+          pip install -e ".[dev]"
+      - name: leak-free split + gate unit tests
+        run: |
+          pytest -q \
+            tests/test_ml_split_no_leak.py \
+            tests/test_eval_offline_thresholds.py \
+            tests/test_feedback_iforest_scale.py \
+            tests/test_check_ml_ready_gate.py \
+            tests/test_host_baseline.py \
+            tests/test_collect_labeled.py
