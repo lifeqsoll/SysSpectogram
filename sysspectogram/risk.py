@@ -60,7 +60,9 @@ def fuse_host_agent(
 class RiskDecision:
     risk: float
     is_anomaly: bool
-    reason: str  # "host", "fused" or "none"
+    reason: str  # "host", "fused", "baseline", or "none"
+    baseline_z: float | None = None
+    baseline_promoted: bool = False
 
 
 def decide_risk(
@@ -73,8 +75,14 @@ def decide_risk(
     host_weight: float = 0.6,
     agent_weight: float = 0.4,
     agent_half_life_sec: float = DEFAULT_AGENT_HALF_LIFE_SEC,
+    baseline_z: float | None = None,
+    baseline_alert: bool | None = None,
 ) -> RiskDecision:
-    """Return the fused risk and whether the host window is anomalous."""
+    """Return the fused risk and whether the host window is anomalous.
+
+    Optional MAD ``baseline_*`` may only *promote* a quiet fuse decision to
+    anomaly. Baseline never suppresses a fuse/host alert.
+    """
     decayed = None
     if agent_score is not None:
         decayed = decay_agent_score(agent_score, agent_age_sec, agent_half_life_sec)
@@ -85,10 +93,43 @@ def decide_risk(
         agent_weight=agent_weight,
     )
     if host_score >= host_threshold:
-        return RiskDecision(risk=risk, is_anomaly=True, reason="host")
+        return RiskDecision(
+            risk=risk,
+            is_anomaly=True,
+            reason="host",
+            baseline_z=baseline_z,
+            baseline_promoted=False,
+        )
     if risk >= risk_threshold:
-        return RiskDecision(risk=risk, is_anomaly=True, reason="fused")
-    return RiskDecision(risk=risk, is_anomaly=False, reason="none")
+        return RiskDecision(
+            risk=risk,
+            is_anomaly=True,
+            reason="fused",
+            baseline_z=baseline_z,
+            baseline_promoted=False,
+        )
+    # Fuse quiet — optional promote from ready HostBaseline.
+    can_promote = (
+        baseline_alert is True
+        and baseline_z is not None
+        and math.isfinite(float(host_score))
+        and math.isfinite(float(baseline_z))
+    )
+    if can_promote:
+        return RiskDecision(
+            risk=risk,
+            is_anomaly=True,
+            reason="baseline",
+            baseline_z=float(baseline_z),
+            baseline_promoted=True,
+        )
+    return RiskDecision(
+        risk=risk,
+        is_anomaly=False,
+        reason="none",
+        baseline_z=baseline_z,
+        baseline_promoted=False,
+    )
 
 
 def apply_kirk_override(

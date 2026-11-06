@@ -28,6 +28,7 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Drift refit uses the shared `HostBaseline`, bounded memory, wired into guard host path (log only, not HOST ALERT).
 - FP-suppress prototypes TTL 7d; drop unused `refit_pending` (IF refit stays on Telegram debounce).
 - Plain ML explain reports observations only (no miner/attack diagnosis).
+- Ready `HostBaseline.score()` feeds promote-only into `decide_risk` (never suppress fuse; no sample poison on learning ticks).
 
 ## [1.4.0] - 2026-10-28
 

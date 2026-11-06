@@ -1031,6 +1031,20 @@ def run_guard(
                 risk_thr = float(risk_thr)
             risk_thr = learner.apply_bias(float(risk_thr))
             host_thr = learner.apply_bias(float(pred.threshold))
+            # Score MAD baseline without mutating samples (never observe() here).
+            baseline_view = None
+            if host_baseline is not None:
+                try:
+                    baseline_view = host_baseline.score(host_score)
+                except (OSError, ValueError, TypeError) as exc:
+                    console.print(f"[yellow]host-baseline warn[/] {exc}")
+                    baseline_view = None
+            baseline_z = None
+            baseline_alert = None
+            if isinstance(baseline_view, dict) and baseline_view.get("ready"):
+                bz = baseline_view.get("z")
+                baseline_z = float(bz) if bz is not None else None
+                baseline_alert = bool(baseline_view.get("alert"))
             decision = decide_risk(
                 host_score,
                 ascore if agent_weight > 0 else None,
@@ -1040,6 +1054,8 @@ def run_guard(
                 host_weight=host_weight,
                 agent_weight=agent_weight,
                 agent_half_life_sec=agent_half_life_sec,
+                baseline_z=baseline_z,
+                baseline_alert=baseline_alert,
             )
             risk = decision.risk
             if ts_store is not None:
@@ -1061,9 +1077,15 @@ def run_guard(
                 except (OSError, ValueError, TypeError) as exc:
                     console.print(f"[yellow]drift-refit warn[/] {exc}")
             status = "ANOMALY" if is_anom else "ok"
+            bl_note = ""
+            if baseline_z is not None:
+                bl_note = (
+                    f" baseline_z={baseline_z:.2f}"
+                    f" promoted={bool(decision.baseline_promoted)}"
+                )
             console.print(
                 f"host {status} risk={risk:.3f} host={host_score:.3f} agent={ascore:.3f} "
-                f"cnn={pred.cnn_prob:.3f} iforest={pred.iforest_score:.3f}"
+                f"cnn={pred.cnn_prob:.3f} iforest={pred.iforest_score:.3f}{bl_note}"
             )
             GLOBAL_BUS.set_host(host_id, float(risk_thr), model_loaded=True)
             GLOBAL_BUS.push_sample(
@@ -1191,6 +1213,11 @@ def run_guard(
             if plain and plain.get("sentence"):
                 body = f"{body}\n{plain['sentence']}"
             body = f"{body}\nrisk={risk:.2f} host={host_score:.2f} agent={ascore:.2f}"
+            if baseline_z is not None:
+                body = (
+                    f"{body} baseline_z={baseline_z:.2f}"
+                    f" promoted={bool(decision.baseline_promoted)}"
+                )
             console.print(f"[red bold]HOST ALERT[/] pattern={pattern}\n{body}")
             host_plain = describe("host_anomaly", lang=notify_lang)  # type: ignore[arg-type]
             GLOBAL_BUS.push_alert(
@@ -1202,7 +1229,14 @@ def run_guard(
                     kind="host",
                     score=risk,
                     rule_id="host_anomaly",
-                    extras={"host_score": pred.score, "agent_score": ascore, "risk": risk, "pattern": pattern},
+                    extras={
+                        "host_score": pred.score,
+                        "agent_score": ascore,
+                        "risk": risk,
+                        "pattern": pattern,
+                        "baseline_z": baseline_z,
+                        "baseline_promoted": bool(decision.baseline_promoted),
+                    },
                 )
             )
             notify("SysSpectogram host anomaly", body)

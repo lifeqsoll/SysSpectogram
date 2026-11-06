@@ -97,6 +97,46 @@ class HostBaseline:
             threshold=self.threshold,
         )
 
+    def score(self, value: float) -> dict[str, Any]:
+        """Score one scalar without mutating samples or touching disk.
+
+        Guard must call this (not ``observe``) on each fuse tick so learning
+        samples are not poisoned by anomalous host_scores. Uses fitted MAD
+        params when ``self.ready`` — independent of the learning timer.
+        """
+        if not self.ready or self.median is None or self.mad is None:
+            return {"alert": False, "phase": "learning", "ready": False}
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return {
+                "alert": False,
+                "phase": "scoring",
+                "ready": True,
+                "z": None,
+                "threshold": float(self.threshold or 3.0),
+            }
+        if not math.isfinite(v):
+            return {
+                "alert": False,
+                "phase": "scoring",
+                "ready": True,
+                "z": None,
+                "threshold": float(self.threshold or 3.0),
+                "value": v,
+            }
+        mad = float(self.mad)
+        z = abs(v - float(self.median)) / mad
+        thr = float(self.threshold or 3.0)
+        return {
+            "alert": z >= thr,
+            "phase": "scoring",
+            "ready": True,
+            "z": z,
+            "threshold": thr,
+            "value": v,
+        }
+
     def observe(self, value: float, *, now: float | None = None) -> dict[str, Any]:
         """Ingest one scalar; during baseline only collect. After fit, return score dict."""
         ts = float(now if now is not None else self._now)
@@ -110,13 +150,13 @@ class HostBaseline:
             self._persist()
             return {"alert": False, "phase": "learning", "remaining_sec": self.status().remaining_sec}
 
-        z = abs(v - float(self.median)) / float(self.mad)
-        thr = float(self.threshold or 3.0)
+        out = self.score(v)
+        # Match prior observe() keys for scoring callers.
         return {
-            "alert": z >= thr,
+            "alert": bool(out["alert"]),
             "phase": "scoring",
-            "z": z,
-            "threshold": thr,
+            "z": out.get("z"),
+            "threshold": out.get("threshold"),
             "value": v,
         }
 

@@ -25,6 +25,18 @@ def test_host_alone_above_threshold_alerts():
 def test_quiet_everything_is_no_anomaly():
     d = decide_risk(0.2, 0.0, 0.0, host_threshold=0.99, risk_threshold=0.7)
     assert not d.is_anomaly and d.reason == "none"
+    # Explicit None baseline args must match legacy behaviour.
+    d2 = decide_risk(
+        0.2,
+        0.0,
+        0.0,
+        host_threshold=0.99,
+        risk_threshold=0.7,
+        baseline_z=None,
+        baseline_alert=None,
+    )
+    assert d2.is_anomaly == d.is_anomaly and d2.reason == d.reason
+    assert d2.baseline_promoted is False
 
 
 def test_fresh_agent_pushes_fused_over_threshold():

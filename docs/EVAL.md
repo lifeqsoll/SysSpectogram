@@ -61,6 +61,8 @@ python scripts/check_ml_ready.py \
 
 Gate requires **fuse PR-AUC > best baseline PR-AUC** and **fuse recall@FPR1% ≥ best baseline**, with no near-constant score warnings. Baselines always include zscore, robust_z (MAD), EWMA residual, IForest-on-stats, PCA reconstruction — fit on **train normal only**.
 
+Runtime (experimental): when `HostBaseline` is `ready`, guard scores the current fuse `host_score` with non-mutating `score()` and may **promote** a quiet fuse decision to anomaly if MAD `z ≥ threshold`. Baseline never suppresses a fuse alert; refit via quiet windows takes effect on later ticks.
+
 ### Operator metrics (Phase 7.5)
 
 `eval_offline` writes `user_metrics` when predictions exist.
