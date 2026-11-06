@@ -63,12 +63,15 @@ Gate requires **fuse PR-AUC > best baseline PR-AUC** and **fuse recall@FPR1% ≥
 
 ### Operator metrics (Phase 7.5)
 
-`eval_offline` writes `user_metrics` when predictions exist:
+`eval_offline` writes `user_metrics` when predictions exist.
+`time_to_detect_sec` stays backward-compatible: a single anomaly episode is still a scalar (or `null`); several episodes become `{mean, missed_episodes, episodes:[…]}` so no episode is overwritten — full per-episode rows also live under `time_to_detect_episodes`.
 
 | Field | Meaning |
 | --- | --- |
 | `false_alerts_per_day` | FP episodes / day with 60s cooldown (same idea as runtime) |
-| `time_to_detect_sec` | latency from anomaly episode start to first TP |
+| `time_to_detect_sec` | one episode → scalar seconds / `null`; several → `{mean, missed_episodes, episodes:[…]}` |
+| `time_to_detect_sec_mean` | mean TTD over caught episodes only |
+| `missed_episodes` | episodes with no true-positive |
 | `heavy_legit_flag_rate` | optional; fraction of legit-heavy windows flagged |
 
 Fill a dated table here after each honest campaign (commit + command). Until then ML stays experimental.

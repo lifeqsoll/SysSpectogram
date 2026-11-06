@@ -39,24 +39,22 @@ def plain_ml_line(
     lang: str = "en",
     top_k: int = 3,
 ) -> dict[str, Any]:
-    """Top features + one plain sentence for Telegram/web/CLI."""
+    """Top features + one observational sentence (no attack diagnosis)."""
     feats = feature_attribution(window, columns, top_k=top_k)
     band = spectrogram_band_hint(window)
     top = feats[0] if feats else None
     name = str((top or {}).get("feature") or "load")
     mean = float((top or {}).get("mean") or 0.0)
     if lang.startswith("ru"):
-        guess = "майнер или сборка" if "cpu" in name else "необычная нагрузка"
-        sentence = (
-            f"{name} ≈ {mean:.0f} (обычно ниже): похоже на {guess}."
-            + (f" Полоса: {band}." if band else "")
-        )
+        sentence = f"сильнее обычного выделяется `{name}` ≈ {mean:.0f}"
+        if band:
+            sentence += f"; ритм {band}"
+        sentence += "."
     else:
-        guess = "miner or a heavy build" if "cpu" in name else "unusual load"
-        sentence = (
-            f"{name} ≈ {mean:.0f} (usually lower): looks like {guess}."
-            + (f" Band: {band}." if band else "")
-        )
+        sentence = f"`{name}` ≈ {mean:.0f} stands out vs usual"
+        if band:
+            sentence += f"; band {band}"
+        sentence += "."
     return {
         "top_features": feats,
         "band": band,

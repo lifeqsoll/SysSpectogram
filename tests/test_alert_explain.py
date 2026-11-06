@@ -1,4 +1,4 @@
-"""Phase 7.6 — CPU spike is primary feature in plain explanation."""
+"""Phase 7.6 — CPU spike is primary feature; no miner diagnosis."""
 
 from __future__ import annotations
 
@@ -15,3 +15,8 @@ def test_plain_ml_line_names_cpu_first() -> None:
     assert out["primary"] == "cpu_percent"
     assert "cpu" in out["sentence"].lower()
     assert out["top_features"][0]["feature"] == "cpu_percent"
+    low = out["sentence"].lower()
+    assert "miner" not in low
+    assert "malware" not in low
+    ru = plain_ml_line(w, cols, lang="ru")
+    assert "майнер" not in ru["sentence"].lower()

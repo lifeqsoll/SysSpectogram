@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from sysspectogram.ml.user_metrics import Episode, false_alerts_per_day, time_to_detect
+from sysspectogram.ml.user_metrics import (
+    Episode,
+    false_alerts_per_day,
+    summarize_user_metrics,
+    time_to_detect,
+)
 
 
 def test_false_alerts_cooldown_and_ttd() -> None:
@@ -30,3 +35,32 @@ def test_false_alerts_cooldown_and_ttd() -> None:
         episodes=[Episode(10, 30, "miner")],
     )
     assert ttd["miner"] == 25.0
+    assert ttd["episodes"][0]["time_to_detect_sec"] == 25.0
+
+
+def test_two_anomaly_episodes_both_visible() -> None:
+    # Two separated anomaly blobs; first caught at +3 windows, second missed.
+    y = np.zeros(80, dtype=np.int32)
+    pred = np.zeros(80, dtype=np.int32)
+    y[10:20] = 1
+    y[50:60] = 1
+    pred[13] = 1  # TTD = 3 * 5s = 15s
+    # second episode: no TP
+    ttd = time_to_detect(y, pred, window_stride_sec=5.0)
+    eps = ttd["episodes"]
+    assert len(eps) == 2
+    assert eps[0]["time_to_detect_sec"] == 15.0
+    assert eps[1]["time_to_detect_sec"] is None
+    assert ttd["missed_episodes"] == 1
+    assert ttd["time_to_detect_sec_mean"] == 15.0
+    # uniquified keys both present
+    assert "anomaly" in ttd
+    assert "anomaly#2" in ttd
+    assert ttd["anomaly"] == 15.0
+    assert ttd["anomaly#2"] is None
+
+    summary = summarize_user_metrics(y, pred, window_stride_sec=5.0)
+    assert summary["missed_episodes"] == 1
+    assert len(summary["time_to_detect_episodes"]) == 2
+    assert isinstance(summary["time_to_detect_sec"], dict)
+    assert summary["time_to_detect_sec"]["mean"] == 15.0

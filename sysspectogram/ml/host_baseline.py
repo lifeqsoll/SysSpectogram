@@ -120,6 +120,25 @@ class HostBaseline:
             "value": v,
         }
 
+    def fit_from_samples(
+        self,
+        values: list[float],
+        *,
+        persist: bool = True,
+        now: float | None = None,
+    ) -> bool:
+        """Public refit from quiet scalars (used by DriftRefitController)."""
+        xs = [float(x) for x in values if _is_num(x)]
+        if len(xs) < 8:
+            return False
+        if now is not None:
+            self._now = float(now)
+        self.samples = xs[-50_000:]
+        self._fit()
+        if persist:
+            self._persist()
+        return True
+
     def _fit(self) -> None:
         xs = list(self.samples)
         med = _median(xs)

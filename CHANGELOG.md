@@ -22,6 +22,13 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 
 - `build-dataset` defaults: no lab filters, no balance; `eval_offline` hard-errors on `windows_format=scaled`; `check_ml_ready` requires fuse > best baseline (PR-AUC + recall@FPR1%).
 
+### Fixed
+
+- `time_to_detect` keeps every anomaly episode (no label overwrite); multi-episode JSON documented in EVAL.
+- Drift refit uses the shared `HostBaseline`, bounded memory, wired into guard host path (log only, not HOST ALERT).
+- FP-suppress prototypes TTL 7d; drop unused `refit_pending` (IF refit stays on Telegram debounce).
+- Plain ML explain reports observations only (no miner/attack diagnosis).
+
 ## [1.4.0] - 2026-10-28
 
 Full notes: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md).

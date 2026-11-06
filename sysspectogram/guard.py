@@ -927,6 +927,25 @@ def run_guard(
         cal_path = _resolve("state/calibration.json")
         calib = CalibrationState.load(cal_path)
         recent_scores: list[float] = []
+        # Experimental host MAD baseline + drift refit share one persisted object.
+        host_baseline = None
+        drift_ctl = None
+        try:
+            from sysspectogram.ml.drift_refit import DriftRefitController
+            from sysspectogram.ml.host_baseline import HostBaseline
+
+            ml_cfg = config.get("ml") or {}
+            days = float(ml_cfg.get("baseline_days", 3) or 3)
+            host_baseline = HostBaseline(
+                baseline_sec=max(86400.0, days * 86400.0),
+                threshold_quantile=float(ml_cfg.get("threshold_quantile", 0.999) or 0.999),
+            )
+            drift_ctl = DriftRefitController(
+                baseline=host_baseline,
+                refit_cooldown_sec=float(ml_cfg.get("drift_refit_cooldown_sec", 3600) or 3600),
+            )
+        except Exception as exc:
+            console.print(f"[yellow]host baseline / drift-refit unavailable[/] {exc}")
         proc_track = ProcessCpuTracker(maxlen=infer.window_size, top_k=8)
         proc_track.warm()
         console.print(
@@ -1033,6 +1052,14 @@ def run_guard(
                     }
                 )
             is_anom = decision.is_anomaly
+            # Drift refit observes after the alert decision; never emit as HOST ALERT.
+            if drift_ctl is not None:
+                try:
+                    dres = drift_ctl.observe(host_score, alerted=bool(is_anom))
+                    if dres.get("refit") and dres.get("message"):
+                        console.print(f"[yellow]drift-refit[/] {dres['message']}")
+                except (OSError, ValueError, TypeError) as exc:
+                    console.print(f"[yellow]drift-refit warn[/] {exc}")
             status = "ANOMALY" if is_anom else "ok"
             console.print(
                 f"host {status} risk={risk:.3f} host={host_score:.3f} agent={ascore:.3f} "
@@ -1133,14 +1160,14 @@ def run_guard(
             tops = list_top_processes(limit=max(top_n, 5))
             means = matrix.mean(axis=0)
             col_map = {c: float(means[i]) for i, c in enumerate(columns)}
-            # FP suppress after operator «this is normal»
+            # FP suppress after operator «this is normal» (scaler=None must match mark_normal)
             try:
                 from sysspectogram.ml.feedback_suppress import should_suppress
 
-                if should_suppress(matrix):
+                if should_suppress(matrix, scaler=None):
                     return
-            except Exception:
-                pass
+            except (OSError, ValueError, ImportError, TypeError) as exc:
+                console.print(f"[yellow]fp-suppress warn[/] {exc}")
             feats = feature_attribution(matrix, columns, top_k=3)
             plain = None
             try:
@@ -1148,7 +1175,8 @@ def run_guard(
 
                 plain = plain_ml_line(matrix, columns, lang=str(notify_lang))
                 feats = plain.get("top_features") or feats
-            except Exception:
+            except (OSError, ValueError, ImportError, TypeError) as exc:
+                console.print(f"[yellow]ml-explain warn[/] {exc}")
                 plain = None
             expl_kw = {
                 "cpu": col_map.get("cpu_percent"),

@@ -1121,12 +1121,13 @@ class TelegramBot:
                 try:
                     from sysspectogram.ml.feedback_suppress import mark_normal
 
-                    mark_normal(self.last_host_window)
+                    # scaler=None matches guard should_suppress(matrix, scaler=None)
+                    mark_normal(self.last_host_window, scaler=None)
                     extra = (extra or "") + " fp-suppress=on"
-                except Exception:
-                    pass
+                except (OSError, ValueError, ImportError, TypeError) as exc:
+                    extra = (extra or "") + f" fp-suppress_err={exc}"
             rules_s = ",".join(f"{c.match}:{c.pattern}" for c in created) if created else entry.key
-            # optional IF refit (debounced)
+            # optional IF refit (debounced) — sole model-refit path; suppress has no queue
             if_extra = ""
             if self.if_refit and kind in ("baseline", "anomaly") and self.model_dir:
                 if_extra = self._maybe_refit_if()
