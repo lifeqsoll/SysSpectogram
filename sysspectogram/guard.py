@@ -289,8 +289,13 @@ def run_guard(
         )
     tokens = TokenStore(secret=tg_cfg.get("token_secret"))
     resp_cfg_early = dict(config.get("response") or {})
+    from sysspectogram.response.actions import policy_from_config
+
+    ssh_port, https_egress = policy_from_config(config)
     nft = NftBackend(
-        never_ban_cidrs=[str(x) for x in (resp_cfg_early.get("never_ban_cidrs") or [])]
+        never_ban_cidrs=[str(x) for x in (resp_cfg_early.get("never_ban_cidrs") or [])],
+        ssh_port=ssh_port,
+        https_egress_cidrs=https_egress,
     )
     try:
         nft.reconcile_kirk_from_disk()
@@ -1739,7 +1744,8 @@ def run_guard(
                                             f"KIRK [critical] AUTO ISOLATE after {alert.rule_id}: {msg_iso}\n"
                                             f"Release: /kirk_release after /unlock, or SSH: "
                                             f"sysspectogram control action kirk_release "
-                                            f"(TTL={kirk_isolate_ttl}s; DNS only to resolvers, "
+                                            f"(TTL={kirk_isolate_ttl}s; DNS only to resolvers from "
+                                            f"resolv.conf/resolvectl — a stub with no upstream does not resolve; "
                                             f"443 only to kirk.egress_allow_cidrs)"
                                         )
                                     )

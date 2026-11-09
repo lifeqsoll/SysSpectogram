@@ -20,16 +20,6 @@ def _require_ok(msg: str) -> str:
     return str(msg)
 
 
-def _ssh_port() -> int:
-    try:
-        from sysspectogram.config import load_config
-
-        raw = (load_config().get("ssh") or {}).get("port", 22)
-        return int(raw)
-    except (TypeError, ValueError, OSError):
-        return 22
-
-
 @dataclass
 class WebControllers:
     bus: LiveBus
@@ -136,9 +126,11 @@ class WebControllers:
             ip = parse_ban_ip(payload.get("ip") or "")
             return self.nft.unban_ip(ip, dry_run=self.dry_run)
         if action == "shield":
+            from sysspectogram.response.actions import _strict_port
+
             try:
-                port = int(payload.get("port"))
-            except (TypeError, ValueError) as exc:
+                port = _strict_port(payload.get("port"))
+            except ValueError as exc:
                 raise ValueError(f"invalid port: {payload.get('port')!r}") from exc
             ttl_raw = payload.get("ttl", 3600)
             try:
@@ -147,13 +139,7 @@ class WebControllers:
                 raise ValueError(f"invalid ttl: {ttl_raw!r}") from exc
             force = bool(payload.get("force") is True)
             return _require_ok(
-                self.nft.shield_port(
-                    port,
-                    ttl_sec=ttl,
-                    dry_run=self.dry_run,
-                    force=force,
-                    ssh_port=_ssh_port(),
-                )
+                self.nft.shield_port(port, ttl_sec=ttl, dry_run=self.dry_run, force=force)
             )
         if action == "kill":
             from sysspectogram.response.actions import read_proc_comm
@@ -242,16 +228,16 @@ class WebControllers:
             ports = payload.get("ports") or [80, 443]
             if isinstance(ports, (str, int)):
                 ports = [ports]
+            from sysspectogram.response.actions import _strict_port
+
             cleaned: list[int] = []
             for p in ports:
                 try:
-                    cleaned.append(int(p))
-                except (TypeError, ValueError) as exc:
+                    cleaned.append(_strict_port(p))
+                except ValueError as exc:
                     raise ValueError(f"invalid port {p!r}") from exc
             ttl = float(payload.get("ttl") or 3600)
-            msg = self.nft.quarantine_ports(
-                cleaned, dry_run=self.dry_run, ttl_sec=ttl, ssh_port=_ssh_port()
-            )
+            msg = self.nft.quarantine_ports(cleaned, dry_run=self.dry_run, ttl_sec=ttl)
             return _require_ok(msg)
         if action == "release_quarantine":
             return self.nft.release_quarantine(dry_run=self.dry_run)

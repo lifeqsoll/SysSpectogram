@@ -67,8 +67,13 @@ def run_web_dashboard(
     bus.set_host(host_id, threshold, model_loaded=infer is not None)
 
     resp_cfg = dict(config.get("response") or {})
+    from sysspectogram.response.actions import policy_from_config
+
+    ssh_port, https_egress = policy_from_config(config)
     nft = NftBackend(
-        never_ban_cidrs=[str(x) for x in (resp_cfg.get("never_ban_cidrs") or [])]
+        never_ban_cidrs=[str(x) for x in (resp_cfg.get("never_ban_cidrs") or [])],
+        ssh_port=ssh_port,
+        https_egress_cidrs=https_egress,
     )
     try:
         nft.reconcile_kirk_from_disk()
@@ -256,4 +261,8 @@ def run_web_dashboard(
         pass
     finally:
         stop.set()
+        try:
+            login_gate.close()
+        except Exception:
+            pass
         httpd.shutdown()

@@ -1048,9 +1048,11 @@ class TelegramBot:
         if action == "unban":
             return self.nft.unban_ip(str(payload.get("ip")), dry_run=self.dry_run)
         if action == "shield":
+            from sysspectogram.response.actions import _strict_port
+
             try:
-                port = int(payload.get("port"))
-            except (TypeError, ValueError):
+                port = _strict_port(payload.get("port"))
+            except ValueError:
                 return f"shield refused: invalid port {payload.get('port')!r}"
             return self.nft.shield_port(
                 port, float(payload.get("ttl") or 3600), dry_run=self.dry_run

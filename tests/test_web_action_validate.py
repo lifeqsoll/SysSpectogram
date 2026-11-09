@@ -63,6 +63,35 @@ def test_shield_and_quarantine_refuse_are_not_ok():
     _ = boom
 
 
+def test_shield_rejects_bool_and_float_port():
+    c = _ctrl()
+    assert c.run("shield", {"port": True})["ok"] is False
+    assert c.run("shield", {"port": 1.5})["ok"] is False
+
+
+def test_configured_ssh_port_and_empty_egress(monkeypatch):
+    from sysspectogram.response.actions import NftBackend
+
+    nft = NftBackend(ssh_port=2222, https_egress_cidrs=[])
+    assert nft.shield_port(2222).startswith("shield refused")
+    calls: list[list[str]] = []
+
+    def fake_run(argv):
+        calls.append(list(argv))
+        return 0, ""
+
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(
+        "sysspectogram.response.actions.shutil.which", lambda _n: "/usr/sbin/nft"
+    )
+    monkeypatch.setattr(
+        "sysspectogram.response.actions._dns_egress_targets", lambda: []
+    )
+    out = nft.kirk_isolate(allow_cidrs=["203.0.113.10/32"], ttl_sec=120)
+    assert out.startswith("kirk_isolate active")
+    assert not any("443" in c for c in calls)
+
+
 def test_quiet_requires_bool():
     c = _ctrl()
     assert c.run("quiet", {"on": "false"})["ok"] is False
