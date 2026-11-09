@@ -313,23 +313,22 @@ def _cmd_web(args: argparse.Namespace) -> int:
         import time
 
         from sysspectogram.config import state_root
-        from sysspectogram.web.login_code import read_login_code
+        from sysspectogram.web.login_code import login_process_alive, read_login_code
 
         path = state_root() / "state" / "web.login"
         code, deadline, pid = read_login_code(path)
-        alive = False
-        if pid:
-            try:
-                os.kill(pid, 0)
-                alive = True
-            except OSError:
-                alive = False
+        alive = login_process_alive(pid)
         if not code or not alive:
+            stale = bool(code) and path.is_file()
             print(
                 json.dumps(
                     {
                         "ok": False,
-                        "error": "web is not running (no state/web.login)",
+                        "error": (
+                            "web is not running (state/web.login is stale)"
+                            if stale
+                            else "web is not running (no state/web.login)"
+                        ),
                         "hint": "start `sysspectogram web` and read the WEB LOGIN CODE it prints",
                     }
                 )
@@ -958,6 +957,13 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
 
     # Telegram
     cfg = load_config()
+    try:
+        from sysspectogram.response.actions import policy_from_config
+
+        policy_from_config(cfg)
+        add("config_policy", True, "ssh.port and kirk.egress_allow_cidrs ok")
+    except ValueError as exc:
+        add("config_policy", False, str(exc), severity="warn")
     tg = cfg.get("telegram") or {}
     token = bool(tg.get("bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN"))
     chat = bool(tg.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID"))
@@ -1104,6 +1110,8 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
     if enforcing and not ssh_ok:
         ok = False
     if any(c["id"] == "state_dir" and not c["ok"] for c in checks):
+        ok = False
+    if any(c["id"] == "config_policy" and not c["ok"] for c in checks):
         ok = False
     print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False))
     strict = bool(getattr(args, "strict", False))

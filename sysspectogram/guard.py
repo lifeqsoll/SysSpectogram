@@ -291,7 +291,11 @@ def run_guard(
     resp_cfg_early = dict(config.get("response") or {})
     from sysspectogram.response.actions import policy_from_config
 
-    ssh_port, https_egress = policy_from_config(config)
+    try:
+        ssh_port, https_egress = policy_from_config(config)
+    except ValueError as exc:
+        console.print(f"[red]config refused[/] {exc}")
+        raise SystemExit(2) from exc
     nft = NftBackend(
         never_ban_cidrs=[str(x) for x in (resp_cfg_early.get("never_ban_cidrs") or [])],
         ssh_port=ssh_port,
@@ -2485,6 +2489,12 @@ def run_guard(
             except Exception:
                 pass
         if httpd is not None:
+            gate = getattr(httpd, "login_gate", None)
+            if gate is not None:
+                try:
+                    gate.close()
+                except Exception:
+                    pass
             try:
                 httpd.shutdown()
             except Exception:
