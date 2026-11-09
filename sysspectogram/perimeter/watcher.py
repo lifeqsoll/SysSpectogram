@@ -50,7 +50,13 @@ class WatcherState:
         self.muted.pop(ip, None)
 
     def save(self, path: Path) -> None:
+        import os
+
         path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
         data = {
             "allowlist": sorted(self.allowlist),
             "muted": self.muted,
@@ -58,7 +64,11 @@ class WatcherState:
             "quiet": self.quiet,
             "lockdown": self.lockdown,
         }
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(data, indent=2, allow_nan=False), encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
     @classmethod
     def load(cls, path: Path) -> WatcherState:
@@ -255,12 +265,31 @@ class PerimeterWatcher:
         *,
         allow_cidrs: list[str] | None = None,
     ) -> str:
-        self.state.lockdown = True
-        self.state.quiet = False
         # Sync never-ban / allow_cidrs into perimeter allowlist so inbound alerts skip admins.
         allows = list(allow_cidrs or [])
         if self.nft is not None and not allows:
             allows = list(getattr(self.nft, "never_ban_cidrs", None) or [])
+        # Apply nft first — never flip lockdown/quiet on refuse/failure (survives restart).
+        detail = "lockdown flag set (no nft backend)"
+        if self.nft is not None:
+            try:
+                detail = str(
+                    self.nft.apply_lockdown(dry_run=dry_run, allow_cidrs=allows or None)
+                )
+            except Exception as exc:
+                return f"lockdown refused: nft failed: {exc}"
+            low = detail.lower()
+            if "refused" in low or "failed" in low:
+                return detail
+            if dry_run and not low.startswith("dry-run"):
+                return detail
+        elif not dry_run:
+            return "lockdown refused: no nft backend"
+        else:
+            detail = f"dry-run lockdown (no nft) allow={allows or '-'}"
+
+        self.state.lockdown = True
+        self.state.quiet = False
         for cidr in allows:
             s = str(cidr).strip()
             if not s:
@@ -271,14 +300,7 @@ class PerimeterWatcher:
                 self.engine.allowlist.add(ip)
                 self.state.allowlist.add(ip)
         self.persist()
-        if self.nft is not None:
-            try:
-                return str(
-                    self.nft.apply_lockdown(dry_run=dry_run, allow_cidrs=allows or None)
-                )
-            except Exception as exc:
-                return f"lockdown flag set; nft failed: {exc}"
-        return "lockdown flag set (no nft backend)"
+        return detail
 
     def tick(self) -> list[Alert]:
         emitted: list[Alert] = []

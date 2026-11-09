@@ -89,17 +89,24 @@ class WebControllers:
 
     def _run(self, action: str, payload: dict[str, Any]) -> str:
         if action == "ban":
+            import math
+
             from sysspectogram.net_ip import parse_ban_ip
 
             ip = parse_ban_ip(payload.get("ip") or "")
-            # Accept ttl_sec (fleet) or legacy ttl.
+            # Accept ttl_sec (fleet) or legacy ttl. Permanent only via explicit perm.
             ttl = payload.get("ttl_sec", payload.get("ttl", 3600))
             if ttl in (None, ""):
-                ttl_f = 3600.0
-            elif ttl in ("perm", "permanent", 0, "0"):
+                ttl_f: float | None = 3600.0
+            elif ttl in ("perm", "permanent"):
                 ttl_f = None
             else:
-                ttl_f = float(ttl)
+                try:
+                    ttl_f = float(ttl)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"invalid ttl: {ttl!r}") from exc
+                if not math.isfinite(ttl_f) or ttl_f <= 0:
+                    raise ValueError(f"ttl must be positive and finite, got {ttl!r}")
             return self.nft.ban_ip(ip, ttl_sec=ttl_f, dry_run=self.dry_run)
         if action == "unban":
             from sysspectogram.net_ip import parse_ban_ip
@@ -107,9 +114,17 @@ class WebControllers:
             ip = parse_ban_ip(payload.get("ip") or "")
             return self.nft.unban_ip(ip, dry_run=self.dry_run)
         if action == "shield":
-            port = int(payload.get("port") or 0)
-            ttl = float(payload.get("ttl") or 3600)
-            return self.nft.shield_port(port, ttl_sec=ttl, dry_run=self.dry_run)
+            try:
+                port = int(payload.get("port"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid port: {payload.get('port')!r}") from exc
+            ttl_raw = payload.get("ttl", 3600)
+            try:
+                ttl = float(ttl_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid ttl: {ttl_raw!r}") from exc
+            force = bool(payload.get("force") is True)
+            return self.nft.shield_port(port, ttl_sec=ttl, dry_run=self.dry_run, force=force)
         if action == "kill":
             from sysspectogram.response.actions import read_proc_comm
 
@@ -122,9 +137,9 @@ class WebControllers:
                 return f"kill skipped: pid {pid} is {live!r}, expected {expect!r}"
             return kill_pid(pid, dry_run=self.dry_run, expect_comm=live)
         if action == "allow":
-            ip = str(payload.get("ip") or "")
-            if not ip:
-                raise ValueError("ip required")
+            from sysspectogram.net_ip import parse_ban_ip
+
+            ip = parse_ban_ip(payload.get("ip") or "")
             if not self.watcher:
                 raise RuntimeError("perimeter watcher not attached")
             self.watcher.engine.allowlist.add(ip)
@@ -132,8 +147,18 @@ class WebControllers:
             self.watcher.persist()
             return f"allowlisted {ip}"
         if action == "mute":
-            ip = str(payload.get("ip") or "")
-            ttl = float(payload.get("ttl") or 3600)
+            import math
+
+            from sysspectogram.net_ip import parse_ban_ip
+
+            ip = parse_ban_ip(payload.get("ip") or "")
+            ttl_raw = payload.get("ttl", 3600)
+            try:
+                ttl = float(ttl_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid ttl: {ttl_raw!r}") from exc
+            if not math.isfinite(ttl) or ttl <= 0 or ttl > 7 * 24 * 3600:
+                raise ValueError(f"ttl must be a positive finite number ≤ 7d, got {ttl_raw!r}")
             if not self.watcher:
                 raise RuntimeError("perimeter watcher not attached")
             self.watcher.state.mute(ip, ttl)
@@ -160,7 +185,11 @@ class WebControllers:
                 raise ValueError("could not mute rule")
             return f"muted rule {rule_id} for {hours:g}h"
         if action == "quiet":
-            on = bool(payload.get("on", True))
+            if "on" not in payload:
+                raise ValueError("quiet requires boolean 'on'")
+            on = payload.get("on")
+            if not isinstance(on, bool):
+                raise ValueError("quiet 'on' must be a JSON boolean (true/false)")
             if self.watcher:
                 self.watcher.state.quiet = on
                 self.watcher.persist()
@@ -169,10 +198,14 @@ class WebControllers:
         if action == "lockdown":
             allows = list(getattr(self.nft, "never_ban_cidrs", None) or [])
             if self.watcher:
-                return self.watcher.apply_lockdown(
+                msg = self.watcher.apply_lockdown(
                     dry_run=self.dry_run, allow_cidrs=allows
                 )
-            msg = self.nft.apply_lockdown(dry_run=self.dry_run, allow_cidrs=allows)
+            else:
+                msg = self.nft.apply_lockdown(dry_run=self.dry_run, allow_cidrs=allows)
+            low = str(msg).lower()
+            if "refused" in low or "failed" in low:
+                raise ValueError(str(msg))
             self.bus.lockdown = True
             return msg
         if action == "quarantine":

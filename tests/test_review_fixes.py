@@ -64,7 +64,7 @@ def test_lockdown_flag_applies_nft(tmp_path: Path):
     backend = NftBackend()
     applied = {"n": 0}
 
-    def fake_apply(dry_run=False):
+    def fake_apply(dry_run=False, allow_cidrs=None):
         applied["n"] += 1
         return "lockdown ok"
 
@@ -72,6 +72,21 @@ def test_lockdown_flag_applies_nft(tmp_path: Path):
     w = PerimeterWatcher(state_path=tmp_path / "st.json", nft=backend, auto_recon=False)
     assert "lockdown" in w.apply_lockdown().lower() or applied["n"] == 1
     assert w.state.lockdown is True
+
+
+def test_lockdown_flag_not_set_on_nft_refuse(tmp_path: Path):
+    backend = NftBackend()
+    path = tmp_path / "perimeter.json"
+
+    def fake_refuse(dry_run=False, allow_cidrs=None):
+        return "lockdown refused: allow_cidrs/never_ban empty"
+
+    backend.apply_lockdown = fake_refuse  # type: ignore
+    w = PerimeterWatcher(state_path=path, nft=backend, auto_recon=False)
+    msg = w.apply_lockdown()
+    assert "refused" in msg.lower()
+    assert w.state.lockdown is False
+    assert not path.exists() or '"lockdown": true' not in path.read_text(encoding="utf-8").lower().replace(" ", "")
 
 
 def test_recon_nmap_lab_gated():
