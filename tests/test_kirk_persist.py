@@ -146,7 +146,23 @@ def test_stub_resolv_uses_resolvectl(monkeypatch):
 
     monkeypatch.setattr(Path, "read_text", fake_read)
     monkeypatch.setattr("sysspectogram.response.actions.subprocess.run", fake_run)
-    assert ("ip", "192.0.2.53") in _dns_egress_targets()
+    assert ("ip", "192.0.2.53", (53,)) in _dns_egress_targets()
+
+
+def test_resolvectl_keeps_ipv6_and_dot(monkeypatch):
+    from sysspectogram.response.actions import _parse_resolvectl_dns
+
+    text = (
+        "Global: 203.0.113.9#dns.example\n"
+        "Link 2 (eth0): 192.0.2.53 2001:db8::53\n"
+    )
+    got = _parse_resolvectl_dns(text)
+    assert ("ip", "203.0.113.9", (53, 853)) in got
+    assert ("ip", "192.0.2.53", (53,)) in got
+    assert ("ip6", "2001:db8::53", (53,)) in got
+    bracket = _parse_resolvectl_dns("Global: [2001:db8::54]:853 192.0.2.54%eth0\n")
+    assert ("ip6", "2001:db8::54", (53, 853)) in bracket
+    assert ("ip", "192.0.2.54", (53,)) in bracket
 
 
 def test_constructor_does_not_release_kirk(tmp_path, monkeypatch):
