@@ -40,26 +40,17 @@ def _t(en: str, ru: str) -> str:
 
 
 def _write_overlay(changes: dict[str, Any]) -> None:
-    path = user_settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cur: dict[str, Any] = {}
-    if path.is_file():
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                cur = raw
-        except json.JSONDecodeError:
-            cur = {}
-    for k, v in changes.items():
-        if isinstance(v, (bool, int, float, str)):
-            cur[k] = v
-        elif isinstance(v, list):
-            cur[k] = ", ".join(str(x) for x in v)
-    path.write_text(json.dumps(cur, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    from sysspectogram.settings_lock import update_user_settings
+
+    def _mutator(cur: dict[str, Any]) -> dict[str, Any]:
+        for k, v in changes.items():
+            if isinstance(v, (bool, int, float, str)):
+                cur[k] = v
+            elif isinstance(v, list):
+                cur[k] = ", ".join(str(x) for x in v)
+        return cur
+
+    update_user_settings(_mutator, path=user_settings_path(), force=True)
 
 
 def _preflight() -> list[tuple[bool, str]]:

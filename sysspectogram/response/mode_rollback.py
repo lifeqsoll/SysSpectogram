@@ -67,24 +67,13 @@ def load_mode_pending() -> dict[str, Any] | None:
 
 
 def _write_observe_mode() -> None:
-    path = user_settings_path()
-    current: dict[str, Any] = {}
-    if path.is_file():
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                current = raw
-        except (OSError, json.JSONDecodeError):
-            current = {}
-    current["response.mode"] = "observe"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    try:
-        import os
+    from sysspectogram.settings_lock import update_user_settings
 
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    def _mutator(current: dict[str, Any]) -> dict[str, Any]:
+        current["response.mode"] = "observe"
+        return current
+
+    update_user_settings(_mutator, path=user_settings_path(), force=True)
 
 
 def _clear_all_bans(nft: Any) -> None:
