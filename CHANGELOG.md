@@ -33,6 +33,16 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Web `/api/status|snapshot|stream` require session/Bearer (not loopback-unauth); `/api/health` stays public metadata-only.
 - `seed-never-ban` expands well-known DNS/anycast (v4/v6) and refuses private/loopback/multicast/… without `--force` (clear reasons).
 - Root `bans list` returns `ok:false` when `nft` is missing or both set lists fail (no empty memory success).
+- Accept LAN/ULA never_ban with warning; CGNAT warns; anycast check covers CIDRs; prefer `SSH_CONNECTION` when seeding without `--ip`.
+- Quote nft rule comments so lockdown/quarantine/shield actually apply; check established rule rc.
+- Set perimeter lockdown flag only after nft succeeds; web returns error on refuse.
+- WEB LOGIN CODE (`/api/login`, `state/web.login`) mints read session without control unlock.
+- Runtime paths (`state/`/`reports/`/`artifacts/`) resolve under `SYSSPECTOGRAM_HOME`.
+- Ban TTL ≤0 / NaN / inf rejected; `test-ban` capped at 1h; POST body Host-before-read + 64KiB limit.
+- `home settings` validates types/ranges (schema); corrupt overlay refuses without `--force`; writes use `flock`.
+- `kirk_isolate` persists TTL to `state/kirk_isolate.json`, rolls back on allow failure, keeps DNS/443 egress; shield port sweeper honors comment deadlines.
+- Web `allow`/`mute`/`quiet` validate IP/TTL/bool; helper rejects IPv4-mapped/broadcast/`240/4` and float TTL; concurrent accept + pkcheck timeout.
+- `home health` distinguishes empty ssh source vs no access; non-zero exit when `ok:false`; state dir 0700 / secrets 0600; configure EOF → `--non-interactive`.
 
 ## [1.4.0] - 2026-10-28
 

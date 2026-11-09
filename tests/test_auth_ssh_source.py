@@ -21,7 +21,10 @@ def test_ssh_auth_lines_journal_first(monkeypatch):
         "sysspectogram.perimeter.auth._journal_ssh",
         lambda lines=200: ["sshd[1]: Failed password for x from 203.0.113.1 port 22 ssh2"],
     )
-    monkeypatch.setattr("sysspectogram.perimeter.auth._auth_tail_helper", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "sysspectogram.perimeter.auth._auth_tail_helper",
+        lambda *a, **k: ([], False),
+    )
 
     got, src = ssh_auth_lines()
     assert src == "journal"
@@ -31,15 +34,35 @@ def test_ssh_auth_lines_journal_first(monkeypatch):
 def test_ssh_auth_lines_helper_fallback(monkeypatch):
     monkeypatch.setattr("sysspectogram.perimeter.auth._journal_ssh", lambda lines=200: [])
     monkeypatch.setattr(
+        "sysspectogram.perimeter.auth._journal_ssh_reachable",
+        lambda lines=1: False,
+    )
+    monkeypatch.setattr(
         "sysspectogram.perimeter.auth._auth_tail_helper",
-        lambda lines=200, cursor=None: [
-            "sshd-session[2]: Failed password for admin from 198.51.100.5 port 22 ssh2"
-        ],
+        lambda lines=200, cursor=None: (
+            ["sshd-session[2]: Failed password for admin from 198.51.100.5 port 22 ssh2"],
+            True,
+        ),
     )
 
     got, src = ssh_auth_lines()
     assert src == "helper"
     assert len(got) == 1
+
+
+def test_ssh_auth_lines_helper_empty_still_ok(monkeypatch):
+    monkeypatch.setattr("sysspectogram.perimeter.auth._journal_ssh", lambda lines=200: [])
+    monkeypatch.setattr(
+        "sysspectogram.perimeter.auth._journal_ssh_reachable",
+        lambda lines=1: False,
+    )
+    monkeypatch.setattr(
+        "sysspectogram.perimeter.auth._auth_tail_helper",
+        lambda lines=200, cursor=None: ([], True),
+    )
+    got, src = ssh_auth_lines()
+    assert src == "helper"
+    assert got == []
 
 
 def test_auth_watcher_uses_helper_when_journal_empty(monkeypatch):

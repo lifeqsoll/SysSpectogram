@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +158,8 @@ def run_configure(
         return {"config": str(config_path), "overlay": overlay, "mode": "accept-recommended"}
 
     # Interactive
+    if not sys.stdin.isatty():
+        raise EOFError("configure needs a TTY; use --non-interactive")
     console.print("\n[bold]Configure[/] — Enter to keep recommended. Overrides ask for confirm.\n")
 
     # Role

@@ -189,30 +189,64 @@ def _journal_ssh(lines: int = 200) -> list[str]:
     return []
 
 
-def _auth_tail_helper(lines: int = 200, cursor: str | None = None) -> list[str]:
+def _auth_tail_helper(lines: int = 200, cursor: str | None = None) -> tuple[list[str], bool]:
+    """Return ``(lines, available)``. ``available`` is True when helper answered ok."""
     from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
 
     if not helper_available():
-        return []
+        return [], False
     args: dict[str, object] = {"limit": int(lines)}
     if cursor:
         args["cursor"] = cursor
     reply = HelperBanBackend()._call("auth.tail", args)
     if not reply.get("ok"):
-        return []
+        return [], False
     data = reply.get("data") or {}
     raw = data.get("lines") or []
-    return [str(x) for x in raw if str(x).strip()]
+    return [str(x) for x in raw if str(x).strip()], True
+
+
+def _journal_ssh_reachable(lines: int = 1) -> bool:
+    """True when journalctl for sshd succeeds (even with zero lines)."""
+    specs: list[list[str]] = [
+        ["-u", "sshd"],
+        ["-u", "sshd-session"],
+        ["-u", "ssh"],
+        ["_COMM=sshd-session"],
+        ["_COMM=sshd"],
+    ]
+    for spec in specs:
+        try:
+            proc = subprocess.run(
+                ["journalctl", *spec, "-n", str(lines), "-o", "cat", "--no-pager"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if proc.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
 
 
 def ssh_auth_lines(lines: int = 200) -> tuple[list[str], str]:
-    """Recent sshd journal lines and a short source tag (journal | helper | none)."""
+    """Recent sshd journal lines and a short source tag (journal | helper | none).
+
+    Empty lines with a working source still return ``journal`` / ``helper`` so
+    health can distinguish «no access» from «fresh server, zero events».
+    """
     got = _journal_ssh(lines)
     if got:
         return got, "journal"
-    got = _auth_tail_helper(lines)
-    if got:
-        return got, "helper"
+    helper_lines, helper_ok = _auth_tail_helper(lines)
+    if helper_lines:
+        return helper_lines, "helper"
+    if helper_ok:
+        return [], "helper"
+    if _journal_ssh_reachable():
+        return [], "journal"
     return [], "none"
 
 

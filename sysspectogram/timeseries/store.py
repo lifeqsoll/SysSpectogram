@@ -60,13 +60,23 @@ class Point:
 
 class TimeseriesStore:
     def __init__(self, path: Path) -> None:
+        import os
+
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(self.path.parent, 0o700)
+        except OSError:
+            pass
         self._lock = threading.Lock()
         self._db = sqlite3.connect(str(self.path), check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
         self._buffer: list[tuple[float, str, float]] = []
         self._last_rollup = 0.0
 

@@ -80,6 +80,12 @@ Defaults are intentionally cautious.
 - Local SOAR uses `state/control.sock` with the **same** unlock gate as Telegram.
 - Multi-VPS fleet control uses **SSH + device tokens** (host pair code); see [docs/FLEET.md](docs/FLEET.md). No public HTTPS control plane.
 - Web read APIs (`/api/status`, `/api/snapshot`, `/api/stream`) require a valid `ss_session` cookie or Bearer (`state/web.token`) — loopback alone is not enough. `/api/health` stays public (`ok` + `unlock_code_len` only). When control is LOCKED, authorized responses still redact bans/processes/allowlist.
+- Dashboard **WEB LOGIN CODE** (`state/web.login`, POST `/api/login`) mints a read session; it does **not** unlock SOAR. Control unlock stays separate.
+- nft lockdown/quarantine/shield comments are quoted (colons broke rules on real nft). Lockdown state flips only after nft succeeds.
+- POST bodies: Host checked before read; `Content-Length` must be a non-negative integer ≤ 64 KiB.
+- `home settings` / seed writes are flocked; schema type checks reject non-finite / out-of-range values (`allow_nan=False`).
+- `kirk_isolate` deadline is on disk (`state/kirk_isolate.json` 0600); expired tables are cleared on backend start; failed SSH-allow install rolls the table back.
+- Helper: concurrent connection handlers (ban.* not blocked by silent peers); pkcheck bounded; ban IP rules match Python (no IPv4-mapped / broadcast / `240/4`).
 
 **Same-UID ceiling for unlock (I-03):** the unlock gate protects a stolen Telegram bot token / Mini App session — **not** malware running as the same Unix user as the guard. That process can already read `state/unlock.code` (mode 0600, owner-only) or the `.env` bot token. Persisted `state/control.unlocked` (only when unlock TTL is 0) accepts the exact marker `1` and refuses symlinks / arbitrary content; it is still same-UID writable by design. Treat same-UID compromise as full control of the guard process.
 
