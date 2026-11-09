@@ -13,6 +13,78 @@ from pathlib import Path
 # Kernel set timeout upper bound for auto-bans (D-1 / F-01). Forever bans forbidden.
 DEFAULT_MAX_BAN_TTL_SEC = 7 * 24 * 3600
 DEFAULT_MIN_BAN_TTL_SEC = 60
+# nft 1.1.x requires a flag *list* after `/`; bare `syn / syn` is a syntax error.
+# Resulting match: tcp flags & (fin | syn | rst | ack) == syn
+_TCP_FLAGS_SYN_ONLY = ("flags", "syn", "/", "fin,syn,rst,ack")
+
+# Snapshot of https://core.telegram.org/resources/cidr.txt — not "any :443".
+# ``kirk.egress_allow_cidrs`` in config replaces this list (empty = no HTTPS egress).
+DEFAULT_TELEGRAM_EGRESS_CIDRS = (
+    "149.154.160.0/20",
+    "91.108.4.0/22",
+    "91.108.8.0/22",
+    "91.108.12.0/22",
+    "91.108.16.0/22",
+    "91.108.20.0/22",
+    "91.108.56.0/22",
+    "91.105.192.0/23",
+    "185.76.151.0/24",
+    "2001:b28:f23d::/48",
+    "2001:b28:f23f::/48",
+    "2001:67c:4e8::/48",
+    "2001:b28:f23c::/48",
+    "2a0a:f280::/32",
+)
+_STUB_DNS = frozenset({"127.0.0.1", "127.0.0.53", "::1"})
+
+
+def _dns_egress_targets() -> list[tuple[str, str]]:
+    """Non-loopback nameservers from /etc/resolv.conf as nft (family, address)."""
+    try:
+        text = Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[0] != "nameserver":
+            continue
+        raw = parts[1].split("%", 1)[0]
+        try:
+            addr = ip_address(raw)
+        except ValueError:
+            continue
+        if addr.is_loopback or str(addr) in _STUB_DNS:
+            continue
+        canon = str(addr)
+        if canon in seen:
+            continue
+        seen.add(canon)
+        out.append(("ip6" if addr.version == 6 else "ip", canon))
+    return out
+
+
+def _kirk_https_targets() -> list[tuple[str, str]]:
+    """Telegram (or configured) CIDRs allowed to tcp/443 during isolate."""
+    from sysspectogram.net_ip import nft_cidr_family
+
+    cidrs: list[str] = list(DEFAULT_TELEGRAM_EGRESS_CIDRS)
+    try:
+        from sysspectogram.config import load_config
+
+        kirk = load_config().get("kirk") or {}
+        if "egress_allow_cidrs" in kirk and kirk.get("egress_allow_cidrs") is not None:
+            cidrs = [str(c) for c in (kirk.get("egress_allow_cidrs") or [])]
+    except Exception:
+        pass
+    out: list[tuple[str, str]] = []
+    for cidr in cidrs:
+        try:
+            out.append(nft_cidr_family(cidr))
+        except ValueError:
+            continue
+    return out
 
 _NFT_TABLE_SCRIPT = """\
 table inet sysspectogram {
@@ -95,7 +167,6 @@ class NftBackend:
         self.max_ban_ttl_sec = float(max_ban_ttl_sec)
         self._kirk_expires: float | None = None
         self._ensure_table()
-        self._load_kirk_deadline()
 
     def is_never_ban(self, ip: str) -> bool:
         try:
@@ -442,6 +513,10 @@ class NftBackend:
         self.expire_shield_ports()
         return list(self.bans.values())
 
+    def reconcile_kirk_from_disk(self) -> str | None:
+        """Load or release ss_kirk from this HOME's deadline. Call only from guard/web start."""
+        return self._load_kirk_deadline()
+
     @staticmethod
     def _kirk_state_path() -> Path:
         from sysspectogram.config import state_root
@@ -460,11 +535,15 @@ class NftBackend:
             "allow_cidrs": list(allow_cidrs),
             "updated_at": time.time(),
         }
-        path.write_text(__import__("json").dumps(payload, indent=2) + "\n", encoding="utf-8")
+        text = __import__("json").dumps(payload, indent=2) + "\n"
+        tmp = path.with_name(path.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+            os.write(fd, text.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
 
     def _clear_kirk_deadline(self) -> None:
         path = self._kirk_state_path()
@@ -474,8 +553,13 @@ class NftBackend:
             pass
         self._kirk_expires = None
 
-    def _load_kirk_deadline(self) -> None:
-        """Restore TTL from disk; release ss_kirk if expired or deadline missing."""
+    def _load_kirk_deadline(self) -> str | None:
+        """Restore TTL from disk; release ss_kirk if expired or deadline missing.
+
+        Only call this from guard/web startup (``reconcile_kirk_from_disk``).
+        A stray ``NftBackend()`` (for example ``bans list`` under another HOME)
+        must not delete an active isolate table.
+        """
         path = self._kirk_state_path()
         table_present = False
         if shutil.which("nft"):
@@ -489,12 +573,13 @@ class NftBackend:
             except (OSError, ValueError, TypeError):
                 expires = None
         if table_present and (expires is None or time.time() >= float(expires)):
-            self.kirk_release(dry_run=False)
-            return
+            return self.kirk_release(dry_run=False)
         if expires is not None and time.time() < float(expires):
             self._kirk_expires = float(expires)
-        elif expires is not None:
+            return None
+        if expires is not None:
             self._clear_kirk_deadline()
+        return None
 
     def list_bans_result(self) -> dict:
         """CLI-facing list: live nft sets when root; memory only for in-process non-root."""
@@ -587,6 +672,7 @@ class NftBackend:
             ]
         )
         if code_est != 0:
+            self.release_lockdown()
             return f"lockdown established rule failed: {out_est.strip()}"
         for fam, canon in families:
             code, out = self._run(
@@ -606,6 +692,7 @@ class NftBackend:
                 ]
             )
             if code != 0:
+                self.release_lockdown()
                 return f"lockdown allow failed for {canon}: {out.strip()}"
         code, out = self._run(
             [
@@ -616,16 +703,14 @@ class NftBackend:
                 "sysspectogram",
                 "input",
                 "tcp",
-                "flags",
-                "syn",
-                "/",
-                "syn",
+                *_TCP_FLAGS_SYN_ONLY,
                 "drop",
                 "comment",
                 self._nft_comment("sysspectogram:lockdown:syn"),
             ]
         )
         if code != 0:
+            self.release_lockdown()
             return f"lockdown failed: {out.strip()}"
         return f"lockdown nft rules applied (SYN drop; allow={allows}; established kept)"
 
@@ -668,6 +753,7 @@ class NftBackend:
                 ]
             )
             if code_a != 0:
+                self.release_lockdown()
                 return f"syn_rate_limit allow failed for {canon}: {out_a.strip()}"
         code, out = self._run(
             [
@@ -678,10 +764,7 @@ class NftBackend:
                 "sysspectogram",
                 "input",
                 "tcp",
-                "flags",
-                "syn",
-                "/",
-                "syn",
+                *_TCP_FLAGS_SYN_ONLY,
                 "limit",
                 "rate",
                 "over",
@@ -695,6 +778,7 @@ class NftBackend:
             ]
         )
         if code != 0:
+            self.release_lockdown()
             return f"syn_rate_limit failed: {out.strip()}"
         return f"syn_rate_limit active rate over {rate} burst={burst} allow={allows or '-'}"
 
@@ -731,7 +815,13 @@ class NftBackend:
                     fam, canon = nft_cidr_family(str(cidr))
                 except ValueError:
                     continue
-                self._run(
+                marker = f"sysspectogram:portallow:{port_i}:{canon}"
+                listed, listing = self._run(
+                    ["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"]
+                )
+                if listed == 0 and marker in listing:
+                    continue
+                code_a, out_a = self._run(
                     [
                         "nft",
                         "add",
@@ -747,9 +837,11 @@ class NftBackend:
                         str(port_i),
                         "accept",
                         "comment",
-                        self._nft_comment(f"sysspectogram:portallow:{port_i}:{canon}"),
+                        self._nft_comment(marker),
                     ]
                 )
+                if code_a != 0:
+                    return f"shield failed: portallow {canon}: {out_a.strip()}"
             comment = f"sysspectogram:port:{port_i}:{int(time.time() + ttl)}"
             code, out = self._run(
                 [
@@ -781,6 +873,7 @@ class NftBackend:
         *,
         dry_run: bool = False,
         ttl_sec: float = 3600.0,
+        ssh_port: int = 22,
     ) -> str:
         """L2: drop new inbound TCP to app ports (default 80/443); SSH untouched.
 
@@ -795,8 +888,8 @@ class NftBackend:
                 return f"quarantine refused: invalid port {p!r}"
             if pi < 1 or pi > 65535:
                 return f"quarantine refused: port out of range {pi}"
-            if pi == 22:
-                return "quarantine refused: port 22 (SSH) — leave SSH untouched"
+            if pi == int(ssh_port) or pi == 22:
+                return f"quarantine refused: port {pi} (SSH) — leave SSH untouched"
             cleaned.append(pi)
         ports = cleaned
         if not ports:
@@ -906,8 +999,10 @@ class NftBackend:
         """Drop most traffic except allowlisted SSH sources (table inet ss_kirk).
 
         TTL is persisted to ``state/kirk_isolate.json`` so a guard restart still
-        releases the table. Output keeps DNS (udp/tcp 53) so resolvers work;
-        Telegram may still fail under isolate — release via SSH / TTL.
+        releases the table. Output allows DNS only to resolvers from
+        ``/etc/resolv.conf`` (loopback stub via ``oif lo``) and TCP/443 only to
+        ``kirk.egress_allow_cidrs`` (default: Telegram publish ranges). Release
+        via SSH on an allow-CIDR or when the TTL expires.
 
         All CIDRs are validated *before* any nft mutation so a typo cannot leave
         a policy-drop table with no allow rules.
@@ -989,15 +1084,53 @@ class NftBackend:
         for argv in (
             ["nft", "add", "rule", "inet", "ss_kirk", "input", "iif", "lo", "accept"],
             ["nft", "add", "rule", "inet", "ss_kirk", "output", "oif", "lo", "accept"],
-            # DNS so release advice / SSH tooling can still resolve names.
-            ["nft", "add", "rule", "inet", "ss_kirk", "output", "udp", "dport", "53", "accept"],
-            ["nft", "add", "rule", "inet", "ss_kirk", "output", "tcp", "dport", "53", "accept"],
-            # HTTPS egress (Telegram api.telegram.org and similar) — otherwise TG release dies.
-            ["nft", "add", "rule", "inet", "ss_kirk", "output", "tcp", "dport", "443", "accept"],
         ):
             code, out = self._run(argv)
             if code != 0:
                 return _rollback(f"base allow: {out.strip()}")
+        # DNS only toward configured resolvers (stub 127.0.0.53 stays on oif lo).
+        for fam, addr in _dns_egress_targets():
+            for proto in ("udp", "tcp"):
+                code, out = self._run(
+                    [
+                        "nft",
+                        "add",
+                        "rule",
+                        "inet",
+                        "ss_kirk",
+                        "output",
+                        fam,
+                        "daddr",
+                        addr,
+                        proto,
+                        "dport",
+                        "53",
+                        "accept",
+                    ]
+                )
+                if code != 0:
+                    return _rollback(f"dns allow {addr}: {out.strip()}")
+        # HTTPS only to Telegram publish ranges (or kirk.egress_allow_cidrs override).
+        for fam, cidr in _kirk_https_targets():
+            code, out = self._run(
+                [
+                    "nft",
+                    "add",
+                    "rule",
+                    "inet",
+                    "ss_kirk",
+                    "output",
+                    fam,
+                    "daddr",
+                    cidr,
+                    "tcp",
+                    "dport",
+                    "443",
+                    "accept",
+                ]
+            )
+            if code != 0:
+                return _rollback(f"https allow {cidr}: {out.strip()}")
         for fam, canon in families:
             code, out = self._run(
                 [
@@ -1059,9 +1192,11 @@ class NftBackend:
         return "kirk_release ok"
 
     def expire_kirk_isolate(self, dry_run: bool = False) -> str | None:
-        """Release ss_kirk when TTL elapsed (memory or ``kirk_isolate.json``)."""
-        if self._kirk_expires is None:
-            self._load_kirk_deadline()
+        """Release ss_kirk when this process's in-memory TTL elapsed.
+
+        Does not read another HOME's deadline or delete a table it did not arm.
+        Startup recovery is ``reconcile_kirk_from_disk``.
+        """
         if self._kirk_expires is None:
             return None
         if time.time() < self._kirk_expires:

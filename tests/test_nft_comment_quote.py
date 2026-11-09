@@ -36,6 +36,33 @@ def test_lockdown_argv_comments_are_quoted(monkeypatch: pytest.MonkeyPatch) -> N
     for tok in comment_args:
         assert tok.startswith('"') and tok.endswith('"'), tok
         assert "sysspectogram:" in tok
+    syn = [c for c in calls if "lockdown:syn" in " ".join(c)]
+    assert syn
+    argv = syn[0]
+    i = argv.index("flags")
+    assert argv[i : i + 4] == ["flags", "syn", "/", "fin,syn,rst,ack"]
+
+
+def test_lockdown_rolls_back_when_syn_rule_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if "fin,syn,rst,ack" in argv:
+            return 1, "syntax error"
+        if argv[:2] == ["nft", "-a"]:
+            return 0, 'ct state established,related accept comment "sysspectogram:lockdown:est" # handle 3'
+        if "delete" in argv and "handle" in argv:
+            return 0, ""
+        return 0, ""
+
+    nft = NftBackend(never_ban_cidrs=["203.0.113.10/32"])
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(nft, "_ensure_chain", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/sbin/nft" if name == "nft" else None)
+    msg = nft.apply_lockdown(dry_run=False)
+    assert "failed" in msg.lower()
+    assert any("delete" in c and "handle" in c for c in calls)
 
 
 def test_shield_argv_comment_quoted(monkeypatch: pytest.MonkeyPatch) -> None:
