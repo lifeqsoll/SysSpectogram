@@ -629,8 +629,10 @@ def start_web_server(
         except OSError:
             pass
 
+    owned_login = False
     if login is None and state_dir is not None:
         login = WebLoginCode(persist_path=state_dir / "web.login")
+        owned_login = True
     elif login is None:
         login = WebLoginCode(persist_path=None)
 
@@ -653,10 +655,13 @@ def start_web_server(
             max_connections=max_connections,
         )
     except OSError as exc:
+        if owned_login:
+            login.close()
         raise OSError(
             f"web dashboard cannot bind {host}:{port} ({exc}). "
             f"Free the port (fuser -k {port}/tcp) or set web.port / --port"
         ) from exc
+    httpd.login_gate = login  # type: ignore[attr-defined]
     thread = threading.Thread(target=httpd.serve_forever, name="sysspectogram-web", daemon=True)
     thread.start()
     return httpd

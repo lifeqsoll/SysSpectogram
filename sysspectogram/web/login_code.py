@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import secrets
 import threading
@@ -143,6 +144,29 @@ class WebLoginCode:
                 return False
             self._begin_locked()
             return True
+
+
+def login_process_alive(pid: int | None) -> bool:
+    """True when pid is alive and its command line is this program.
+
+    ``EPERM`` from ``kill(pid, 0)`` means the process exists. A reused pid whose
+    ``/proc/<pid>/cmdline`` is not sysspectogram is not the web dashboard.
+    """
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except PermissionError:
+        pass
+    except OSError as exc:
+        if exc.errno != errno.EPERM:
+            return False
+    try:
+        raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+    except OSError:
+        return True
+    text = raw.replace(b"\x00", b" ").decode("utf-8", "replace").lower()
+    return "sysspectogram" in text
 
 
 def read_login_code(path: Path) -> tuple[str | None, float | None, int | None]:
