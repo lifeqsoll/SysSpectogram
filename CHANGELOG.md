@@ -30,6 +30,9 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Plain ML explain reports observations only (no miner/attack diagnosis).
 - Ready `HostBaseline.score()` feeds promote-only into `decide_risk` (never suppress fuse; no sample poison on learning ticks).
 - Unlock form maxlength matches code length; `home settings` rejects junk `response.mode`; `bans list` fails honestly without privileges; well-known anycast never-ban needs `--force`; LOCKED redacts `/api/status` like snapshot.
+- Web `/api/status|snapshot|stream` require session/Bearer (not loopback-unauth); `/api/health` stays public metadata-only.
+- `seed-never-ban` expands well-known DNS/anycast (v4/v6) and refuses private/loopback/multicast/… without `--force` (clear reasons).
+- Root `bans list` returns `ok:false` when `nft` is missing or both set lists fail (no empty memory success).
 
 ## [1.4.0] - 2026-10-28
 

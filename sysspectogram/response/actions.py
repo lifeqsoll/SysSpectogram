@@ -415,26 +415,8 @@ class NftBackend:
 
     def list_nft_set_ips(self) -> list[str]:
         """Parse live ``nft list set`` for ban4/ban6 (same token scan as the helper)."""
-        if not shutil.which("nft"):
-            return []
-        ips: list[str] = []
-        seen: set[str] = set()
-        for set_name in ("ban4", "ban6"):
-            code, out = self._run(["nft", "list", "set", "inet", "sysspectogram", set_name])
-            if code != 0 or not out:
-                continue
-            for token in out.split():
-                tok = token.strip().strip(",{}")
-                if not tok:
-                    continue
-                try:
-                    addr = str(ip_address(tok))
-                except ValueError:
-                    continue
-                if addr not in seen:
-                    seen.add(addr)
-                    ips.append(addr)
-        return ips
+        out = self.list_bans_result()
+        return list(out.get("ips") or []) if out.get("ok") and out.get("source") == "nft" else []
 
     def list_bans(self) -> list[BanRecord]:
         now = time.time()
@@ -445,12 +427,46 @@ class NftBackend:
         return list(self.bans.values())
 
     def list_bans_result(self) -> dict:
-        """CLI-facing list: prefer live nft sets when root; else in-memory records."""
-        if os.geteuid() == 0 and shutil.which("nft"):
-            return {"ok": True, "ips": self.list_nft_set_ips(), "source": "nft"}
+        """CLI-facing list: live nft sets when root; memory only for in-process non-root."""
+        if os.geteuid() == 0:
+            if not shutil.which("nft"):
+                return {
+                    "ok": False,
+                    "ips": [],
+                    "error": "nft not found",
+                    "hint": "install nftables (provides the nft binary)",
+                }
+            ips: list[str] = []
+            seen: set[str] = set()
+            listed = 0
+            for set_name in ("ban4", "ban6"):
+                code, out = self._run(["nft", "list", "set", "inet", "sysspectogram", set_name])
+                if code != 0:
+                    continue
+                listed += 1
+                for token in (out or "").split():
+                    tok = token.strip().strip(",{}")
+                    if not tok:
+                        continue
+                    try:
+                        addr = str(ip_address(tok))
+                    except ValueError:
+                        continue
+                    if addr not in seen:
+                        seen.add(addr)
+                        ips.append(addr)
+            if listed == 0:
+                return {
+                    "ok": False,
+                    "ips": [],
+                    "error": "nft list set failed",
+                    "hint": "table inet sysspectogram missing or unreadable; install helper / run a ban once",
+                }
+            return {"ok": True, "ips": ips, "source": "nft"}
+        # Non-root CLI uses HelperBanBackend / NoneBanBackend via select_ban_backend.
+        # Memory source is for the long-lived guard process that recorded bans in-process.
         mem = [b.ip for b in self.list_bans()]
         return {"ok": True, "ips": mem, "source": "memory"}
-
     def apply_lockdown(
         self,
         dry_run: bool = False,
