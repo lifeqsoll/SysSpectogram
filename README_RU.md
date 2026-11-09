@@ -33,7 +33,7 @@ bash friend-day0.sh "$TAG"
 export SYSSPECTOGRAM_HOME="${SYSSPECTOGRAM_HOME:-$HOME/.local/share/sysspectogram}"
 source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
 python -m sysspectogram configure
-python -m sysspectogram seed-never-ban --ip "$(curl -fsS -4 ifconfig.me)"
+python -m sysspectogram home seed-never-ban --ip "${SSH_CONNECTION%% *}"
 loginctl enable-linger "$USER" && python -m sysspectogram protect enable
 ```
 
