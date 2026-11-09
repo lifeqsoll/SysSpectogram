@@ -463,6 +463,7 @@ python -m sysspectogram [--config PATH] [--version] <command> ...
 | `role-lab` | Simulate VPS roles on PC and train baseline packs |
 | `spectro` | Render a metrics spectrogram for an incident or a time |
 | `web` | Live local / Telegram Mini App dashboard |
+| `web login` | Print the current WEB LOGIN CODE while `web` is running |
 | `control` | SOAR via local guard control socket |
 | `home` | Simple-home helpers (onboarding, model import, `.env`, pair-remote, warmup) |
 | `fleet` | Multi-VPS registry + SSH fan-out (admin PC; see [FLEET.md](docs/FLEET.md)) |

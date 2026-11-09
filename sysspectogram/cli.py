@@ -316,8 +316,15 @@ def _cmd_web(args: argparse.Namespace) -> int:
         from sysspectogram.web.login_code import read_login_code
 
         path = state_root() / "state" / "web.login"
-        code, deadline = read_login_code(path)
-        if not code:
+        code, deadline, pid = read_login_code(path)
+        alive = False
+        if pid:
+            try:
+                os.kill(pid, 0)
+                alive = True
+            except OSError:
+                alive = False
+        if not code or not alive:
             print(
                 json.dumps(
                     {

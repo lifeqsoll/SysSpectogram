@@ -37,7 +37,7 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-r
 Open: **http://127.0.0.1:8765/**
 
 - Theme: dark by default (Light/Dark toggle in the header).
-- Metrics need a **session**: enter the **WEB LOGIN CODE** from the host console (`state/web.login`) or use Telegram Mini App `initData`. Loopback alone is not enough. If a public Mini App URL is set, loopback is **not** trusted for mutations either.
+- Metrics need a **session**: enter the **WEB LOGIN CODE** from the host console (`state/web.login`, or `sysspectogram web login` while web is running) or use Telegram Mini App `initData`. Loopback alone is not enough. If a public Mini App URL is set, loopback is **not** trusted for mutations either. Stopping web deletes the code.
 - With `guard --telegram`, **SOAR actions** also need console unlock (`/unlock` from the host code). Header shows `control LOCKED|unlocked`.
 - Through a public tunnel you must open the app from Telegram so `initData` validates, and your user id must match `TELEGRAM_CHAT_ID`.
 

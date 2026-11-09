@@ -44,12 +44,30 @@ class WebLoginCode:
 
     def begin(self) -> str:
         with self._lock:
-            self._code = self._gen()
-            self._deadline = time.time() + self.ttl_sec if self.ttl_sec > 0 else 0.0
-            self._fails = []
-            self._persist_locked()
-            self._arm_locked()
-            return self._code
+            return self._begin_locked()
+
+    def _begin_locked(self) -> str:
+        self._code = self._gen()
+        self._deadline = time.time() + self.ttl_sec if self.ttl_sec > 0 else 0.0
+        self._fails = []
+        self._persist_locked()
+        self._arm_locked()
+        return self._code
+
+    def close(self) -> None:
+        """Cancel rotation and remove the on-disk code (web is stopping)."""
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+            self._code = None
+            self._deadline = 0.0
+            path = self.persist_path
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _arm_locked(self) -> None:
         if self._timer is not None:
@@ -65,10 +83,10 @@ class WebLoginCode:
 
     def _rotate_if_expired(self) -> None:
         with self._lock:
-            if not self._expired_locked():
+            if self._expired_locked():
+                self._begin_locked()
+            else:
                 self._arm_locked()
-                return
-        self.begin()
 
     def _persist_locked(self) -> None:
         if not self.persist_path or not self._code:
@@ -79,7 +97,7 @@ class WebLoginCode:
                 os.chmod(self.persist_path.parent, 0o700)
             except OSError:
                 pass
-            text = f"{self._code}\n{self._deadline}\n"
+            text = f"{self._code}\n{self._deadline}\n{os.getpid()}\n"
             tmp = self.persist_path.with_name(self.persist_path.name + ".tmp")
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
@@ -113,40 +131,38 @@ class WebLoginCode:
     def try_consume(self, code: str) -> bool:
         with self._lock:
             if self._expired_locked() or not self._code:
-                rotate = True
-                ok = False
-            else:
-                rotate = False
-                now = time.time()
-                self._fails = [t for t in self._fails if now - t < 300.0]
-                if len(self._fails) >= 8:
-                    return False
-                got = self.normalize(code)
-                if len(got) != len(self._code) or not secrets.compare_digest(got, self._code):
-                    self._fails.append(now)
-                    return False
-                ok = True
-        if rotate:
-            self.begin()
-            return False
-        if ok:
-            self.begin()
+                self._begin_locked()
+                return False
+            now = time.time()
+            self._fails = [t for t in self._fails if now - t < 300.0]
+            if len(self._fails) >= 8:
+                return False
+            got = self.normalize(code)
+            if len(got) != len(self._code) or not secrets.compare_digest(got, self._code):
+                self._fails.append(now)
+                return False
+            self._begin_locked()
             return True
-        return False
 
 
-def read_login_code(path: Path) -> tuple[str | None, float | None]:
-    """Return ``(code, deadline)`` from ``state/web.login``, or (None, None)."""
+def read_login_code(path: Path) -> tuple[str | None, float | None, int | None]:
+    """Return ``(code, deadline, pid)`` from ``state/web.login``."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return None, None
+        return None, None, None
     if not lines or not lines[0].strip():
-        return None, None
+        return None, None, None
     deadline = None
     if len(lines) > 1:
         try:
             deadline = float(lines[1])
         except ValueError:
             deadline = None
-    return lines[0].strip(), deadline
+    pid = None
+    if len(lines) > 2:
+        try:
+            pid = int(lines[2])
+        except ValueError:
+            pid = None
+    return lines[0].strip(), deadline, pid
