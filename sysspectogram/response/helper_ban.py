@@ -119,7 +119,7 @@ class HelperBanBackend:
                 "error": str(reply.get("message") or "helper ban.list failed"),
             }
         data = reply.get("data") or {}
-        return {"ok": True, "ips": list(data.get("ips") or [])}
+        return {"ok": True, "ips": list(data.get("ips") or []), "source": "helper"}
 
     def selftest(self) -> str:
         reply = self._call("ban.selftest", {})

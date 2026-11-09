@@ -29,6 +29,8 @@ def parse_ban_ip(raw: Any) -> str:
         or getattr(addr, "ipv4_mapped", None) is not None
     ):
         raise ValueError(f"refusing ban of special address: {addr}")
+    if isinstance(addr, IPv4Address) and (int(addr) == 0xFFFFFFFF or addr.packed[0] >= 240):
+        raise ValueError(f"refusing ban of special address: {addr}")
     return str(addr)
 
 

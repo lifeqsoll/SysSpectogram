@@ -742,14 +742,22 @@ pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
         .parse()
         .map_err(|_| format!("invalid ban ip: {token:?}"))?;
     match addr {
-        std::net::IpAddr::V4(v4) if v4.is_unspecified() || v4.is_loopback() || v4.is_multicast() || v4.is_link_local() => {
+        std::net::IpAddr::V4(v4)
+            if v4.is_unspecified()
+                || v4.is_loopback()
+                || v4.is_multicast()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.octets()[0] >= 240 =>
+        {
             Err(format!("refusing ban of special address: {addr}"))
         }
         std::net::IpAddr::V6(v6)
             if v6.is_unspecified()
                 || v6.is_loopback()
                 || v6.is_multicast()
-                || v6.is_unicast_link_local() =>
+                || v6.is_unicast_link_local()
+                || v6.to_ipv4_mapped().is_some() =>
         {
             Err(format!("refusing ban of special address: {addr}"))
         }
@@ -766,6 +774,32 @@ fn clamp_ttl(raw: Option<u64>) -> Result<u64, String> {
         return Err(format!("ttl_sec must be <= {MAX_BAN_TTL_SEC}"));
     }
     Ok(ttl)
+}
+
+/// Parse ``ttl_sec`` from JSON: missing → default; reject floats / negatives / non-numbers.
+pub fn parse_ban_ttl(args: &Value) -> Result<u64, String> {
+    match args.get("ttl_sec") {
+        None | Some(Value::Null) => clamp_ttl(None),
+        Some(Value::Number(n)) => {
+            if let Some(u) = n.as_u64() {
+                return clamp_ttl(Some(u));
+            }
+            if let Some(i) = n.as_i64() {
+                if i < 0 {
+                    return Err("ttl_sec must be a positive integer".into());
+                }
+                return clamp_ttl(Some(i as u64));
+            }
+            if let Some(f) = n.as_f64() {
+                if !f.is_finite() || f.fract() != 0.0 || f <= 0.0 {
+                    return Err(format!("ttl_sec must be a positive integer, got {f}"));
+                }
+                return clamp_ttl(Some(f as u64));
+            }
+            Err("ttl_sec must be a positive integer".into())
+        }
+        Some(_) => Err("ttl_sec must be a positive integer".into()),
+    }
 }
 
 fn set_for(addr: std::net::IpAddr) -> &'static str {
@@ -1029,7 +1063,7 @@ fn ban_add(args: &Value, caller: Caller) -> Result<Value, String> {
         .and_then(Value::as_str)
         .ok_or("missing ip")?;
     let addr = parse_helper_ban_ip(ip_raw)?;
-    let ttl = clamp_ttl(args.get("ttl_sec").and_then(Value::as_u64))?;
+    let ttl = parse_ban_ttl(args)?;
     let reason = args
         .get("reason")
         .and_then(Value::as_str)
@@ -1127,6 +1161,7 @@ fn ban_list(caller: Caller) -> Result<Value, String> {
     authorize_ban_group(caller)?;
     ensure_nft_table()?;
     let mut ips = Vec::new();
+    let mut listed = 0u32;
     for set_name in ["ban4", "ban6"] {
         let out = Command::new(nft_bin())
             .args(["list", "set", "inet", "sysspectogram", set_name])
@@ -1135,6 +1170,7 @@ fn ban_list(caller: Caller) -> Result<Value, String> {
         if !out.status.success() {
             continue;
         }
+        listed += 1;
         let text = String::from_utf8_lossy(&out.stdout);
         for token in text.split_whitespace() {
             if let Ok(addr) = token.trim_matches(|c| c == ',' || c == '{' || c == '}').parse::<std::net::IpAddr>()
@@ -1142,6 +1178,9 @@ fn ban_list(caller: Caller) -> Result<Value, String> {
                 ips.push(addr.to_string());
             }
         }
+    }
+    if listed == 0 {
+        return Err("nft list set failed for ban4 and ban6".to_string());
     }
     Ok(json!({"ips": ips}))
 }
@@ -1309,6 +1348,18 @@ mod tests {
         assert!(parse_helper_ban_ip("127.0.0.1").is_err());
         assert!(parse_helper_ban_ip("1.2.3.4; flush").is_err());
         assert!(parse_helper_ban_ip("::1").is_err());
+        assert!(parse_helper_ban_ip("::ffff:5.6.7.9").is_err());
+        assert!(parse_helper_ban_ip("255.255.255.255").is_err());
+        assert!(parse_helper_ban_ip("240.0.0.1").is_err());
+    }
+
+    #[test]
+    fn helper_ban_ttl_rejects_float_and_negative() {
+        assert!(parse_ban_ttl(&json!({})).is_ok());
+        assert!(parse_ban_ttl(&json!({"ttl_sec": 120})).is_ok());
+        assert!(parse_ban_ttl(&json!({"ttl_sec": -1})).is_err());
+        assert!(parse_ban_ttl(&json!({"ttl_sec": 120.5})).is_err());
+        assert!(parse_ban_ttl(&json!({"ttl_sec": "3600"})).is_err());
     }
 
     #[test]

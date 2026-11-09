@@ -12,6 +12,10 @@
 //! - operations are a fixed allowlist; no shell is ever involved;
 //! - bundles are copied into a root-owned staging area before any verification,
 //!   so the user cannot swap files between verification and installation.
+//!
+//! Concurrency: accept is non-blocking for peers — each connection is handled on
+//! its own thread. Install/settings/service ops share a mutex so they never
+//! interleave; ban.* can proceed while a silent peer times out on first-line read.
 
 mod ops;
 
@@ -20,6 +24,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -27,6 +33,10 @@ use serde_json::{json, Value};
 const SOCKET_DEFAULT: &str = "/run/sysspectogram/helper.sock";
 const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 const PKCHECK: &str = "/usr/bin/pkcheck";
+/// First-line read must complete quickly so a silent peer cannot stall bans.
+const FIRST_LINE_TIMEOUT: Duration = Duration::from_secs(2);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const PKCHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Caller {
@@ -91,7 +101,7 @@ pub fn authorize(action: &str, caller: Caller) -> Result<(), String> {
     }
     let start = process_start_time(caller.pid).ok_or("caller process vanished")?;
     let subject = pkcheck_subject(caller, start);
-    let output = Command::new(PKCHECK)
+    let mut child = Command::new(PKCHECK)
         .args([
             "--action-id",
             action,
@@ -99,8 +109,33 @@ pub fn authorize(action: &str, caller: Caller) -> Result<(), String> {
             subject.as_str(),
             "--allow-user-interaction",
         ])
-        .output()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("pkcheck failed to start: {e}"))?;
+    // Bound the polkit prompt so a hung agent cannot stall ban.* forever.
+    let deadline = std::time::Instant::now() + PKCHECK_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "pkcheck timed out after {}s for {action}",
+                        PKCHECK_TIMEOUT.as_secs()
+                    ));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("pkcheck wait failed: {e}")),
+        }
+    };
+    let mut stderr = String::new();
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut stderr);
+    }
     // Re-check identity after pkcheck so a mid-flight exec/setuid cannot race us.
     let start_after = process_start_time(caller.pid).ok_or("caller process vanished after pkcheck")?;
     if start_after != start {
@@ -110,11 +145,10 @@ pub fn authorize(action: &str, caller: Caller) -> Result<(), String> {
         Some(uid) if uid == caller.uid => {}
         _ => return Err("caller uid changed during authorization".into()),
     }
-    if output.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        let detail = detail.trim();
+        let detail = stderr.trim();
         if detail.is_empty() {
             Err(format!(
                 "not authorized: {action} (polkit denied — need a desktop session with a polkit agent and admin password; after helper install, log out/in so group sysspectogram applies)"
@@ -131,9 +165,18 @@ fn reply(mut stream: &UnixStream, value: Value) {
     let _ = stream.write_all(out.as_bytes());
 }
 
-fn handle(stream: UnixStream) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+fn needs_serial(op: &str) -> bool {
+    // Install / settings / service must not interleave; ban.* stays lock-free.
+    matches!(
+        op,
+        "service" | "bundle.install" | "settings.apply" | "settings.rollback"
+    ) || op.starts_with("bundle.")
+        || op.starts_with("settings.")
+}
+
+fn handle(stream: UnixStream, serial: Arc<Mutex<()>>) {
+    let _ = stream.set_read_timeout(Some(FIRST_LINE_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
 
     let caller = match peer_creds(&stream) {
         Ok(c) => c,
@@ -165,7 +208,13 @@ fn handle(stream: UnixStream) {
     let op = request.get("op").and_then(Value::as_str).unwrap_or_default();
     let args = request.get("args").cloned().unwrap_or_else(|| json!({}));
     eprintln!("sysspectogram-helper: op={op} uid={} pid={}", caller.uid, caller.pid);
-    let response = ops::dispatch(op, &args, caller);
+
+    let response = if needs_serial(op) {
+        let _guard = serial.lock().unwrap_or_else(|e| e.into_inner());
+        ops::dispatch(op, &args, caller)
+    } else {
+        ops::dispatch(op, &args, caller)
+    };
     reply(&stream, response);
 }
 
@@ -218,10 +267,13 @@ fn main() {
     }
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660));
 
-    // Serial on purpose: installs and settings writes must not interleave.
+    let serial = Arc::new(Mutex::new(()));
     for conn in listener.incoming() {
         match conn {
-            Ok(stream) => handle(stream),
+            Ok(stream) => {
+                let serial = Arc::clone(&serial);
+                thread::spawn(move || handle(stream, serial));
+            }
             Err(e) => eprintln!("sysspectogram-helper: accept: {e}"),
         }
     }
