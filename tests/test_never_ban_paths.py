@@ -13,8 +13,8 @@ SCHEMA = ROOT / "configs" / "schema.yaml"
 
 
 def test_reject_unspecified_and_loopback():
-    assert validate_never_ban_cidr("0.0.0.0/32")[1] == "special_address"
-    assert validate_never_ban_cidr("127.0.0.1")[1] == "special_address"
+    assert validate_never_ban_cidr("0.0.0.0/32")[1] == "unspecified"
+    assert validate_never_ban_cidr("127.0.0.1")[1] == "loopback"
     assert validate_never_ban_cidr("0.0.0.0/0")[1] == "too_wide"
 
 
@@ -69,10 +69,10 @@ def test_load_scrubs_wide_never_ban(tmp_path: Path, monkeypatch):
 
 
 def test_reject_zero_slash8_hosts():
-    assert validate_never_ban_cidr("0.0.0.1/32")[1] == "special_address"
-    # Leading-zero IPv4 is rejected by ip_network (invalid) or as special.
-    assert validate_never_ban_cidr("000.0.0.0/32")[1] in {"special_address", "invalid_ip"}
-    assert validate_never_ban_cidr("127.0.0.0/24")[1] == "special_address"
+    assert validate_never_ban_cidr("0.0.0.1/32")[1] == "unspecified"
+    # Leading-zero IPv4 is rejected by ip_network (invalid) or as unspecified.
+    assert validate_never_ban_cidr("000.0.0.0/32")[1] in {"unspecified", "invalid_ip"}
+    assert validate_never_ban_cidr("127.0.0.0/24")[1] == "loopback"
 
 
 def test_allow_ssh_cidrs_yaml_string_not_chars(tmp_path: Path, monkeypatch):

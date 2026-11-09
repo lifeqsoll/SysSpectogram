@@ -21,16 +21,71 @@ MAX_V6_PREFIX_LEN = 64  # /64 or narrower
 
 # Well-known public resolvers / anycast — not a typical admin SSH source.
 # Seeding these without --force can build a lockdown allowlist that is useless
-# (or dangerous) for the operator's real laptop IP.
+# (or dangerous) for the operator's real laptop IP. Compare via str(ip_address(...)).
 WELL_KNOWN_ANYCAST_HOSTS = frozenset(
     {
+        # Google Public DNS
         "8.8.8.8",
         "8.8.4.4",
+        "2001:4860:4860::8888",
+        "2001:4860:4860::8844",
+        # Cloudflare
         "1.1.1.1",
         "1.0.0.1",
+        "2606:4700:4700::1111",
+        "2606:4700:4700::1001",
+        # Quad9
         "9.9.9.9",
+        "149.112.112.112",
+        "2620:fe::fe",
+        "2620:fe::9",
+        # OpenDNS
+        "208.67.222.222",
+        "208.67.220.220",
+        "2620:119:35::35",
+        "2620:119:53::53",
+        # AdGuard DNS
+        "94.140.14.14",
+        "94.140.15.15",
+        "2a10:50c0::ad1:ff",
+        "2a10:50c0::ad2:ff",
     }
 )
+
+# TEST-NET / documentation ranges used in docs and tests — not RFC1918 LAN.
+_DOCUMENTATION_NETS = (
+    ip_network("192.0.2.0/24"),
+    ip_network("198.51.100.0/24"),
+    ip_network("203.0.113.0/24"),
+    ip_network("2001:db8::/32"),
+)
+
+
+def _canon_host(raw: str) -> str:
+    return str(ip_address((raw or "").strip().split("/", 1)[0]))
+
+
+def _is_documentation(addr: Any) -> bool:
+    return any(addr in net for net in _DOCUMENTATION_NETS)
+
+
+def _seed_special_reason(addr: Any) -> str | None:
+    """Reason string if seed should refuse without ``--force``; None if OK."""
+    if addr.is_loopback:
+        return "loopback"
+    if addr.is_multicast:
+        return "multicast"
+    if addr.is_link_local:
+        return "link_local"
+    if addr.is_unspecified:
+        return "unspecified"
+    if addr.is_reserved:
+        return "reserved"
+    if _is_documentation(addr):
+        return None
+    if addr.is_private:
+        return "private"
+    return None
 
 def cidr_for_ip(ip: str) -> str:
     token = (ip or "").strip()
@@ -63,23 +118,32 @@ def validate_never_ban_cidr(raw: str) -> tuple[str | None, str | None]:
     if isinstance(net, IPv4Network):
         if net.prefixlen < MAX_V4_PREFIX_LEN:
             return None, "too_wide"
-        # Never-ban must be a real admin egress, not unspecified/loopback/0.0.0.0/8.
-        if (
-            addr.is_unspecified
-            or addr.is_loopback
-            or addr.is_multicast
-            or addr.is_reserved
-            or (addr.version == 4 and int(addr) >> 24 == 0)
-        ):
-            return None, "special_address"
+        if addr.is_unspecified or (addr.version == 4 and int(addr) >> 24 == 0):
+            return None, "unspecified"
+        if addr.is_loopback:
+            return None, "loopback"
+        if addr.is_multicast:
+            return None, "multicast"
+        if addr.is_link_local:
+            return None, "link_local"
+        if addr.is_reserved:
+            return None, "reserved"
     elif isinstance(net, IPv6Network):
         if net.prefixlen < MAX_V6_PREFIX_LEN:
             return None, "too_wide"
-        if addr.is_unspecified or addr.is_loopback or addr.is_multicast or addr.is_reserved:
-            return None, "special_address"
+        if addr.is_unspecified:
+            return None, "unspecified"
+        if addr.is_loopback:
+            return None, "loopback"
+        if addr.is_multicast:
+            return None, "multicast"
+        if addr.is_link_local:
+            return None, "link_local"
+        if addr.is_reserved:
+            return None, "reserved"
         # Keep never_ban consistent with Rust helper (reject IPv4-mapped).
         if getattr(addr, "ipv4_mapped", None) is not None:
-            return None, "special_address"
+            return None, "ipv4_mapped"
     else:
         return None, "invalid_ip"
     # Host routes stay as /32 or /128; otherwise keep the network form.
@@ -205,7 +269,21 @@ def seed_never_ban(
                     "reject /0 and junk"
                 ),
             }
-        host_only = canonical.split("/")[0]
+        host_only = _canon_host(canonical)
+        special = _seed_special_reason(ip_address(host_only))
+        if special and not force:
+            return {
+                "ok": False,
+                "written": False,
+                "ip": canonical,
+                "never_ban_cidrs": cur,
+                "reason": special,
+                "warning": (
+                    f"{host_only} is {special}; not a typical admin SSH source. "
+                    "Pass your real admin egress IP, or --force if you really mean it."
+                ),
+                "hint": "use --ip <your-admin-egress> or --force to override",
+            }
         if host_only in WELL_KNOWN_ANYCAST_HOSTS and not force:
             return {
                 "ok": False,
@@ -223,6 +301,11 @@ def seed_never_ban(
         if host_only in WELL_KNOWN_ANYCAST_HOSTS and force:
             anycast_warning = (
                 f"{host_only} is a well-known anycast/DNS address; "
+                "lockdown allowlist will use never_ban only — confirm this is intentional"
+            )
+        elif special and force:
+            anycast_warning = (
+                f"{host_only} is {special}; "
                 "lockdown allowlist will use never_ban only — confirm this is intentional"
             )
         detected = canonical
