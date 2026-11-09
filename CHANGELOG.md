@@ -35,6 +35,8 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Root `bans list` returns `ok:false` when `nft` is missing or both set lists fail (no empty memory success).
 - Accept LAN/ULA never_ban with warning; CGNAT warns; anycast check covers CIDRs; prefer `SSH_CONNECTION` when seeding without `--ip`.
 - Quote nft rule comments so lockdown/quarantine/shield actually apply; check established rule rc.
+- Lockdown/syn-rate-limit use `tcp flags syn / fin,syn,rst,ack` (nft 1.1.x). Partial lockdown rolls back.
+- Kirk isolate DNS is resolver-only; TCP/443 only to `kirk.egress_allow_cidrs` (Telegram ranges by default).
 - Set perimeter lockdown flag only after nft succeeds; web returns error on refuse.
 - WEB LOGIN CODE (`/api/login`, `state/web.login`) mints read session without control unlock.
 - Runtime paths (`state/`/`reports/`/`artifacts/`) resolve under `SYSSPECTOGRAM_HOME`.

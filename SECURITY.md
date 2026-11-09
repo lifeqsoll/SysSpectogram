@@ -81,7 +81,8 @@ Defaults are intentionally cautious.
 - Multi-VPS fleet control uses **SSH + device tokens** (host pair code); see [docs/FLEET.md](docs/FLEET.md). No public HTTPS control plane.
 - Web read APIs (`/api/status`, `/api/snapshot`, `/api/stream`) require a valid `ss_session` cookie or Bearer (`state/web.token`) — loopback alone is not enough. `/api/health` stays public (`ok` + `unlock_code_len` only). When control is LOCKED, authorized responses still redact bans/processes/allowlist.
 - Dashboard **WEB LOGIN CODE** (`state/web.login`, POST `/api/login`) mints a read session; it does **not** unlock SOAR. Control unlock stays separate.
-- nft lockdown/quarantine/shield comments are quoted (colons broke rules on real nft). Lockdown state flips only after nft succeeds.
+- nft lockdown/quarantine/shield comments are quoted (colons broke rules on real nft). Lockdown SYN match is `flags syn / fin,syn,rst,ack` (a bare `syn / syn` never installed on nft 1.1.x). A failed lockdown rolls those rules back. Lockdown state flips only after nft succeeds.
+- Kirk isolate does not open DNS or TCP/443 to the internet. DNS goes to configured resolvers; HTTPS only to `kirk.egress_allow_cidrs` (default: Telegram publish ranges).
 - POST bodies: Host checked before read; `Content-Length` must be a non-negative integer ≤ 64 KiB.
 - `home settings` / seed writes are flocked; schema type checks reject non-finite / out-of-range values (`allow_nan=False`).
 - `kirk_isolate` deadline is on disk (`state/kirk_isolate.json` 0600); expired tables are cleared on backend start; failed SSH-allow install rolls the table back.

@@ -37,6 +37,10 @@ def write_secret_file(path: Path, text: str) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
     if path.is_symlink():
         raise OSError(f"refusing to write through symlink: {path}")
     body = text if (not text or text.endswith("\n")) else text + "\n"

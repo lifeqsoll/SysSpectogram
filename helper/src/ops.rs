@@ -1157,23 +1157,20 @@ fn ban_del(args: &Value, caller: Caller) -> Result<Value, String> {
     Ok(json!({"ip": ip_s, "set": set_name}))
 }
 
-fn ban_list(caller: Caller) -> Result<Value, String> {
-    authorize_ban_group(caller)?;
-    ensure_nft_table()?;
+/// Parse nft `list set` texts. `ok=false` means that set was unreadable.
+/// If every set failed, return Err (do not pretend the ban list is empty).
+pub fn collect_ban_ips(listings: &[(bool, &str)]) -> Result<Vec<String>, String> {
     let mut ips = Vec::new();
     let mut listed = 0u32;
-    for set_name in ["ban4", "ban6"] {
-        let out = Command::new(nft_bin())
-            .args(["list", "set", "inet", "sysspectogram", set_name])
-            .output()
-            .map_err(|e| format!("nft list: {e}"))?;
-        if !out.status.success() {
+    for (ok, text) in listings {
+        if !ok {
             continue;
         }
         listed += 1;
-        let text = String::from_utf8_lossy(&out.stdout);
         for token in text.split_whitespace() {
-            if let Ok(addr) = token.trim_matches(|c| c == ',' || c == '{' || c == '}').parse::<std::net::IpAddr>()
+            if let Ok(addr) = token
+                .trim_matches(|c| c == ',' || c == '{' || c == '}')
+                .parse::<std::net::IpAddr>()
             {
                 ips.push(addr.to_string());
             }
@@ -1182,6 +1179,22 @@ fn ban_list(caller: Caller) -> Result<Value, String> {
     if listed == 0 {
         return Err("nft list set failed for ban4 and ban6".to_string());
     }
+    Ok(ips)
+}
+
+fn ban_list(caller: Caller) -> Result<Value, String> {
+    authorize_ban_group(caller)?;
+    ensure_nft_table()?;
+    let mut listings: Vec<(bool, String)> = Vec::new();
+    for set_name in ["ban4", "ban6"] {
+        let out = Command::new(nft_bin())
+            .args(["list", "set", "inet", "sysspectogram", set_name])
+            .output()
+            .map_err(|e| format!("nft list: {e}"))?;
+        listings.push((out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned()));
+    }
+    let borrowed: Vec<(bool, &str)> = listings.iter().map(|(ok, text)| (*ok, text.as_str())).collect();
+    let ips = collect_ban_ips(&borrowed)?;
     Ok(json!({"ips": ips}))
 }
 
@@ -1351,6 +1364,13 @@ mod tests {
         assert!(parse_helper_ban_ip("::ffff:5.6.7.9").is_err());
         assert!(parse_helper_ban_ip("255.255.255.255").is_err());
         assert!(parse_helper_ban_ip("240.0.0.1").is_err());
+    }
+
+    #[test]
+    fn ban_list_fails_when_both_sets_unread() {
+        assert!(collect_ban_ips(&[(false, ""), (false, "error")]).is_err());
+        let ips = collect_ban_ips(&[(true, "elements = { 203.0.113.9 }"), (false, "")]).unwrap();
+        assert_eq!(ips, vec!["203.0.113.9".to_string()]);
     }
 
     #[test]
