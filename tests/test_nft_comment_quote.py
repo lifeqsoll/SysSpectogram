@@ -45,13 +45,17 @@ def test_lockdown_argv_comments_are_quoted(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_lockdown_rolls_back_when_syn_rule_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
+    rules: list[str] = []
 
     def fake_run(argv: list[str]) -> tuple[int, str]:
         calls.append(list(argv))
         if "fin,syn,rst,ack" in argv:
             return 1, "syntax error"
         if argv[:2] == ["nft", "-a"]:
-            return 0, 'ct state established,related accept comment "sysspectogram:lockdown:est" # handle 3'
+            return 0, "\n".join(f'{r} # handle {i+1}' for i, r in enumerate(rules))
+        if "comment" in argv:
+            rules.append(argv[argv.index("comment") + 1].strip('"'))
+            return 0, ""
         if "delete" in argv and "handle" in argv:
             return 0, ""
         return 0, ""
@@ -63,6 +67,64 @@ def test_lockdown_rolls_back_when_syn_rule_fails(monkeypatch: pytest.MonkeyPatch
     msg = nft.apply_lockdown(dry_run=False)
     assert "failed" in msg.lower()
     assert any("delete" in c and "handle" in c for c in calls)
+
+
+def test_synrl_failure_does_not_remove_lockdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    deleted: list[str] = []
+    rules = [
+        'comment "sysspectogram:lockdown:est"',
+        'comment "sysspectogram:lockdown:allow:203.0.113.10/32"',
+        'comment "sysspectogram:lockdown:syn"',
+    ]
+
+    def fake_run(argv: list[str]) -> tuple[int, str]:
+        if "limit" in argv:
+            return 1, "forced"
+        if argv[:2] == ["nft", "-a"]:
+            return 0, "\n".join(f"{r} # handle {i+1}" for i, r in enumerate(rules))
+        if "delete" in argv and "handle" in argv:
+            deleted.append(argv[-1])
+            return 0, ""
+        if "comment" in argv:
+            rules.append(argv[argv.index("comment") + 1])
+            return 0, ""
+        return 0, ""
+
+    nft = NftBackend(never_ban_cidrs=["203.0.113.10/32"])
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(nft, "_ensure_chain", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/sbin/nft" if name == "nft" else None)
+    msg = nft.apply_syn_rate_limit()
+    assert "failed" in msg.lower()
+    assert deleted
+    assert "1" not in deleted and "2" not in deleted and "3" not in deleted
+
+
+def test_lockdown_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    adds = 0
+
+    def fake_run(argv: list[str]) -> tuple[int, str]:
+        nonlocal adds
+        if argv[:2] == ["nft", "-a"]:
+            if adds:
+                return 0, (
+                    'comment "sysspectogram:lockdown:est" # handle 1\n'
+                    'comment "sysspectogram:lockdown:allow:203.0.113.10/32" # handle 2\n'
+                    'comment "sysspectogram:lockdown:syn" # handle 3\n'
+                )
+            return 0, ""
+        if argv[:3] == ["nft", "add", "rule"]:
+            adds += 1
+        return 0, ""
+
+    nft = NftBackend(never_ban_cidrs=["203.0.113.10/32"])
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(nft, "_ensure_chain", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/sbin/nft" if name == "nft" else None)
+    assert "failed" not in nft.apply_lockdown().lower()
+    first = adds
+    assert "failed" not in nft.apply_lockdown().lower()
+    assert adds == first
 
 
 def test_shield_argv_comment_quoted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,3 +157,22 @@ def test_live_lockdown_roundtrip_when_root() -> None:
     assert "sysspectogram:lockdown:syn" in out
     rel = nft.release_lockdown(dry_run=False) if hasattr(nft, "release_lockdown") else ""
     _ = rel
+    nft.apply_lockdown(dry_run=False)
+    nft.apply_lockdown(dry_run=False)
+    code, out = nft._run(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
+    assert out.count("sysspectogram:lockdown:est") == 1
+    real = nft._run
+
+    def wrapped(argv: list[str]) -> tuple[int, str]:
+        if "limit" in argv:
+            return 1, "forced fail"
+        return real(argv)
+
+    nft._run = wrapped  # type: ignore[method-assign]
+    msg = nft.apply_syn_rate_limit()
+    assert "failed" in msg.lower()
+    code, out = real(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
+    assert "sysspectogram:lockdown:est" in out
+    assert "sysspectogram:synrl:" not in out
+    nft._run = real  # type: ignore[method-assign]
+    nft.release_lockdown(dry_run=False)
