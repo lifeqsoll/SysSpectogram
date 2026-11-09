@@ -6,6 +6,10 @@ Short answers for operators. Install detail: [INSTALL.md](INSTALL.md).
 
 Yes, if you enable **soft/full/isolate** auto-ban without listing your admin SSH source in `response.never_ban_cidrs`. Always seed never-ban **before** enabling bans. The guard also skips bans for **active SSH session** IPs when it can detect them. See [FRIEND.md](FRIEND.md) and `home health`.
 
+## Does the local web dashboard need a login?
+
+On loopback (`127.0.0.1`) with no public Mini App URL, **any local process can read live charts/scores** without a session; SOAR mutations still need unlock/session. When control is LOCKED, ban/process/allowlist lists are redacted even for those local reads.
+
 ## Why did protect stop after I closed SSH?
 
 User systemd units stop on logout unless **linger** is enabled:

@@ -19,6 +19,18 @@ UA = "SysSpectogram/1.2 (+never-ban seed)"
 MAX_V4_PREFIX_LEN = 24  # /24 or narrower (/25…/32)
 MAX_V6_PREFIX_LEN = 64  # /64 or narrower
 
+# Well-known public resolvers / anycast — not a typical admin SSH source.
+# Seeding these without --force can build a lockdown allowlist that is useless
+# (or dangerous) for the operator's real laptop IP.
+WELL_KNOWN_ANYCAST_HOSTS = frozenset(
+    {
+        "8.8.8.8",
+        "8.8.4.4",
+        "1.1.1.1",
+        "1.0.0.1",
+        "9.9.9.9",
+    }
+)
 
 def cidr_for_ip(ip: str) -> str:
     token = (ip or "").strip()
@@ -177,6 +189,7 @@ def seed_never_ban(
     cfg = load_config()
     cur = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
     raw_ip = (ip or "").strip() or None
+    anycast_warning: str | None = None
     if raw_ip:
         canonical, err = validate_never_ban_cidr(raw_ip)
         if err or not canonical:
@@ -192,6 +205,26 @@ def seed_never_ban(
                     "reject /0 and junk"
                 ),
             }
+        host_only = canonical.split("/")[0]
+        if host_only in WELL_KNOWN_ANYCAST_HOSTS and not force:
+            return {
+                "ok": False,
+                "written": False,
+                "ip": canonical,
+                "never_ban_cidrs": cur,
+                "reason": "well_known_anycast",
+                "warning": (
+                    f"{host_only} looks like a public DNS/anycast resolver, not an admin SSH source; "
+                    "lockdown would allowlist this address instead of your laptop. "
+                    "Pass your real admin IP, or --force if you really mean it."
+                ),
+                "hint": "use --ip <your-admin-egress> or --force to override",
+            }
+        if host_only in WELL_KNOWN_ANYCAST_HOSTS and force:
+            anycast_warning = (
+                f"{host_only} is a well-known anycast/DNS address; "
+                "lockdown allowlist will use never_ban only — confirm this is intentional"
+            )
         detected = canonical
     else:
         detected_bare = detect_public_ip()
@@ -299,6 +332,8 @@ def seed_never_ban(
         "never_ban_cidrs": merged,
         "reason": "seeded",
     }
+    if anycast_warning:
+        out["warning"] = anycast_warning
     if not raw_ip:
         out["hint"] = (
             "seeds THIS machine egress IP — on a VPS that is the VPS, not your laptop; "

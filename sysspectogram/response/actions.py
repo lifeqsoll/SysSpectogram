@@ -413,6 +413,29 @@ class NftBackend:
             return f"unban attempted for {ip} ({ipt})"
         return f"unban recorded {ip}"
 
+    def list_nft_set_ips(self) -> list[str]:
+        """Parse live ``nft list set`` for ban4/ban6 (same token scan as the helper)."""
+        if not shutil.which("nft"):
+            return []
+        ips: list[str] = []
+        seen: set[str] = set()
+        for set_name in ("ban4", "ban6"):
+            code, out = self._run(["nft", "list", "set", "inet", "sysspectogram", set_name])
+            if code != 0 or not out:
+                continue
+            for token in out.split():
+                tok = token.strip().strip(",{}")
+                if not tok:
+                    continue
+                try:
+                    addr = str(ip_address(tok))
+                except ValueError:
+                    continue
+                if addr not in seen:
+                    seen.add(addr)
+                    ips.append(addr)
+        return ips
+
     def list_bans(self) -> list[BanRecord]:
         now = time.time()
         expired = [ip for ip, b in self.bans.items() if b.expires and b.expires <= now]
@@ -420,6 +443,13 @@ class NftBackend:
             self.unban_ip(ip)
         self.expire_kirk_isolate()
         return list(self.bans.values())
+
+    def list_bans_result(self) -> dict:
+        """CLI-facing list: prefer live nft sets when root; else in-memory records."""
+        if os.geteuid() == 0 and shutil.which("nft"):
+            return {"ok": True, "ips": self.list_nft_set_ips(), "source": "nft"}
+        mem = [b.ip for b in self.list_bans()]
+        return {"ok": True, "ips": mem, "source": "memory"}
 
     def apply_lockdown(
         self,

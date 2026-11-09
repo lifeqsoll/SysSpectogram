@@ -544,9 +544,26 @@
     };
   }
 
+  async function applyUnlockFieldLen() {
+    const el = document.getElementById("set-unlock");
+    if (!el) return;
+    try {
+      const r = await fetch("/api/health", { credentials: "same-origin" });
+      if (!r.ok) return;
+      const h = await r.json();
+      const n = Number(h.unlock_code_len);
+      if (!Number.isFinite(n) || n < 6) return;
+      el.maxLength = n;
+      if ((el.placeholder || "").length !== n) {
+        el.placeholder = "X".repeat(n);
+      }
+    } catch (_) {}
+  }
+
   async function boot() {
     themeInit();
     bindControls();
+    await applyUnlockFieldLen();
     if (typeof Chart !== "undefined") {
       charts.cpu = mkChart("chart-cpu", "#2dd4bf");
       charts.mem = mkChart("chart-mem", "#f0a060");

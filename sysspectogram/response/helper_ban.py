@@ -106,11 +106,20 @@ class HelperBanBackend:
         return f"unbanned {ip} backend=helper"
 
     def list_bans(self) -> list[Any]:
+        """Best-effort list; prefer :meth:`list_bans_result` when empty must not look like success."""
+        out = self.list_bans_result()
+        return list(out.get("ips") or []) if out.get("ok") else []
+
+    def list_bans_result(self) -> dict[str, Any]:
         reply = self._call("ban.list", {})
         if not reply.get("ok"):
-            return []
+            return {
+                "ok": False,
+                "ips": [],
+                "error": str(reply.get("message") or "helper ban.list failed"),
+            }
         data = reply.get("data") or {}
-        return list(data.get("ips") or [])
+        return {"ok": True, "ips": list(data.get("ips") or [])}
 
     def selftest(self) -> str:
         reply = self._call("ban.selftest", {})
@@ -154,6 +163,15 @@ class NoneBanBackend:
 
     def list_bans(self) -> list[Any]:
         return []
+
+    def list_bans_result(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "ips": [],
+            "error": "no privileges (install helper and join group sysspectogram)",
+            "hint": "sudo bash scripts/install-helper-from-release.sh <TAG> "
+            "&& usermod -aG sysspectogram $USER; re-login",
+        }
 
     def selftest(self) -> str:
         return "no privileges (run helper install)"

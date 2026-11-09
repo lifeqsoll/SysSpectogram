@@ -1371,23 +1371,52 @@ def _cmd_bans(args: argparse.Namespace) -> int:
 
     from sysspectogram.config import load_config
     from sysspectogram.response.actions import NftBackend
+    from sysspectogram.response.helper_ban import NoneBanBackend, select_ban_backend
 
     cfg = load_config()
     never = [str(x) for x in ((cfg.get("response") or {}).get("never_ban_cidrs") or [])]
     nft = NftBackend(never_ban_cidrs=never)
     action = str(getattr(args, "bans_action", "") or "")
     if action == "list":
-        # Prefer helper list when available
-        try:
-            from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
-
-            if helper_available() and os.geteuid() != 0:
-                ips = HelperBanBackend(never_ban_cidrs=never).list_bans()
-            else:
-                ips = [b.ip for b in nft.list_bans()]
-        except Exception:
-            ips = [b.ip for b in nft.list_bans()]
-        print(json.dumps({"ok": True, "ips": ips}, ensure_ascii=False))
+        backend = select_ban_backend(never_ban_cidrs=never)
+        if isinstance(backend, NoneBanBackend):
+            out = backend.list_bans_result()
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "ips": [],
+                        "error": out.get("error") or "no privileges",
+                        "hint": out.get("hint"),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        lister = getattr(backend, "list_bans_result", None)
+        if callable(lister):
+            result = lister()
+        else:
+            result = {"ok": True, "ips": [getattr(b, "ip", b) for b in backend.list_bans()]}
+        if not result.get("ok"):
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "ips": [],
+                        "error": result.get("error") or "ban.list failed",
+                        "hint": result.get("hint"),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        print(
+            json.dumps(
+                {"ok": True, "ips": list(result.get("ips") or []), "source": result.get("source")},
+                ensure_ascii=False,
+            )
+        )
         return 0
     if action == "unban":
         msg = nft.unban_ip(str(args.ip))
@@ -1639,14 +1668,63 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
                 current = {}
         except (OSError, ValueError):
             current = {}
+    # Canonical modes match schema; synonyms normalize before write.
+    _MODE_ALIASES = {
+        "enforce": "shield",
+        "soft": "shield",
+        "full": "aggressive",
+        "notify": "observe",
+    }
+    _MODE_CANONICAL = frozenset({"observe", "shield", "aggressive", "isolate"})
+    _MODE_ENFORCING = frozenset({"shield", "aggressive", "isolate"})
     applied: dict = {}
     rejected: list[str] = []
     for key, value in changes.items():
         if key not in OVERLAY_ALLOWED:
             rejected.append(str(key))
             continue
-        if key == "response.mode" and value == "enforce":
-            value = "shield"
+        if key == "response.mode":
+            if not isinstance(value, str) or not str(value).strip():
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "response.mode must be observe|shield|aggressive|isolate "
+                            "(aliases: soft→shield, full→aggressive, notify→observe, enforce→shield)",
+                        }
+                    )
+                )
+                return 2
+            mode = str(value).strip().lower()
+            mode = _MODE_ALIASES.get(mode, mode)
+            if mode not in _MODE_CANONICAL:
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": f"invalid response.mode={value!r}",
+                            "hint": "allowed: observe, shield, aggressive, isolate "
+                            "(aliases soft/full/notify/enforce)",
+                        }
+                    )
+                )
+                return 2
+            value = mode
+            if mode in _MODE_ENFORCING:
+                from sysspectogram.response.helper_ban import helper_available
+
+                if os.geteuid() != 0 and not helper_available():
+                    print(
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "error": "soft/full/isolate require helper (nft bans)",
+                                "hint": "sudo bash scripts/install-helper-from-release.sh <TAG> "
+                                "&& usermod -aG sysspectogram $USER; re-login",
+                            }
+                        )
+                    )
+                    return 2
         if key == "response.never_ban_cidrs":
             from sysspectogram.admin_ip import validate_never_ban_value
 
@@ -1672,30 +1750,9 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 print(json.dumps({"ok": False, "error": f"allow_ssh_cidrs: {exc}"}))
                 return 2
-        elif not isinstance(value, (bool, int, float, str)):
+        elif key != "response.mode" and not isinstance(value, (bool, int, float, str)):
             rejected.append(str(key))
             continue
-        if key == "response.mode" and str(value).lower() in {
-            "soft",
-            "full",
-            "isolate",
-            "shield",
-            "aggressive",
-        }:
-            from sysspectogram.response.helper_ban import helper_available
-
-            if os.geteuid() != 0 and not helper_available():
-                print(
-                    json.dumps(
-                        {
-                            "ok": False,
-                            "error": "soft/full/isolate require helper (nft bans)",
-                            "hint": "sudo bash scripts/install-helper-from-release.sh <TAG> "
-                            "&& usermod -aG sysspectogram $USER; re-login",
-                        }
-                    )
-                )
-                return 2
         current[str(key)] = value
         applied[str(key)] = value
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -2988,7 +3045,7 @@ def build_parser() -> argparse.ArgumentParser:
     hm_snb.add_argument(
         "--force",
         action="store_true",
-        help="overwrite corrupt user-settings.json (writes .bak first)",
+        help="overwrite corrupt user-settings.json (.bak) or allow well-known anycast DNS IPs",
     )
     hm_snb.set_defaults(func=_cmd_home_seed_never_ban)
     hm_un = hm_sub.add_parser(

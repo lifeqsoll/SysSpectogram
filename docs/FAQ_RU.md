@@ -6,6 +6,10 @@
 
 Да, если включить **soft/full/isolate** без вашего admin IP в `response.never_ban_cidrs`. Сначала never-ban, потом баны. Guard также не банит IP **активной SSH-сессии**, когда видит их. См. [FRIEND.md](FRIEND.md) и `home health`.
 
+## Нужен ли логин для локального веб-дашборда?
+
+На loopback без public Mini App URL **любой локальный процесс видит графики/скоры** без сессии; мутации SOAR по-прежнему требуют unlock. В состоянии LOCKED списки банов/процессов/allowlist редактируются.
+
 ## Почему protect остановился после выхода из SSH?
 
 User systemd гасит сервисы без **linger**:

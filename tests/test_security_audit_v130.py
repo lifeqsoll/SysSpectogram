@@ -499,8 +499,10 @@ def test_m05_health_host_and_body():
         resp2 = conn2.getresponse()
         body = json.loads(resp2.read().decode())
         assert resp2.status == 200
-        assert body == {"ok": True}
+        assert body.get("ok") is True
         assert "public_url" not in body
+        # unlock_code_len is public UI metadata (not a secret)
+        assert isinstance(body.get("unlock_code_len"), int)
         conn2.close()
     finally:
         httpd.shutdown()

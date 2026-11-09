@@ -120,6 +120,28 @@ class WebAppState:
             "::1",
         }
 
+    def control_locked(self) -> bool:
+        """True when console unlock is required and not yet satisfied."""
+        if self.unlock is not None and self.unlock.enabled and not self.unlock.unlocked():
+            return True
+        if callable(getattr(self.controllers, "unlock_ok", None)):
+            try:
+                return not bool(self.controllers.unlock_ok())
+            except Exception:
+                return True
+        return False
+
+    def redact_locked_fields(self, snap: dict[str, Any]) -> dict[str, Any]:
+        """When LOCKED, drop bans/processes/allowlist (scores may remain)."""
+        if not self.control_locked():
+            return snap
+        out = dict(snap)
+        out["processes"] = []
+        out["bans"] = []
+        out["allowlist"] = []
+        out["control_unlocked"] = False
+        return out
+
     def enriched_snapshot(self) -> dict[str, Any]:
         snap = self.bus.snapshot()
         if self.controllers is not None:
@@ -128,22 +150,7 @@ class WebAppState:
             if self.controllers.watcher is not None:
                 snap["quiet"] = self.controllers.watcher.state.quiet
                 snap["lockdown"] = self.controllers.watcher.state.lockdown
-        # Mutations locked → hide process list / ban details (stolen token can still see scores)
-        locked = False
-        if self.unlock is not None and self.unlock.enabled and not self.unlock.unlocked():
-            locked = True
-        elif callable(getattr(self.controllers, "unlock_ok", None)):
-            try:
-                locked = not bool(self.controllers.unlock_ok())
-            except Exception:
-                locked = True
-        if locked:
-            snap["processes"] = []
-            snap["bans"] = []
-            snap["allowlist"] = []
-            snap["control_unlocked"] = False
-        return snap
-
+        return self.redact_locked_fields(snap)
 
 def _host_header_name(raw: str) -> str:
     """Extract hostname from Host header; keep IPv6 literals like ``[::1]:port``."""
@@ -288,7 +295,9 @@ def _make_handler(app: WebAppState):
             if path == "/chart.umd.min.js":
                 return self._static("chart.umd.min.js", "application/javascript; charset=utf-8")
             if path == "/api/health":
-                body: dict[str, Any] = {"ok": True}
+                # unlock_code_len is not secret — UI needs it for maxlength (codes are alphanumeric).
+                code_len = int(app.unlock.code_len) if app.unlock is not None else 10
+                body: dict[str, Any] = {"ok": True, "unlock_code_len": code_len}
                 if self._authorized():
                     body["public_url"] = app.public_url or None
                     body["actions"] = app.controllers is not None
@@ -302,8 +311,9 @@ def _make_handler(app: WebAppState):
                 return self._json(200, app.enriched_snapshot())
             if path == "/api/status":
                 if app.controllers is None:
-                    return self._json(200, {"ok": True, "dry_run": True, "bans": []})
-                return self._json(200, {"ok": True, **app.controllers.status()})
+                    return self._json(200, app.redact_locked_fields({"ok": True, "dry_run": True, "bans": []}))
+                st = {"ok": True, **app.controllers.status()}
+                return self._json(200, app.redact_locked_fields(st))
             if path == "/api/stream":
                 return self._sse()
             self._json(404, {"ok": False, "error": "not found"})
