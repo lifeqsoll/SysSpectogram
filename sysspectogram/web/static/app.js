@@ -50,7 +50,8 @@
       confirm: "Confirm",
       cancel: "Cancel",
       yes: "Yes",
-      authNote: "Auth: local loopback allowed · Telegram Mini App uses initData (only TELEGRAM_CHAT_ID)",
+      authNote: "Auth: enter unlock code in Settings (session cookie) · Telegram Mini App uses initData",
+      authRequired: "Session required: open Settings and enter the host unlock code.",
     },
     ru: {
       liveBadge: "Защита хоста · живые метрики",
@@ -72,10 +73,12 @@
       confirm: "Подтвердить",
       cancel: "Отмена",
       yes: "Да",
-      authNote: "Auth: localhost · Mini App — initData (только TELEGRAM_CHAT_ID)",
+      authNote: "Auth: unlock-код в Settings (сессия) · Mini App — initData",
+      authRequired: "Нужна сессия: откройте Settings и введите unlock-код с консоли хоста.",
     },
   };
   let lang = localStorage.getItem("ss_lang") === "ru" ? "ru" : "en";
+  let streamStarted = false;
 
   function applyI18n() {
     const pack = I18N[lang] || I18N.en;
@@ -478,6 +481,7 @@
           const res = await fetch("/api/unlock", {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-SS-CSRF": "1" },
+            credentials: "same-origin",
             body: JSON.stringify({ code }),
           });
           const data = await res.json();
@@ -488,6 +492,9 @@
           msg.textContent = "control UNLOCKED";
           document.getElementById("set-unlock").value = "";
           if (data.status) renderStatus({ ...data.status, control_unlocked: true });
+          const note = document.getElementById("auth-note");
+          if (note) note.textContent = (I18N[lang] || I18N.en).authNote;
+          startStream();
         } catch (e) {
           msg.textContent = "unlock error: " + e;
         }
@@ -526,7 +533,18 @@
     }
   }
 
+  function showAuthRequired() {
+    const pack = I18N[lang] || I18N.en;
+    const text = pack.authRequired || pack.authNote;
+    const note = document.getElementById("auth-note");
+    const msg = document.getElementById("action-msg");
+    if (note) note.textContent = text;
+    if (msg) msg.textContent = text;
+  }
+
   function startStream() {
+    if (streamStarted) return;
+    streamStarted = true;
     const es = new EventSource("/api/stream");
     es.onmessage = (ev) => {
       try {
@@ -535,13 +553,37 @@
     };
     es.onerror = () => {
       es.close();
-      setInterval(async () => {
+      streamStarted = false;
+      const poll = setInterval(async () => {
         try {
           const r = await fetch("/api/snapshot", { credentials: "same-origin" });
+          if (r.status === 401) {
+            clearInterval(poll);
+            showAuthRequired();
+            return;
+          }
           if (r.ok) applySnap(await r.json());
         } catch (_) {}
       }, 1000);
     };
+  }
+
+  async function probeSession() {
+    try {
+      const r = await fetch("/api/status", { credentials: "same-origin" });
+      if (r.status === 401) {
+        showAuthRequired();
+        return false;
+      }
+      if (r.ok) {
+        try {
+          renderStatus(await r.json());
+        } catch (_) {}
+        return true;
+      }
+    } catch (_) {}
+    showAuthRequired();
+    return false;
   }
 
   async function applyUnlockFieldLen() {
@@ -572,8 +614,11 @@
     if (tg && tg.initData) {
       const ok = await authTelegram();
       if (!ok) return;
+      startStream();
+      return;
     }
-    startStream();
+    const hasSession = await probeSession();
+    if (hasSession) startStream();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

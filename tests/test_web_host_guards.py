@@ -30,21 +30,26 @@ def test_snapshot_rejects_foreign_host():
         assert resp.status == 403, body
         conn.close()
 
+        # Valid Host without session → 401 (loopback alone is not enough).
         conn2 = HTTPConnection("127.0.0.1", port, timeout=2)
         conn2.putrequest("GET", "/api/snapshot", skip_host=True)
         conn2.putheader("Host", "127.0.0.1")
         conn2.endheaders()
         resp2 = conn2.getresponse()
-        assert resp2.status == 200, resp2.read()
+        body2 = resp2.read()
+        assert resp2.status == 401, body2
+        assert b"auth required" in body2
         conn2.close()
 
-        # Bracketed IPv6 Host must not 403 (::1 is always allowlisted).
+        # Bracketed IPv6 Host must not 403 (::1 is always allowlisted) — still needs auth.
         conn3 = HTTPConnection("127.0.0.1", port, timeout=2)
         conn3.putrequest("GET", "/api/snapshot", skip_host=True)
         conn3.putheader("Host", f"[::1]:{port}")
         conn3.endheaders()
         resp3 = conn3.getresponse()
-        assert resp3.status == 200, resp3.read()
+        body3 = resp3.read()
+        assert resp3.status == 401, body3
+        assert b"auth required" in body3
         conn3.close()
     finally:
         httpd.shutdown()

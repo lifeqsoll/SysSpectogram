@@ -8,7 +8,7 @@ Yes, if you enable **soft/full/isolate** auto-ban without listing your admin SSH
 
 ## Does the local web dashboard need a login?
 
-On loopback (`127.0.0.1`) with no public Mini App URL, **any local process can read live charts/scores** without a session; SOAR mutations still need unlock/session. When control is LOCKED, ban/process/allowlist lists are redacted even for those local reads.
+Yes for live data: `/api/status`, `/api/snapshot`, and `/api/stream` need a session cookie (enter the host unlock code in Settings) or Bearer from `state/web.token`. `/api/health` stays public (`ok` + unlock code length only). When control is LOCKED, authorized responses still redact bans/processes/allowlist.
 
 ## Why did protect stop after I closed SSH?
 

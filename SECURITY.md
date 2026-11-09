@@ -79,7 +79,7 @@ Defaults are intentionally cautious.
 - Unlock language follows `ui.lang` once per guard start (no dual EN+RU spam from one process).
 - Local SOAR uses `state/control.sock` with the **same** unlock gate as Telegram.
 - Multi-VPS fleet control uses **SSH + device tokens** (host pair code); see [docs/FLEET.md](docs/FLEET.md). No public HTTPS control plane.
-- Loopback web reads (no public URL): any local process can see charts/scores; LOCKED still redacts bans/processes/allowlist. Mutations need unlock/session.
+- Web read APIs (`/api/status`, `/api/snapshot`, `/api/stream`) require a valid `ss_session` cookie or Bearer (`state/web.token`) — loopback alone is not enough. `/api/health` stays public (`ok` + `unlock_code_len` only). When control is LOCKED, authorized responses still redact bans/processes/allowlist.
 
 **Same-UID ceiling for unlock (I-03):** the unlock gate protects a stolen Telegram bot token / Mini App session — **not** malware running as the same Unix user as the guard. That process can already read `state/unlock.code` (mode 0600, owner-only) or the `.env` bot token. Persisted `state/control.unlocked` (only when unlock TTL is 0) accepts the exact marker `1` and refuses symlinks / arbitrary content; it is still same-UID writable by design. Treat same-UID compromise as full control of the guard process.
 

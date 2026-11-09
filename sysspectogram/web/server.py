@@ -302,9 +302,10 @@ def _make_handler(app: WebAppState):
                     body["public_url"] = app.public_url or None
                     body["actions"] = app.controllers is not None
                 return self._json(200, body)
+            # Read metrics require a real session/Bearer — loopback alone is not enough.
             if path in {"/api/snapshot", "/api/status", "/api/stream"}:
-                if not self._authorized_read():
-                    return self._json(401, {"ok": False, "error": "unauthorized"})
+                if not self._authorized():
+                    return self._json(401, {"ok": False, "error": "auth required"})
             elif not self._authorized():
                 return self._json(401, {"ok": False, "error": "unauthorized"})
             if path == "/api/snapshot":

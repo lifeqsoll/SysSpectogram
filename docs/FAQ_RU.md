@@ -8,7 +8,7 @@
 
 ## Нужен ли логин для локального веб-дашборда?
 
-На loopback без public Mini App URL **любой локальный процесс видит графики/скоры** без сессии; мутации SOAR по-прежнему требуют unlock. В состоянии LOCKED списки банов/процессов/allowlist редактируются.
+Да для живых данных: `/api/status`, `/api/snapshot`, `/api/stream` требуют cookie-сессию (unlock-код в Settings) или Bearer из `state/web.token`. `/api/health` публичный (`ok` + длина кода). В LOCKED авторизованные ответы всё ещё редактируют bans/processes/allowlist.
 
 ## Почему protect остановился после выхода из SSH?
 
