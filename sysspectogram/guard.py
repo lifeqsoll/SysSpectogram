@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import fcntl
+import math
 import os
 import signal
 import socket
@@ -76,13 +77,9 @@ def _benign_sudo_sudoers(comm: str | None, path: str | None) -> bool:
 
 def _resolve(path: str | Path) -> Path:
     """Resolve relative paths. Runtime dirs follow SYSSPECTOGRAM_HOME via state_root()."""
-    p = Path(path)
-    if p.is_absolute():
-        return p
-    rel = str(path).replace("\\", "/")
-    if rel.startswith(("state/", "reports/", "artifacts/")):
-        return (state_root() / p).resolve()
-    return (ROOT / p).resolve()
+    from sysspectogram.config import resolve_runtime_path
+
+    return resolve_runtime_path(path)
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -851,7 +848,14 @@ def run_guard(
                 )
                 daemon = CollectDaemon(collector, interval_sec=1.0, buffer_size=None)
                 mon_cfg_local = config.get("monitor") or {}
-                interval_sec = float(mon_cfg_local.get("interval_sec", 5))
+                try:
+                    interval_sec = float(mon_cfg_local.get("interval_sec", 5))
+                    if not math.isfinite(interval_sec) or interval_sec <= 0:
+                        raise ValueError(interval_sec)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"monitor.interval_sec invalid ({mon_cfg_local.get('interval_sec')!r}): {exc}"
+                    ) from exc
                 last_print = 0.0
                 # notorch: no host CNN, so host_risk mirrors the fused agent/perimeter risk
                 nt_store = _open_timeseries()
@@ -918,7 +922,14 @@ def run_guard(
         )
         buf: deque = deque(maxlen=infer.window_size)
         daemon = CollectDaemon(collector, interval_sec=1.0, buffer_size=None)
-        interval_sec = float(mon_cfg.get("interval_sec", 5))
+        try:
+            interval_sec = float(mon_cfg.get("interval_sec", 5))
+            if not math.isfinite(interval_sec) or interval_sec <= 0:
+                raise ValueError(interval_sec)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"monitor.interval_sec invalid ({mon_cfg.get('interval_sec')!r}): {exc}"
+            ) from exc
         cooldown_sec = float(mon_cfg.get("cooldown_sec", 60))
         top_n = int(mon_cfg.get("top_processes", 3))
         last_alert = 0.0
@@ -1374,10 +1385,37 @@ def run_guard(
 
     console.print(f"[bold]guard[/] host={host_id} telegram={bot is not None}")
 
+    def _host_loop_safe() -> None:
+        try:
+            host_loop()
+        except Exception as exc:
+            console.print(f"[bold red]guard host-ml CRASHED[/] {exc}")
+            try:
+                fail = _resolve("state/host_ml.failed")
+                fail.parent.mkdir(parents=True, exist_ok=True)
+                fail.write_text(f"{time.time()}\n{exc}\n", encoding="utf-8")
+            except Exception:
+                pass
+            try:
+                from sysspectogram.web.bus import LiveAlert
+
+                GLOBAL_BUS.push_alert(
+                    LiveAlert(
+                        ts=time.time(),
+                        severity="critical",
+                        title="HOST-ML CRASHED",
+                        body=str(exc)[:500],
+                        kind="health",
+                        rule_id="host_ml_crash",
+                    )
+                )
+            except Exception:
+                pass
+
     threads = [
         threading.Thread(target=perimeter_loop, name="perimeter", daemon=True),
         threading.Thread(target=telegram_loop, name="telegram", daemon=True),
-        threading.Thread(target=host_loop, name="host-ml", daemon=True),
+        threading.Thread(target=_host_loop_safe, name="host-ml", daemon=True),
     ]
 
     honeypot = None
@@ -1695,7 +1733,9 @@ def run_guard(
                                     bot.client.send_message(
                                         bot.prefix(
                                             f"KIRK [critical] AUTO ISOLATE after {alert.rule_id}: {msg_iso}\n"
-                                            f"/kirk_release after /unlock (TTL={kirk_isolate_ttl}s)"
+                                            f"Release: /kirk_release after /unlock, or SSH: "
+                                            f"sysspectogram control action kirk_release "
+                                            f"(TTL={kirk_isolate_ttl}s; DNS/443 egress kept)"
                                         )
                                     )
                                 except Exception:
