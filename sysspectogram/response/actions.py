@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -94,6 +95,7 @@ class NftBackend:
         self.max_ban_ttl_sec = float(max_ban_ttl_sec)
         self._kirk_expires: float | None = None
         self._ensure_table()
+        self._load_kirk_deadline()
 
     def is_never_ban(self, ip: str) -> bool:
         try:
@@ -113,11 +115,15 @@ class NftBackend:
         return False
 
     def _clamp_ttl(self, ttl_sec: float | None) -> float:
+        """Clamp a positive finite TTL. ``None`` → max. Raises ``ValueError`` for junk."""
         if ttl_sec is None:
             return self.max_ban_ttl_sec
-        ttl = float(ttl_sec)
-        if ttl <= 0:
-            return self.max_ban_ttl_sec
+        try:
+            ttl = float(ttl_sec)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid ttl: {ttl_sec!r}") from exc
+        if not math.isfinite(ttl) or ttl <= 0:
+            raise ValueError(f"ttl must be a positive finite number, got {ttl_sec!r}")
         return max(DEFAULT_MIN_BAN_TTL_SEC, min(ttl, self.max_ban_ttl_sec))
 
     def _run(self, cmd: list[str]) -> tuple[int, str]:
@@ -126,6 +132,12 @@ class NftBackend:
             return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
         except (OSError, subprocess.SubprocessError) as exc:
             return 1, str(exc)
+
+    @staticmethod
+    def _nft_comment(text: str) -> str:
+        """Quote an nft comment so colons are not parsed as syntax (argv token)."""
+        cleaned = str(text or "").replace('"', "").replace("\n", " ").replace("\r", " ").strip()
+        return f'"{cleaned}"'
 
     def _nft_stdin(self, text: str) -> tuple[int, str]:
         """Apply nft ruleset text via argv ``nft -f -`` (no shell)."""
@@ -268,7 +280,10 @@ class NftBackend:
             reason = is_protected(ip, never_ban_cidrs=self.never_ban_cidrs)
             if reason:
                 return f"protected skip {ip} ({reason})"
-        ttl = self._clamp_ttl(ttl_sec)
+        try:
+            ttl = self._clamp_ttl(ttl_sec)
+        except ValueError as exc:
+            return f"refuse ban: {exc}"
         expires = time.time() + ttl
         comment = f"sysspectogram:{ip}:{int(expires)}"
         if dry_run:
@@ -424,7 +439,62 @@ class NftBackend:
         for ip in expired:
             self.unban_ip(ip)
         self.expire_kirk_isolate()
+        self.expire_shield_ports()
         return list(self.bans.values())
+
+    @staticmethod
+    def _kirk_state_path() -> Path:
+        from sysspectogram.config import state_root
+
+        return state_root() / "state" / "kirk_isolate.json"
+
+    def _write_kirk_deadline(self, expires: float, allow_cidrs: list[str]) -> None:
+        path = self._kirk_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
+        payload = {
+            "expires_at": float(expires),
+            "allow_cidrs": list(allow_cidrs),
+            "updated_at": time.time(),
+        }
+        path.write_text(__import__("json").dumps(payload, indent=2) + "\n", encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+    def _clear_kirk_deadline(self) -> None:
+        path = self._kirk_state_path()
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        self._kirk_expires = None
+
+    def _load_kirk_deadline(self) -> None:
+        """Restore TTL from disk; release ss_kirk if expired or deadline missing."""
+        path = self._kirk_state_path()
+        table_present = False
+        if shutil.which("nft"):
+            code, _ = self._run(["nft", "list", "table", "inet", "ss_kirk"])
+            table_present = code == 0
+        expires: float | None = None
+        if path.is_file():
+            try:
+                data = __import__("json").loads(path.read_text(encoding="utf-8"))
+                expires = float(data.get("expires_at") or 0) or None
+            except (OSError, ValueError, TypeError):
+                expires = None
+        if table_present and (expires is None or time.time() >= float(expires)):
+            self.kirk_release(dry_run=False)
+            return
+        if expires is not None and time.time() < float(expires):
+            self._kirk_expires = float(expires)
+        elif expires is not None:
+            self._clear_kirk_deadline()
 
     def list_bans_result(self) -> dict:
         """CLI-facing list: live nft sets when root; memory only for in-process non-root."""
@@ -500,7 +570,7 @@ class NftBackend:
         if not shutil.which("nft"):
             return "nft required for lockdown"
         self._ensure_chain()
-        self._run(
+        code_est, out_est = self._run(
             [
                 "nft",
                 "add",
@@ -513,9 +583,11 @@ class NftBackend:
                 "established,related",
                 "accept",
                 "comment",
-                "sysspectogram:lockdown:est",
+                self._nft_comment("sysspectogram:lockdown:est"),
             ]
         )
+        if code_est != 0:
+            return f"lockdown established rule failed: {out_est.strip()}"
         for fam, canon in families:
             code, out = self._run(
                 [
@@ -530,7 +602,7 @@ class NftBackend:
                     canon,
                     "accept",
                     "comment",
-                    f"sysspectogram:lockdown:allow:{canon}",
+                    self._nft_comment(f"sysspectogram:lockdown:allow:{canon}"),
                 ]
             )
             if code != 0:
@@ -550,7 +622,7 @@ class NftBackend:
                 "syn",
                 "drop",
                 "comment",
-                "sysspectogram:lockdown:syn",
+                self._nft_comment("sysspectogram:lockdown:syn"),
             ]
         )
         if code != 0:
@@ -579,7 +651,7 @@ class NftBackend:
                 fam, canon = nft_cidr_family(cidr)
             except ValueError:
                 return f"syn_rate_limit refused: invalid cidr {cidr!r}"
-            self._run(
+            code_a, out_a = self._run(
                 [
                     "nft",
                     "add",
@@ -592,9 +664,11 @@ class NftBackend:
                     canon,
                     "accept",
                     "comment",
-                    f"sysspectogram:synrl:allow:{canon}",
+                    self._nft_comment(f"sysspectogram:synrl:allow:{canon}"),
                 ]
             )
+            if code_a != 0:
+                return f"syn_rate_limit allow failed for {canon}: {out_a.strip()}"
         code, out = self._run(
             [
                 "nft",
@@ -617,18 +691,66 @@ class NftBackend:
                 "packets",
                 "drop",
                 "comment",
-                "sysspectogram:synrl:drop",
+                self._nft_comment("sysspectogram:synrl:drop"),
             ]
         )
         if code != 0:
             return f"syn_rate_limit failed: {out.strip()}"
         return f"syn_rate_limit active rate over {rate} burst={burst} allow={allows or '-'}"
 
-    def shield_port(self, port: int, ttl_sec: float = 3600.0, dry_run: bool = False) -> str:
+    def shield_port(
+        self,
+        port: int,
+        ttl_sec: float = 3600.0,
+        dry_run: bool = False,
+        *,
+        force: bool = False,
+        ssh_port: int = 22,
+    ) -> str:
+        try:
+            port_i = int(port)
+        except (TypeError, ValueError):
+            return f"shield refused: invalid port {port!r}"
+        if port_i < 1 or port_i > 65535:
+            return f"shield refused: port out of range {port_i}"
+        if not force and port_i == int(ssh_port):
+            return f"shield refused: port {port_i} is SSH (pass force=True to override)"
+        try:
+            ttl = self._clamp_ttl(ttl_sec)
+        except ValueError as exc:
+            return f"shield refused: {exc}"
         if dry_run:
-            return f"dry-run shield port {port} for {ttl_sec}s"
+            return f"dry-run shield port {port_i} for {ttl}s (ct state new)"
         if shutil.which("nft"):
-            comment = f"sysspectogram:port:{port}:{int(time.time() + ttl_sec)}"
+            self._ensure_chain()
+            # Accept never_ban before drop so admin SSH path is not cut if they force 22.
+            for cidr in self.never_ban_cidrs:
+                try:
+                    from sysspectogram.net_ip import nft_cidr_family
+
+                    fam, canon = nft_cidr_family(str(cidr))
+                except ValueError:
+                    continue
+                self._run(
+                    [
+                        "nft",
+                        "add",
+                        "rule",
+                        "inet",
+                        "sysspectogram",
+                        "input",
+                        fam,
+                        "saddr",
+                        canon,
+                        "tcp",
+                        "dport",
+                        str(port_i),
+                        "accept",
+                        "comment",
+                        self._nft_comment(f"sysspectogram:portallow:{port_i}:{canon}"),
+                    ]
+                )
+            comment = f"sysspectogram:port:{port_i}:{int(time.time() + ttl)}"
             code, out = self._run(
                 [
                     "nft",
@@ -637,17 +759,20 @@ class NftBackend:
                     "inet",
                     "sysspectogram",
                     "input",
+                    "ct",
+                    "state",
+                    "new",
                     "tcp",
                     "dport",
-                    str(port),
+                    str(port_i),
                     "drop",
                     "comment",
-                    comment,
+                    self._nft_comment(comment),
                 ]
             )
             if code != 0:
                 return f"shield failed: {out.strip()}"
-            return f"shielded port {port}"
+            return f"shielded port {port_i} ttl={ttl}"
         return "nft required for shield_port"
 
     def quarantine_ports(
@@ -661,7 +786,19 @@ class NftBackend:
 
         Keeps established/related. Does not cut egress (unlike kirk isolate).
         """
-        ports = [int(p) for p in (ports or [80, 443]) if int(p) > 0]
+        raw_ports = list(ports or [80, 443])
+        cleaned: list[int] = []
+        for p in raw_ports:
+            try:
+                pi = int(p)
+            except (TypeError, ValueError):
+                return f"quarantine refused: invalid port {p!r}"
+            if pi < 1 or pi > 65535:
+                return f"quarantine refused: port out of range {pi}"
+            if pi == 22:
+                return "quarantine refused: port 22 (SSH) — leave SSH untouched"
+            cleaned.append(pi)
+        ports = cleaned
         if not ports:
             return "quarantine refused: no ports"
         if dry_run:
@@ -670,7 +807,7 @@ class NftBackend:
             return "nft required for quarantine"
         self._ensure_chain()
         # established first (idempotent-ish — duplicate accepts are ok)
-        self._run(
+        code_est, out_est = self._run(
             [
                 "nft",
                 "add",
@@ -683,9 +820,11 @@ class NftBackend:
                 "established,related",
                 "accept",
                 "comment",
-                "sysspectogram:quarantine:est",
+                self._nft_comment("sysspectogram:quarantine:est"),
             ]
         )
+        if code_est != 0:
+            return f"quarantine established rule failed: {out_est.strip()}"
         applied: list[int] = []
         exp = int(time.time() + float(ttl_sec))
         for port in ports:
@@ -703,7 +842,7 @@ class NftBackend:
                     str(port),
                     "drop",
                     "comment",
-                    comment,
+                    self._nft_comment(comment),
                 ]
             )
             if code != 0:
@@ -766,10 +905,12 @@ class NftBackend:
     ) -> str:
         """Drop most traffic except allowlisted SSH sources (table inet ss_kirk).
 
-        TTL is tracked in-process; call ``expire_kirk_isolate`` / ``list_bans`` to release.
+        TTL is persisted to ``state/kirk_isolate.json`` so a guard restart still
+        releases the table. Output keeps DNS (udp/tcp 53) so resolvers work;
+        Telegram may still fail under isolate — release via SSH / TTL.
 
         All CIDRs are validated *before* any nft mutation so a typo cannot leave
-        a policy-drop table with no allow rules (and no way out via Telegram).
+        a policy-drop table with no allow rules.
         """
         from sysspectogram.net_ip import nft_cidr_family, validate_allow_ssh_cidrs
 
@@ -786,13 +927,25 @@ class NftBackend:
                 families.append(nft_cidr_family(cidr))
             except ValueError as exc:
                 return f"kirk_isolate refused: invalid cidr {cidr!r} ({exc})"
+        try:
+            ttl = self._clamp_ttl(ttl_sec)
+        except ValueError as exc:
+            return f"kirk_isolate refused: {exc}"
         if dry_run:
-            return f"dry-run kirk_isolate allow={allow_cidrs} ttl={ttl_sec}"
+            return f"dry-run kirk_isolate allow={allow_cidrs} ttl={ttl}"
         if not shutil.which("nft"):
             return "nft required for kirk_isolate"
-        self._run(["nft", "add", "table", "inet", "ss_kirk"])
+
+        def _rollback(reason: str) -> str:
+            self._run(["nft", "delete", "table", "inet", "ss_kirk"])
+            self._clear_kirk_deadline()
+            return f"kirk_isolate failed: {reason} (table removed)"
+
+        code, out = self._run(["nft", "add", "table", "inet", "ss_kirk"])
+        if code != 0 and "exists" not in out.lower():
+            return f"kirk_isolate failed: create table: {out.strip()}"
         self._run(["nft", "flush", "table", "inet", "ss_kirk"])
-        self._run(
+        for chain_argv in (
             [
                 "nft",
                 "add",
@@ -801,9 +954,7 @@ class NftBackend:
                 "ss_kirk",
                 "input",
                 "{ type filter hook input priority -10 ; policy drop ; }",
-            ]
-        )
-        self._run(
+            ],
             [
                 "nft",
                 "add",
@@ -812,11 +963,14 @@ class NftBackend:
                 "ss_kirk",
                 "output",
                 "{ type filter hook output priority -10 ; policy drop ; }",
-            ]
-        )
+            ],
+        ):
+            code, out = self._run(chain_argv)
+            if code != 0 and "exists" not in out.lower():
+                return _rollback(f"chain: {out.strip()}")
         # always allow loopback + established
         for chain in ("input", "output"):
-            self._run(
+            code, out = self._run(
                 [
                     "nft",
                     "add",
@@ -830,10 +984,22 @@ class NftBackend:
                     "accept",
                 ]
             )
-        self._run(["nft", "add", "rule", "inet", "ss_kirk", "input", "iif", "lo", "accept"])
-        self._run(["nft", "add", "rule", "inet", "ss_kirk", "output", "oif", "lo", "accept"])
+            if code != 0:
+                return _rollback(f"established {chain}: {out.strip()}")
+        for argv in (
+            ["nft", "add", "rule", "inet", "ss_kirk", "input", "iif", "lo", "accept"],
+            ["nft", "add", "rule", "inet", "ss_kirk", "output", "oif", "lo", "accept"],
+            # DNS so release advice / SSH tooling can still resolve names.
+            ["nft", "add", "rule", "inet", "ss_kirk", "output", "udp", "dport", "53", "accept"],
+            ["nft", "add", "rule", "inet", "ss_kirk", "output", "tcp", "dport", "53", "accept"],
+            # HTTPS egress (Telegram api.telegram.org and similar) — otherwise TG release dies.
+            ["nft", "add", "rule", "inet", "ss_kirk", "output", "tcp", "dport", "443", "accept"],
+        ):
+            code, out = self._run(argv)
+            if code != 0:
+                return _rollback(f"base allow: {out.strip()}")
         for fam, canon in families:
-            self._run(
+            code, out = self._run(
                 [
                     "nft",
                     "add",
@@ -850,7 +1016,9 @@ class NftBackend:
                     "accept",
                 ]
             )
-            self._run(
+            if code != 0:
+                return _rollback(f"ssh allow {canon}: {out.strip()}")
+            code, out = self._run(
                 [
                     "nft",
                     "add",
@@ -867,8 +1035,14 @@ class NftBackend:
                     "accept",
                 ]
             )
-        ttl = max(60.0, float(ttl_sec)) if ttl_sec else 3600.0
-        self._kirk_expires = time.time() + ttl
+            if code != 0:
+                return _rollback(f"ssh reply {canon}: {out.strip()}")
+        expires = time.time() + ttl
+        self._kirk_expires = expires
+        try:
+            self._write_kirk_deadline(expires, allow_cidrs)
+        except OSError as exc:
+            return _rollback(f"persist deadline: {exc}")
         return f"kirk_isolate active allow={allow_cidrs} ttl={ttl}"
 
     def kirk_release(self, dry_run: bool = False) -> str:
@@ -876,20 +1050,57 @@ class NftBackend:
             self._kirk_expires = None
             return "dry-run kirk_release"
         if not shutil.which("nft"):
+            self._clear_kirk_deadline()
             return "nft required"
         code, out = self._run(["nft", "delete", "table", "inet", "ss_kirk"])
-        self._kirk_expires = None
+        self._clear_kirk_deadline()
         if code != 0 and "No such file" not in out and "does not exist" not in out:
             return f"kirk_release failed: {out.strip()}"
         return "kirk_release ok"
 
     def expire_kirk_isolate(self, dry_run: bool = False) -> str | None:
-        """Release ss_kirk when TTL elapsed. Returns message if released, else None."""
+        """Release ss_kirk when TTL elapsed (memory or ``kirk_isolate.json``)."""
+        if self._kirk_expires is None:
+            self._load_kirk_deadline()
         if self._kirk_expires is None:
             return None
         if time.time() < self._kirk_expires:
             return None
         return self.kirk_release(dry_run=dry_run)
+
+    def expire_shield_ports(self, dry_run: bool = False) -> str | None:
+        """Remove ``sysspectogram:port:*`` rules whose comment deadline has passed."""
+        if dry_run or not shutil.which("nft"):
+            return None
+        code, out = self._run(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
+        if code != 0:
+            return None
+        now = time.time()
+        expired_ports: set[str] = set()
+        handles: list[str] = []
+        for line in out.splitlines():
+            m_exp = re.search(r"sysspectogram:port:(\d+):(\d+)", line)
+            if m_exp and now >= float(m_exp.group(2)):
+                expired_ports.add(m_exp.group(1))
+                m_h = re.search(r"handle\s+(\d+)", line)
+                if m_h:
+                    handles.append(m_h.group(1))
+        if expired_ports:
+            for line in out.splitlines():
+                m_allow = re.search(r"sysspectogram:portallow:(\d+):", line)
+                if not m_allow or m_allow.group(1) not in expired_ports:
+                    continue
+                m_h = re.search(r"handle\s+(\d+)", line)
+                if m_h:
+                    handles.append(m_h.group(1))
+        removed = 0
+        for handle in handles:
+            hc, _ = self._run(
+                ["nft", "delete", "rule", "inet", "sysspectogram", "input", "handle", handle]
+            )
+            if hc == 0:
+                removed += 1
+        return f"expire_shield removed={removed}" if removed else None
 
 
 def read_proc_comm(pid: int) -> str | None:
