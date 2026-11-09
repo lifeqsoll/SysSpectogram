@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -12,7 +14,12 @@ DEFAULT_LOGIN_TTL_SEC = 300.0
 
 
 class WebLoginCode:
-    """Alphanumeric one-time code printed at web start; mints a session only."""
+    """Alphanumeric one-time code printed at web start; mints a session only.
+
+    After a successful consume the next code is written immediately to
+    ``state/web.login`` (0600). Expiry rotates the code in-process so the file
+    does not keep a dead code.
+    """
 
     def __init__(
         self,
@@ -27,6 +34,8 @@ class WebLoginCode:
         self._code: str | None = None
         self._deadline = 0.0
         self._fails: list[float] = []
+        self._timer: threading.Timer | None = None
+        self._lock = threading.Lock()
         self.begin()
 
     def _gen(self) -> str:
@@ -34,32 +43,54 @@ class WebLoginCode:
         return "".join(CODE_ALPHABET[secrets.randbelow(n)] for _ in range(self.code_len))
 
     def begin(self) -> str:
-        self._code = self._gen()
-        self._deadline = time.time() + self.ttl_sec if self.ttl_sec > 0 else 0.0
-        self._fails = []
-        self._persist()
-        return self._code
+        with self._lock:
+            self._code = self._gen()
+            self._deadline = time.time() + self.ttl_sec if self.ttl_sec > 0 else 0.0
+            self._fails = []
+            self._persist_locked()
+            self._arm_locked()
+            return self._code
 
-    def _persist(self) -> None:
+    def _arm_locked(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        if self.ttl_sec <= 0 or not self._code:
+            return
+        delay = max(0.05, self._deadline - time.time())
+        timer = threading.Timer(delay, self._rotate_if_expired)
+        timer.daemon = True
+        self._timer = timer
+        timer.start()
+
+    def _rotate_if_expired(self) -> None:
+        with self._lock:
+            if not self._expired_locked():
+                self._arm_locked()
+                return
+        self.begin()
+
+    def _persist_locked(self) -> None:
         if not self.persist_path or not self._code:
             return
         try:
             self.persist_path.parent.mkdir(parents=True, exist_ok=True)
-            self.persist_path.write_text(self._code + "\n", encoding="utf-8")
-            self.persist_path.chmod(0o600)
+            try:
+                os.chmod(self.persist_path.parent, 0o700)
+            except OSError:
+                pass
+            text = f"{self._code}\n{self._deadline}\n"
+            tmp = self.persist_path.with_name(self.persist_path.name + ".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, text.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(tmp, self.persist_path)
         except OSError:
             pass
 
-    def _clear_persist(self) -> None:
-        if not self.persist_path:
-            return
-        try:
-            if self.persist_path.is_file():
-                self.persist_path.unlink()
-        except OSError:
-            pass
-
-    def _expired(self) -> bool:
+    def _expired_locked(self) -> bool:
         if not self._code:
             return True
         if self.ttl_sec <= 0:
@@ -68,32 +99,54 @@ class WebLoginCode:
 
     @property
     def pending_code(self) -> str | None:
-        if self._expired():
+        with self._lock:
+            expired = self._expired_locked()
+            code = self._code
+        if expired:
             return self.begin()
-        return self._code
+        return code
 
     @staticmethod
     def normalize(code: str) -> str:
         return str(code).strip().upper().replace(" ", "").replace("-", "")
 
     def try_consume(self, code: str) -> bool:
-        if self._expired() or not self._code:
+        with self._lock:
+            if self._expired_locked() or not self._code:
+                rotate = True
+                ok = False
+            else:
+                rotate = False
+                now = time.time()
+                self._fails = [t for t in self._fails if now - t < 300.0]
+                if len(self._fails) >= 8:
+                    return False
+                got = self.normalize(code)
+                if len(got) != len(self._code) or not secrets.compare_digest(got, self._code):
+                    self._fails.append(now)
+                    return False
+                ok = True
+        if rotate:
             self.begin()
             return False
-        now = time.time()
-        self._fails = [t for t in self._fails if now - t < 300.0]
-        if len(self._fails) >= 8:
-            return False
-        got = self.normalize(code)
-        if len(got) != len(self._code):
-            self._fails.append(now)
-            return False
-        ok = secrets.compare_digest(got, self._code)
-        if not ok:
-            self._fails.append(now)
-            return False
-        self._code = None
-        self._deadline = 0.0
-        self._fails = []
-        self._clear_persist()
-        return True
+        if ok:
+            self.begin()
+            return True
+        return False
+
+
+def read_login_code(path: Path) -> tuple[str | None, float | None]:
+    """Return ``(code, deadline)`` from ``state/web.login``, or (None, None)."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None, None
+    if not lines or not lines[0].strip():
+        return None, None
+    deadline = None
+    if len(lines) > 1:
+        try:
+            deadline = float(lines[1])
+        except ValueError:
+            deadline = None
+    return lines[0].strip(), deadline

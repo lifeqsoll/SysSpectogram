@@ -308,6 +308,39 @@ def _cmd_guard(args: argparse.Namespace) -> int:
 
 
 def _cmd_web(args: argparse.Namespace) -> int:
+    if str(getattr(args, "web_op", "") or "") == "login":
+        import json
+        import time
+
+        from sysspectogram.config import state_root
+        from sysspectogram.web.login_code import read_login_code
+
+        path = state_root() / "state" / "web.login"
+        code, deadline = read_login_code(path)
+        if not code:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "web is not running (no state/web.login)",
+                        "hint": "start `sysspectogram web` and read the WEB LOGIN CODE it prints",
+                    }
+                )
+            )
+            return 2
+        if deadline is not None and deadline > 0 and time.time() > deadline:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "login code expired and web is not refreshing it",
+                        "hint": "the web process rotates state/web.login; restart web if this stays stale",
+                    }
+                )
+            )
+            return 2
+        print(code)
+        return 0
     from sysspectogram.web.runtime import run_web_dashboard
 
     cfg = load_config(args.config)
@@ -3043,6 +3076,13 @@ def build_parser() -> argparse.ArgumentParser:
     fb_if.set_defaults(func=_cmd_feedback)
 
     w = sub.add_parser("web", help="live local / Telegram Mini App dashboard")
+    w.add_argument(
+        "web_op",
+        nargs="?",
+        default=None,
+        choices=["login"],
+        help="login: print the current WEB LOGIN CODE from state/web.login",
+    )
     w.add_argument("--model", default=None, help="optional artifacts for scoring")
     w.add_argument("--host", default=None)
     w.add_argument("--port", type=int, default=None)

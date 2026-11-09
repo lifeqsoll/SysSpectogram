@@ -386,6 +386,22 @@ def test_web_login_code_mints_session_without_control_unlock(
         assert resp2.status == 401
         resp2.read()
         conn2.close()
+        # next code is already on disk — second browser does not need a failed login
+        nxt = (tmp_path / "state" / "web.login").read_text(encoding="utf-8").splitlines()[0]
+        assert nxt and nxt != code
+        raw3 = json.dumps({"code": nxt}).encode()
+        conn3 = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn3.putrequest("POST", "/api/login", skip_host=True)
+        conn3.putheader("Host", "127.0.0.1")
+        conn3.putheader("Content-Type", "application/json")
+        conn3.putheader("Content-Length", str(len(raw3)))
+        conn3.putheader("X-SS-CSRF", "1")
+        conn3.endheaders()
+        conn3.send(raw3)
+        resp3 = conn3.getresponse()
+        assert resp3.status == 200
+        resp3.read()
+        conn3.close()
     finally:
         httpd.shutdown()
 
