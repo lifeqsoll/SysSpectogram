@@ -262,6 +262,11 @@ def test_seed_rejects_well_known_anycast_without_force(
         assert "warning" in out_f
         (tmp_path / "state" / "user-settings.json").unlink(missing_ok=True)
 
+    for cidr in ("8.8.8.0/24", "1.1.1.0/24", "2606:4700:4700::1111/64"):
+        out_c = seed_never_ban(write=True, ip=cidr)
+        assert out_c["ok"] is False, cidr
+        assert out_c["reason"] == "well_known_anycast", (cidr, out_c)
+
     # Near-miss and documentation-style admin still OK without force.
     ok = seed_never_ban(write=True, ip="8.8.8.9")
     assert ok["ok"] is True
@@ -271,21 +276,118 @@ def test_seed_rejects_well_known_anycast_without_force(
     assert out3["ok"] is True
     assert "203.0.113.55/32" in out3["never_ban_cidrs"]
 
+    (tmp_path / "state" / "user-settings.json").unlink(missing_ok=True)
+    monkeypatch.setenv("SSH_CONNECTION", "203.0.113.7 5555 10.0.0.1 22")
+    ssh = seed_never_ban(write=True)
+    assert ssh["ok"] is True
+    assert "203.0.113.7/32" in ssh["never_ban_cidrs"]
+    assert ssh.get("source") == "ssh_connection"
+
 
 def test_seed_rejects_loopback_and_multicast(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
     (tmp_path / "state").mkdir(parents=True)
-    for ip, reason in (("127.0.0.1", "loopback"), ("224.0.0.1", "multicast")):
+    for ip, reason in (
+        ("127.0.0.1", "loopback"),
+        ("224.0.0.1", "multicast"),
+        ("fe80::1", "link_local"),
+        ("::", "unspecified"),
+    ):
         out = seed_never_ban(write=True, ip=ip)
-        assert out["ok"] is False
-        assert out["reason"] == reason
-    # RFC1918 private needs --force at seed layer.
-    priv = seed_never_ban(write=True, ip="10.0.0.50")
-    assert priv["ok"] is False
-    assert priv["reason"] == "private"
-    priv_f = seed_never_ban(write=True, ip="10.0.0.50", force=True)
-    assert priv_f["ok"] is True
-    assert "warning" in priv_f
+        assert out["ok"] is False, (ip, out)
+        assert out["reason"] == reason, (ip, out)
+
+
+def test_seed_accepts_private_and_ula_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    (tmp_path / "state").mkdir(parents=True)
+    for ip, needle in (
+        ("192.168.1.5", "192.168.1.5/32"),
+        ("10.0.0.0/24", "10.0.0.0/24"),
+        ("fd00::5", "fd00::5/128"),
+    ):
+        (tmp_path / "state" / "user-settings.json").unlink(missing_ok=True)
+        out = seed_never_ban(write=True, ip=ip)
+        assert out["ok"] is True, (ip, out)
+        assert out.get("written") is True
+        assert needle in out["never_ban_cidrs"]
+        assert "warning" in out
+        assert "LAN" in out["warning"] or "private" in out["warning"].lower() or "локал" in out["warning"].lower() or "network" in out["warning"].lower()
+
+    (tmp_path / "state" / "user-settings.json").unlink(missing_ok=True)
+    cgnat = seed_never_ban(write=True, ip="100.64.1.5")
+    assert cgnat["ok"] is True
+    assert "warning" in cgnat
+    assert "CGNAT" in cgnat["warning"] or "100.64" in cgnat["warning"]
+
+
+def test_web_login_code_mints_session_without_control_unlock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sysspectogram.web.login_code import WebLoginCode
+
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    (tmp_path / "state").mkdir(parents=True)
+    bus = LiveBus()
+    login = WebLoginCode(persist_path=tmp_path / "state" / "web.login", ttl_sec=300)
+    code = login.pending_code
+    assert code
+    unlock = ConsoleUnlock(enabled=True, ttl_sec=60, code_ttl_sec=300, code_len=10)
+    assert unlock.unlocked() is False
+    ctl = WebControllers(
+        bus=bus, nft=NftBackend(), watcher=None, dry_run=True, unlock_ok=unlock.unlocked
+    )
+    httpd = start_web_server(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        controllers=ctl,
+        unlock=unlock,
+        login=login,
+        token_path=False,
+    )
+    port = httpd.server_address[1]
+    try:
+        st, _ = _get_json(port, "/api/status")
+        assert st == 401
+        raw = json.dumps({"code": code}).encode()
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.putrequest("POST", "/api/login", skip_host=True)
+        conn.putheader("Host", "127.0.0.1")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", str(len(raw)))
+        conn.putheader("X-SS-CSRF", "1")
+        conn.endheaders()
+        conn.send(raw)
+        resp = conn.getresponse()
+        body = json.loads(resp.read().decode("utf-8"))
+        assert resp.status == 200 and body.get("ok") is True
+        cookie = ""
+        for k, v in resp.getheaders():
+            if k.lower() == "set-cookie" and v.startswith("ss_session="):
+                cookie = v.split(";", 1)[0]
+        conn.close()
+        assert cookie
+        st2, status = _get_json(port, "/api/status", cookie=cookie)
+        assert st2 == 200
+        assert status.get("control_unlocked") is False
+        # one-shot
+        conn2 = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn2.putrequest("POST", "/api/login", skip_host=True)
+        conn2.putheader("Host", "127.0.0.1")
+        conn2.putheader("Content-Type", "application/json")
+        conn2.putheader("Content-Length", str(len(raw)))
+        conn2.putheader("X-SS-CSRF", "1")
+        conn2.endheaders()
+        conn2.send(raw)
+        resp2 = conn2.getresponse()
+        assert resp2.status == 401
+        resp2.read()
+        conn2.close()
+    finally:
+        httpd.shutdown()
 
 
 def test_bans_list_root_without_nft(

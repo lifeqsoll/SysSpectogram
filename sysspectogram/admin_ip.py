@@ -69,8 +69,15 @@ def _is_documentation(addr: Any) -> bool:
     return any(addr in net for net in _DOCUMENTATION_NETS)
 
 
+_CGNAT_V4 = ip_network("100.64.0.0/10")
+
+
 def _seed_special_reason(addr: Any) -> str | None:
-    """Reason string if seed should refuse without ``--force``; None if OK."""
+    """Reason string if seed should refuse without ``--force``; None if OK.
+
+    RFC1918 / ULA private addresses are accepted (LAN SSH) — see
+    :func:`_seed_accept_warning`. Loopback/multicast/link-local/reserved still refuse.
+    """
     if addr.is_loopback:
         return "loopback"
     if addr.is_multicast:
@@ -81,10 +88,26 @@ def _seed_special_reason(addr: Any) -> str | None:
         return "unspecified"
     if addr.is_reserved:
         return "reserved"
+    return None
+
+
+def _seed_accept_warning(addr: Any) -> str | None:
+    """Soft warning when seeding a LAN / CGNAT address (still written)."""
     if _is_documentation(addr):
         return None
+    try:
+        if addr.version == 4 and addr in _CGNAT_V4:
+            return (
+                "this looks like CGNAT (100.64.0.0/10), not your public IP — "
+                "the VPS will not see this address on inbound SSH; add your real public admin IP too"
+            )
+    except Exception:
+        pass
     if addr.is_private:
-        return "private"
+        return (
+            "this is a LAN address: never_ban only protects sessions from this private network, "
+            "not internet SSH. If you connect from outside, also add your public IP"
+        )
     return None
 
 def cidr_for_ip(ip: str) -> str:
@@ -178,6 +201,22 @@ def validate_never_ban_value(raw: Any) -> tuple[str | None, str | None]:
     return ", ".join(out), None
 
 
+def _ssh_connection_ip() -> str | None:
+    """First field of SSH_CONNECTION / SSH_CLIENT (admin peer), if present."""
+    import os
+
+    for key in ("SSH_CONNECTION", "SSH_CLIENT"):
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            continue
+        token = raw.split()[0].strip()
+        try:
+            return str(ip_address(token))
+        except ValueError:
+            continue
+    return None
+
+
 def detect_public_ip(*, timeout: float = 5.0) -> str | None:
     last = ""
     for url in DETECT_URLS:
@@ -254,6 +293,7 @@ def seed_never_ban(
     cur = list((cfg.get("response") or {}).get("never_ban_cidrs") or [])
     raw_ip = (ip or "").strip() or None
     anycast_warning: str | None = None
+    detect_source: str | None = "explicit" if raw_ip else None
     if raw_ip:
         canonical, err = validate_never_ban_cidr(raw_ip)
         if err or not canonical:
@@ -270,7 +310,8 @@ def seed_never_ban(
                 ),
             }
         host_only = _canon_host(canonical)
-        special = _seed_special_reason(ip_address(host_only))
+        host_addr = ip_address(host_only)
+        special = _seed_special_reason(host_addr)
         if special and not force:
             return {
                 "ok": False,
@@ -284,7 +325,11 @@ def seed_never_ban(
                 ),
                 "hint": "use --ip <your-admin-egress> or --force to override",
             }
-        if host_only in WELL_KNOWN_ANYCAST_HOSTS and not force:
+        seed_net = ip_network(canonical, strict=False)
+        anycast_hit = any(
+            ip_address(h) in seed_net for h in WELL_KNOWN_ANYCAST_HOSTS
+        )
+        if anycast_hit and not force:
             return {
                 "ok": False,
                 "written": False,
@@ -292,15 +337,15 @@ def seed_never_ban(
                 "never_ban_cidrs": cur,
                 "reason": "well_known_anycast",
                 "warning": (
-                    f"{host_only} looks like a public DNS/anycast resolver, not an admin SSH source; "
-                    "lockdown would allowlist this address instead of your laptop. "
+                    f"{canonical} overlaps a public DNS/anycast resolver, not an admin SSH source; "
+                    "lockdown would allowlist this range instead of your laptop. "
                     "Pass your real admin IP, or --force if you really mean it."
                 ),
                 "hint": "use --ip <your-admin-egress> or --force to override",
             }
-        if host_only in WELL_KNOWN_ANYCAST_HOSTS and force:
+        if anycast_hit and force:
             anycast_warning = (
-                f"{host_only} is a well-known anycast/DNS address; "
+                f"{canonical} overlaps a well-known anycast/DNS address; "
                 "lockdown allowlist will use never_ban only — confirm this is intentional"
             )
         elif special and force:
@@ -308,9 +353,18 @@ def seed_never_ban(
                 f"{host_only} is {special}; "
                 "lockdown allowlist will use never_ban only — confirm this is intentional"
             )
+        else:
+            soft = _seed_accept_warning(host_addr)
+            if soft:
+                anycast_warning = soft
         detected = canonical
     else:
-        detected_bare = detect_public_ip()
+        source = "egress"
+        detected_bare = _ssh_connection_ip()
+        if detected_bare:
+            source = "ssh_connection"
+        else:
+            detected_bare = detect_public_ip()
         if not detected_bare:
             return {
                 "ok": False,
@@ -330,8 +384,15 @@ def seed_never_ban(
                 "reason": err or "invalid_ip",
             }
         detected = canonical
+        detect_source = source
+        if source == "egress":
+            anycast_warning = (
+                "this is THIS machine's public egress IP (often the VPS itself), "
+                "not your laptop — lockdown will not let you in via this address; "
+                "prefer --ip from ${SSH_CONNECTION%% *} on the server"
+            )
     cover_ip = detected.split("/")[0]
-    if _covers(cur, cover_ip) and not force:
+    if _covers(cur, cover_ip) and not force and not write:
         return {
             "ok": True,
             "written": False,
@@ -340,7 +401,90 @@ def seed_never_ban(
             "reason": "already_covered",
         }
     merged = merge_never_ban(cur, detected)
-    if merged == cur:
+    if write:
+        from sysspectogram.config import ensure_writable_state_root
+        from sysspectogram.settings_lock import update_user_settings
+
+        try:
+            ensure_writable_state_root()
+        except RuntimeError as exc:
+            return {
+                "ok": False,
+                "written": False,
+                "ip": detected,
+                "never_ban_cidrs": cur,
+                "reason": "state_root_unusable",
+                "hint": str(exc),
+            }
+        path = user_settings_path()
+        final_merged: list[str] = list(merged)
+        skip_reason: str | None = None
+
+        def _mutator(data: dict[str, Any]) -> dict[str, Any] | None:
+            nonlocal final_merged, skip_reason
+            from sysspectogram.config import _parse_cidr_list
+
+            existing = _parse_cidr_list(data.get("response.never_ban_cidrs") or "")
+            # Prefer live file contents under the lock (not a stale load_config snapshot).
+            if not existing:
+                existing = list(cur)
+            if _covers(existing, cover_ip) and not force:
+                final_merged = existing
+                skip_reason = "already_covered"
+                return None
+            final_merged = merge_never_ban(existing, detected)
+            if final_merged == existing:
+                skip_reason = "unchanged"
+                return None
+            data["response.never_ban_cidrs"] = ", ".join(final_merged)
+            return data
+
+        result = update_user_settings(_mutator, path=path, force=force)
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "written": False,
+                "ip": detected,
+                "never_ban_cidrs": cur,
+                "reason": result.get("reason") or "write_failed",
+                "hint": result.get("hint")
+                or "fix state/user-settings.json or re-run with --force (backs up .bak)",
+            }
+        if skip_reason:
+            return {
+                "ok": True,
+                "written": False,
+                "ip": detected,
+                "never_ban_cidrs": final_merged,
+                "reason": skip_reason,
+            }
+        merged = final_merged
+        out_write = {
+            "ok": True,
+            "written": bool(result.get("written")),
+            "ip": detected,
+            "never_ban_cidrs": merged,
+            "reason": "seeded",
+        }
+        if detect_source:
+            out_write["source"] = detect_source
+        if anycast_warning:
+            out_write["warning"] = anycast_warning
+        if not raw_ip and detect_source == "egress":
+            out_write["hint"] = (
+                "seeds THIS machine egress IP — on a VPS that is the VPS, not your laptop; "
+                "pass --ip from admin PC if needed; may be shared NAT"
+            )
+        return out_write
+    elif _covers(cur, cover_ip) and not force:
+        return {
+            "ok": True,
+            "written": False,
+            "ip": detected,
+            "never_ban_cidrs": cur,
+            "reason": "already_covered",
+        }
+    elif merged == cur:
         return {
             "ok": True,
             "written": False,
@@ -348,66 +492,6 @@ def seed_never_ban(
             "never_ban_cidrs": cur,
             "reason": "unchanged",
         }
-    if write:
-        path = user_settings_path()
-        data: dict[str, Any] = {}
-        if path.is_file():
-            raw_text = ""
-            try:
-                raw_text = path.read_text(encoding="utf-8")
-            except OSError as exc:
-                return {
-                    "ok": False,
-                    "written": False,
-                    "ip": detected,
-                    "never_ban_cidrs": cur,
-                    "reason": "user_settings_unreadable",
-                    "hint": str(exc),
-                }
-            try:
-                parsed: Any = json.loads(raw_text)
-            except json.JSONDecodeError:
-                parsed = None
-                if not force:
-                    return {
-                        "ok": False,
-                        "written": False,
-                        "ip": detected,
-                        "never_ban_cidrs": cur,
-                        "reason": "user_settings_corrupt",
-                        "hint": "fix state/user-settings.json or re-run with --force (backs up .bak)",
-                    }
-                bak = path.with_suffix(path.suffix + ".bak")
-                try:
-                    bak.write_text(raw_text, encoding="utf-8")
-                except OSError:
-                    pass
-            else:
-                if isinstance(parsed, dict):
-                    data = parsed
-                else:
-                    if not force:
-                        return {
-                            "ok": False,
-                            "written": False,
-                            "ip": detected,
-                            "never_ban_cidrs": cur,
-                            "reason": "user_settings_not_object",
-                            "hint": "fix state/user-settings.json or re-run with --force (backs up .bak)",
-                        }
-                    bak = path.with_suffix(path.suffix + ".bak")
-                    try:
-                        bak.write_text(raw_text, encoding="utf-8")
-                    except OSError:
-                        pass
-        # Overlay stores CIDR lists as a comma-separated string (see friend_menu / home settings).
-        data["response.never_ban_cidrs"] = ", ".join(merged)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
     out: dict[str, Any] = {
         "ok": True,
         "written": bool(write),
@@ -415,9 +499,11 @@ def seed_never_ban(
         "never_ban_cidrs": merged,
         "reason": "seeded",
     }
+    if detect_source:
+        out["source"] = detect_source
     if anycast_warning:
         out["warning"] = anycast_warning
-    if not raw_ip:
+    if not raw_ip and detect_source == "egress":
         out["hint"] = (
             "seeds THIS machine egress IP — on a VPS that is the VPS, not your laptop; "
             "pass --ip from admin PC if needed; may be shared NAT"
