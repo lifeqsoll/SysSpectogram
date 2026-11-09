@@ -71,14 +71,13 @@ def run_web_dashboard(
         never_ban_cidrs=[str(x) for x in (resp_cfg.get("never_ban_cidrs") or [])]
     )
     # attach a perimeter watcher so allow/mute/lockdown work in standalone web mode
-    from sysspectogram.config import ROOT
+    from sysspectogram.config import resolve_runtime_path
     from sysspectogram.perimeter.watcher import PerimeterWatcher
 
     per = config.get("perimeter") or {}
 
     def _resolve(path: str | Path) -> Path:
-        p = Path(path)
-        return p if p.is_absolute() else (ROOT / p).resolve()
+        return resolve_runtime_path(path)
 
     watcher = PerimeterWatcher(
         host_id=host_id,
@@ -90,9 +89,11 @@ def run_web_dashboard(
         alert_new_egress=bool(per.get("alert_new_egress", False)),
     )
 
-    def _print_unlock(code: str) -> None:
+    def _print_unlock(code: str | None) -> None:
+        if not code:
+            return
         console.print("")
-        console.print("[bold red]WEB UNLOCK CODE[/] (Mini App: enter code · or POST /api/unlock)")
+        console.print("[bold red]WEB UNLOCK CODE[/] (control plane · POST /api/unlock)")
         console.print(f"[bold white on red]  {code}  [/]")
         console.print("")
 
@@ -106,8 +107,21 @@ def run_web_dashboard(
         code_len=int(tg_cfg.get("unlock_code_len", 10)),
         on_code=_print_unlock,
     )
-    if unlock_gate.enabled and unlock_gate.pending_code:
-        _print_unlock(unlock_gate.pending_code)
+    # on_code already prints once at begin(); do not print again here.
+
+    from sysspectogram.config import state_root
+    from sysspectogram.web.login_code import WebLoginCode
+
+    login_gate = WebLoginCode(
+        persist_path=state_root() / "state" / "web.login",
+        code_len=int(tg_cfg.get("unlock_code_len", 10)),
+        ttl_sec=float(tg_cfg.get("unlock_code_ttl_sec", 300)),
+    )
+    console.print("")
+    console.print("[bold cyan]WEB LOGIN CODE[/] (dashboard session · Settings or POST /api/login)")
+    console.print(f"[bold white on blue]  {login_gate.pending_code}  [/]")
+    console.print("[dim]also in state/web.login · one-shot · does not unlock SOAR[/]")
+    console.print("")
 
     controllers = WebControllers(
         bus=bus,
@@ -129,6 +143,7 @@ def run_web_dashboard(
         public_url=public_url,
         controllers=controllers,
         unlock=unlock_gate if unlock_gate.enabled else None,
+        login=login_gate,
     )
     local = f"http://{bind}:{listen_port}/"
     console.print(f"[bold]web dashboard[/] {local}")

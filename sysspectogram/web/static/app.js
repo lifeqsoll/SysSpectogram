@@ -51,7 +51,8 @@
       cancel: "Cancel",
       yes: "Yes",
       authNote: "Auth: enter unlock code in Settings (session cookie) · Telegram Mini App uses initData",
-      authRequired: "Session required: open Settings and enter the host unlock code.",
+      authRequired:
+        "Session required: open Settings and enter the WEB LOGIN CODE from the host console (state/web.login).",
     },
     ru: {
       liveBadge: "Защита хоста · живые метрики",
@@ -74,7 +75,8 @@
       cancel: "Отмена",
       yes: "Да",
       authNote: "Auth: unlock-код в Settings (сессия) · Mini App — initData",
-      authRequired: "Нужна сессия: откройте Settings и введите unlock-код с консоли хоста.",
+      authRequired:
+        "Нужна сессия: откройте Settings и введите WEB LOGIN CODE с консоли хоста (state/web.login).",
     },
   };
   let lang = localStorage.getItem("ss_lang") === "ru" ? "ru" : "en";
@@ -478,15 +480,31 @@
         const code = (document.getElementById("set-unlock").value || "").trim();
         const msg = document.getElementById("action-msg");
         try {
-          const res = await fetch("/api/unlock", {
+          // Prefer dashboard login (session); fall back to control unlock.
+          let res = await fetch("/api/login", {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-SS-CSRF": "1" },
             credentials: "same-origin",
             body: JSON.stringify({ code }),
           });
-          const data = await res.json();
+          let data = await res.json();
+          if (data.ok) {
+            msg.textContent = "dashboard session OK (SOAR still needs unlock if LOCKED)";
+            document.getElementById("set-unlock").value = "";
+            const note = document.getElementById("auth-note");
+            if (note) note.textContent = (I18N[lang] || I18N.en).authNote;
+            startStream();
+            return;
+          }
+          res = await fetch("/api/unlock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-SS-CSRF": "1" },
+            credentials: "same-origin",
+            body: JSON.stringify({ code }),
+          });
+          data = await res.json();
           if (!data.ok) {
-            msg.textContent = "unlock failed: " + (data.error || res.status);
+            msg.textContent = "login/unlock failed: " + (data.error || res.status);
             return;
           }
           msg.textContent = "control UNLOCKED";
@@ -496,11 +514,10 @@
           if (note) note.textContent = (I18N[lang] || I18N.en).authNote;
           startStream();
         } catch (e) {
-          msg.textContent = "unlock error: " + e;
+          msg.textContent = "login/unlock error: " + e;
         }
       });
-    }
-    const rp = document.getElementById("btn-refresh-procs");
+    }    const rp = document.getElementById("btn-refresh-procs");
     if (rp) {
       rp.addEventListener("click", () => postAction("refresh_processes", {}));
     }

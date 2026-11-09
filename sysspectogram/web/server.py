@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from sysspectogram.web.actions import WebControllers
 from sysspectogram.web.auth import validate_webapp_init_data
 from sysspectogram.web.bus import LiveBus
+from sysspectogram.web.login_code import WebLoginCode
 from sysspectogram.console_unlock import ConsoleUnlock
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -49,6 +50,7 @@ class WebAppState:
         bind_host: str,
         controllers: WebControllers | None = None,
         unlock: ConsoleUnlock | None = None,
+        login: WebLoginCode | None = None,
         launch_token: str | None = None,
     ) -> None:
         self.bus = bus
@@ -58,6 +60,7 @@ class WebAppState:
         self.bind_host = bind_host
         self.controllers = controllers
         self.unlock = unlock
+        self.login = login
         self.launch_token = (launch_token or "").strip() or None
         self._sessions: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -321,13 +324,21 @@ def _make_handler(app: WebAppState):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-
+            # Host before body (DoS / DNS-rebinding) — reject early.
             if not self._host_ok():
                 return self._json(403, {"ok": False, "error": "bad host"})
+            cl_raw = (self.headers.get("Content-Length") or "0").strip()
+            try:
+                length = int(cl_raw)
+            except ValueError:
+                return self._json(400, {"ok": False, "error": "bad Content-Length"})
+            if length < 0:
+                return self._json(400, {"ok": False, "error": "bad Content-Length"})
+            if length > 64 * 1024:
+                return self._json(413, {"ok": False, "error": "body too large"})
+            raw = self.rfile.read(length) if length else b"{}"
 
-            if path in {"/api/auth/telegram", "/api/unlock", "/api/action"}:
+            if path in {"/api/auth/telegram", "/api/unlock", "/api/login", "/api/action"}:
                 if not self._require_json_ctype():
                     return self._json(415, {"ok": False, "error": "Content-Type must be application/json"})
 
@@ -335,6 +346,8 @@ def _make_handler(app: WebAppState):
                 payload = json.loads(raw.decode("utf-8") or "{}")
             except json.JSONDecodeError:
                 return self._json(400, {"ok": False, "error": "bad json"})
+            if not isinstance(payload, dict):
+                return self._json(400, {"ok": False, "error": "body must be an object"})
 
             if path == "/api/auth/telegram":
                 init_data = payload.get("initData") or self.headers.get("X-Telegram-Init-Data") or ""
@@ -364,6 +377,37 @@ def _make_handler(app: WebAppState):
                     extra["Access-Control-Allow-Origin"] = allow
                     extra["Vary"] = "Origin"
                 return self._json(200, {"ok": True, "user": user}, extra=extra)
+
+            # Dashboard login code → ss_session only (does NOT unlock control plane).
+            if path == "/api/login":
+                if not self._csrf_ok():
+                    return self._json(403, {"ok": False, "error": "csrf"})
+                if app.login is None:
+                    return self._json(503, {"ok": False, "error": "login codes unavailable"})
+                code = str(payload.get("code") or "")
+                if not code.strip():
+                    return self._json(401, {"ok": False, "error": "auth required"})
+                ip = self._client_ip()
+                allowed, backoff, _n = app._unlock_rate_status(ip)
+                if not allowed:
+                    retry = str(max(1, int(backoff) if backoff >= 1 else 1))
+                    return self._json(
+                        429,
+                        {"ok": False, "error": "rate limited"},
+                        extra={"Retry-After": retry},
+                    )
+                if not app.login.try_consume(code):
+                    app._unlock_record_fail(ip)
+                    return self._json(401, {"ok": False, "error": "bad login code"})
+                sess = app.issue_session()
+                cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                if app.public_url and str(app.public_url).startswith("https"):
+                    cookie += "; Secure"
+                return self._json(
+                    200,
+                    {"ok": True, "session": True, "control_unlocked": False},
+                    extra={"Set-Cookie": cookie},
+                )
 
             # Console unlock via Mini App / local UI (code never in .env).
             # M-01: never mint ss_session for an unauthenticated loopback client —
@@ -556,21 +600,25 @@ def start_web_server(
     public_url: str | None = None,
     controllers: WebControllers | None = None,
     unlock: ConsoleUnlock | None = None,
+    login: WebLoginCode | None = None,
     token_path: Path | None | bool = True,
     max_connections: int = MAX_WEB_CONNECTIONS,
 ) -> ThreadingHTTPServer:
     launch_token = secrets.token_urlsafe(32)
     # token_path=True → default state/web.token; Path → that path; False/None → memory only.
     write_path: Path | None
+    state_dir: Path | None = None
     if token_path is True:
         try:
             from sysspectogram.config import state_root
 
-            write_path = state_root() / "state" / "web.token"
+            state_dir = state_root() / "state"
+            write_path = state_dir / "web.token"
         except Exception:
             write_path = None
     elif isinstance(token_path, Path):
         write_path = token_path
+        state_dir = token_path.parent
     else:
         write_path = None
     if write_path is not None:
@@ -581,6 +629,11 @@ def start_web_server(
         except OSError:
             pass
 
+    if login is None and state_dir is not None:
+        login = WebLoginCode(persist_path=state_dir / "web.login")
+    elif login is None:
+        login = WebLoginCode(persist_path=None)
+
     app = WebAppState(
         bus,
         bot_token=bot_token,
@@ -589,6 +642,7 @@ def start_web_server(
         bind_host=host,
         controllers=controllers,
         unlock=unlock,
+        login=login,
         launch_token=launch_token,
     )
 
