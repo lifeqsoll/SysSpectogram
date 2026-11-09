@@ -37,6 +37,8 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Quote nft rule comments so lockdown/quarantine/shield actually apply; check established rule rc.
 - Lockdown/syn-rate-limit use `tcp flags syn / fin,syn,rst,ack` (nft 1.1.x). A failed apply rolls back only the rules that call added.
 - `home health` does not treat a host with no journal files as an ssh source, including root (`journalctl` without `-q`).
+- A second lockdown inserts a new admin allow before the SYN drop. syn-rate-limit does the same for its allow rules, and replaces the drop when rate/burst change.
+- Kirk isolate keeps IPv6 resolvers from `resolvectl dns` and opens TCP/UDP 853 when the resolver is DNS-over-TLS (`#name`).
 - `sysspectogram web login` prints the WEB LOGIN CODE only while web is running (pid in `state/web.login`); stopping web deletes the file.
 - Kirk isolate DNS is resolver-only; TCP/443 only to `kirk.egress_allow_cidrs` (Telegram ranges by default).
 - Set perimeter lockdown flag only after nft succeeds; web returns error on refuse.

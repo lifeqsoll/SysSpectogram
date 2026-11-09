@@ -127,6 +127,65 @@ def test_lockdown_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     assert adds == first
 
 
+def test_second_lockdown_inserts_allow_before_syn(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    listing = (
+        'ip saddr 192.0.2.11 accept comment "sysspectogram:lockdown:allow:192.0.2.11/32" # handle 2\n'
+        'tcp flags & (fin | syn | rst | ack) == syn drop comment "sysspectogram:lockdown:syn" # handle 3\n'
+    )
+
+    def fake_run(argv: list[str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if argv[:2] == ["nft", "-a"]:
+            return 0, listing
+        return 0, ""
+
+    nft = NftBackend(never_ban_cidrs=["192.0.2.11/32", "203.0.113.7/32"])
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(nft, "_ensure_chain", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/sbin/nft" if name == "nft" else None)
+    msg = nft.apply_lockdown()
+    assert "203.0.113.7/32" in msg
+    inserted = [c for c in calls if c[:3] == ["nft", "insert", "rule"]]
+    assert inserted
+    assert inserted[0][inserted[0].index("position") + 1] == "3"
+    joined = " ".join(inserted[0])
+    assert "203.0.113.7/32" in joined
+    assert "lockdown:syn" not in joined
+
+
+def test_synrl_allow_inserts_before_drop_and_rate_replaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    listing = (
+        'ip saddr 192.0.2.11 accept comment "sysspectogram:synrl:allow:192.0.2.11/32" # handle 4\n'
+        "tcp flags & (fin | syn | rst | ack) == syn limit rate over 25/second burst 50 packets "
+        'drop comment "sysspectogram:synrl:drop" # handle 5\n'
+    )
+
+    def fake_run(argv: list[str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if argv[:2] == ["nft", "-a"]:
+            return 0, listing
+        return 0, ""
+
+    nft = NftBackend(never_ban_cidrs=["192.0.2.11/32", "203.0.113.7/32"])
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(nft, "_ensure_chain", lambda: None)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/sbin/nft" if name == "nft" else None)
+    same = nft.apply_syn_rate_limit(rate="25/second", burst=50)
+    assert "unchanged" not in same
+    assert "25/second" in same
+    assert not any(c[:2] == ["nft", "replace"] for c in calls)
+    msg = nft.apply_syn_rate_limit(rate="10/second", burst=10)
+    assert "10/second" in msg
+    assert "unchanged" not in msg
+    replaced = [c for c in calls if c[:2] == ["nft", "replace"]]
+    assert replaced and "10/second" in replaced[0]
+    inserted = [c for c in calls if c[:3] == ["nft", "insert", "rule"]]
+    assert inserted
+    assert inserted[0][inserted[0].index("position") + 1] == "5"
+
+
 def test_shield_argv_comment_quoted(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
@@ -176,3 +235,24 @@ def test_live_lockdown_roundtrip_when_root() -> None:
     assert "sysspectogram:synrl:" not in out
     nft._run = real  # type: ignore[method-assign]
     nft.release_lockdown(dry_run=False)
+
+
+@pytest.mark.skipif(not shutil.which("nft"), reason="nft binary required")
+@pytest.mark.skipif(__import__("os").geteuid() != 0, reason="root required for live nft")
+def test_live_second_lockdown_allow_before_drop() -> None:
+    nft = NftBackend(never_ban_cidrs=["192.0.2.11/32"])
+    try:
+        first = nft.apply_lockdown(dry_run=False)
+        assert "failed" not in first.lower()
+        nft.never_ban_cidrs = ["192.0.2.11/32", "203.0.113.7/32"]
+        second = nft.apply_lockdown(dry_run=False)
+        assert "203.0.113.7/32" in second
+        assert "failed" not in second.lower()
+        code, out = nft._run(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
+        assert code == 0
+        allow_at = out.find("sysspectogram:lockdown:allow:203.0.113.7/32")
+        drop_at = out.find("sysspectogram:lockdown:syn")
+        assert allow_at != -1 and drop_at != -1
+        assert allow_at < drop_at
+    finally:
+        nft.release_lockdown(dry_run=False)

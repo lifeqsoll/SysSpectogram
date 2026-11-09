@@ -83,7 +83,8 @@ Defaults are intentionally cautious.
 - Dashboard **WEB LOGIN CODE** (`state/web.login`, POST `/api/login`) mints a read session; it does **not** unlock SOAR. Control unlock stays separate.
 - nft lockdown/quarantine/shield comments are quoted (colons broke rules on real nft). Lockdown SYN match is `flags syn / fin,syn,rst,ack` (a bare `syn / syn` never installed on nft 1.1.x). A failed lockdown or syn-rate-limit rolls back only the rules that attempt added; it does not remove the other feature's rules. Lockdown state flips only after nft succeeds.
 - `home health` ssh_source is false when the system journal is absent, including for root. `journalctl --system` is run without `-q` so "No journal files were found" is visible.
-- Kirk isolate DNS uses `/etc/resolv.conf` and, when that file only has a systemd-resolved stub, upstreams from `resolvectl dns`. If neither lists a non-loopback resolver, public names do not resolve during isolate (`oif lo` only reaches the stub).
+- Kirk isolate DNS uses `/etc/resolv.conf` and, when that file only has a systemd-resolved stub, upstreams from `resolvectl dns` (IPv6 kept intact; DNS-over-TLS `#name` also allows port 853). If neither lists a non-loopback resolver, public names do not resolve during isolate (`oif lo` only reaches the stub).
+- Repeating lockdown with a new admin CIDR inserts that allow before the SYN drop. A new syn-rate-limit allow is inserted before the drop; a different rate replaces the drop rule instead of reporting a rate that was not installed.
 - Kirk isolate does not open DNS or TCP/443 to the internet. DNS goes to configured resolvers; HTTPS only to `kirk.egress_allow_cidrs` (default: Telegram publish ranges).
 - POST bodies: Host checked before read; `Content-Length` must be a non-negative integer ≤ 64 KiB.
 - `home settings` / seed writes are flocked; schema type checks reject non-finite / out-of-range values (`allow_nan=False`).

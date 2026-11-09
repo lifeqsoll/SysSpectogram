@@ -38,7 +38,7 @@ DEFAULT_TELEGRAM_EGRESS_CIDRS = (
 _STUB_DNS = frozenset({"127.0.0.1", "127.0.0.53", "::1"})
 
 
-def _dns_egress_targets() -> list[tuple[str, str]]:
+def _dns_egress_targets() -> list[tuple[str, str, tuple[int, ...]]]:
     """Non-loopback nameservers from /etc/resolv.conf as nft (family, address)."""
     try:
         text = Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="replace")
@@ -61,14 +61,71 @@ def _dns_egress_targets() -> list[tuple[str, str]]:
         if canon in seen:
             continue
         seen.add(canon)
-        out.append(("ip6" if addr.version == 6 else "ip", canon))
+        out.append(("ip6" if addr.version == 6 else "ip", canon, (53,)))
     if out:
         return out
     # systemd-resolved stub (127.0.0.53) does not forward if upstream is dropped.
     return _resolvectl_upstreams()
 
 
-def _resolvectl_upstreams() -> list[tuple[str, str]]:
+def _strip_resolver_port(token: str) -> tuple[str, int | None]:
+    """Drop ``:port`` from an IPv4 token, or ``[v6]:port``. IPv6 colons stay."""
+    if token.startswith("[") and "]" in token:
+        host, rest = token[1:].split("]", 1)
+        port = None
+        if rest.startswith(":") and rest[1:].isascii() and rest[1:].isdigit():
+            port = int(rest[1:])
+        return host, port
+    if token.count(":") == 1:
+        host, maybe = token.rsplit(":", 1)
+        if maybe.isascii() and maybe.isdigit():
+            try:
+                ip_address(host)
+            except ValueError:
+                return token, None
+            return host, int(maybe)
+    return token, None
+
+
+def _parse_resolvectl_dns(text: str) -> list[tuple[str, str, tuple[int, ...]]]:
+    """Upstreams from ``resolvectl dns`` text: ``(family, address, ports)``.
+
+    A ``#name`` suffix is DNS-over-TLS and adds port 853. IPv6 is kept whole.
+    """
+    payloads: list[str] = []
+    for line in text.splitlines():
+        if "): " in line:
+            payloads.append(line.split("): ", 1)[1])
+        elif line.startswith("Global:"):
+            payloads.append(line.split(":", 1)[1])
+    out: list[tuple[str, str, tuple[int, ...]]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        for token in payload.replace(",", " ").split():
+            dot = "#" in token
+            body = token.split("#", 1)[0].split("%", 1)[0]
+            host, explicit = _strip_resolver_port(body)
+            try:
+                addr = ip_address(host)
+            except ValueError:
+                continue
+            if addr.is_loopback or str(addr) in _STUB_DNS:
+                continue
+            canon = str(addr)
+            if canon in seen:
+                continue
+            seen.add(canon)
+            ports = {53}
+            if explicit is not None and 1 <= explicit <= 65535:
+                ports.add(explicit)
+            if dot:
+                ports.add(853)
+            ordered = tuple(sorted(ports))
+            out.append(("ip6" if addr.version == 6 else "ip", canon, ordered))
+    return out
+
+
+def _resolvectl_upstreams() -> list[tuple[str, str, tuple[int, ...]]]:
     """Non-loopback DNS addresses from ``resolvectl dns`` (may be empty)."""
     try:
         proc = subprocess.run(
@@ -81,22 +138,21 @@ def _resolvectl_upstreams() -> list[tuple[str, str]]:
     except (OSError, subprocess.SubprocessError):
         return []
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    out: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for token in text.replace(":", " ").replace(",", " ").split():
-        raw = token.split("%", 1)[0]
-        try:
-            addr = ip_address(raw)
-        except ValueError:
-            continue
-        if addr.is_loopback or str(addr) in _STUB_DNS:
-            continue
-        canon = str(addr)
-        if canon in seen:
-            continue
-        seen.add(canon)
-        out.append(("ip6" if addr.version == 6 else "ip", canon))
-    return out
+    return _parse_resolvectl_dns(text)
+
+
+def _parse_ssh_port(raw: object) -> int:
+    if isinstance(raw, bool) or isinstance(raw, float):
+        raise ValueError(f"ssh.port must be an integer, got {raw!r}")
+    if isinstance(raw, int):
+        port = raw
+    elif isinstance(raw, str) and raw.isascii() and raw.isdigit():
+        port = int(raw)
+    else:
+        raise ValueError(f"ssh.port must be an integer, got {raw!r}")
+    if port < 1 or port > 65535:
+        raise ValueError(f"ssh.port {port} is out of range")
+    return port
 
 
 def policy_from_config(config: dict | None) -> tuple[int, list[str] | None]:
@@ -104,36 +160,74 @@ def policy_from_config(config: dict | None) -> tuple[int, list[str] | None]:
 
     ``None`` for the egress list means the built-in Telegram ranges.
     An empty list means no TCP/443 egress.
+
+    A string (not a list), a bad CIDR, or ``ssh.port: true`` raises ValueError.
     """
     ssh_port = 22
     egress: list[str] | None = None
     if not isinstance(config, dict):
         return ssh_port, egress
-    try:
-        raw = (config.get("ssh") or {}).get("port", 22)
-        if isinstance(raw, bool) or isinstance(raw, float):
-            ssh_port = 22
-        else:
-            ssh_port = int(raw)
-    except (TypeError, ValueError):
-        ssh_port = 22
+    ssh = config.get("ssh") or {}
+    if isinstance(ssh, dict) and "port" in ssh and ssh.get("port") is not None:
+        ssh_port = _parse_ssh_port(ssh.get("port"))
     kirk = config.get("kirk") or {}
     if isinstance(kirk, dict) and "egress_allow_cidrs" in kirk and kirk.get("egress_allow_cidrs") is not None:
-        egress = [str(c) for c in (kirk.get("egress_allow_cidrs") or [])]
+        raw_e = kirk.get("egress_allow_cidrs")
+        if not isinstance(raw_e, list):
+            raise ValueError(
+                "kirk.egress_allow_cidrs must be a list of CIDRs, "
+                f"got {type(raw_e).__name__}: {raw_e!r}"
+            )
+        from sysspectogram.net_ip import nft_cidr_family
+
+        egress = []
+        for item in raw_e:
+            try:
+                _fam, canon = nft_cidr_family(str(item))
+            except ValueError as exc:
+                raise ValueError(f"kirk.egress_allow_cidrs has invalid CIDR {item!r}") from exc
+            egress.append(canon)
     return ssh_port, egress
 
 
 def _strict_port(port: object) -> int:
-    """Integer port 0..65535. Reject bool and non-integers (``True``, ``1.5``)."""
+    """Integer port 0..65535. Reject bool, floats, and non-ASCII digits."""
     if isinstance(port, bool) or isinstance(port, float):
         raise ValueError(f"invalid port {port!r}")
     if isinstance(port, str):
-        if not port.isdigit():
+        if not port.isascii() or not port.isdigit():
             raise ValueError(f"invalid port {port!r}")
         return int(port)
     if isinstance(port, int):
         return port
     raise ValueError(f"invalid port {port!r}")
+
+
+def _comment_handle(listing: str, comment: str) -> str | None:
+    needle = f'"{comment}"'
+    for line in listing.splitlines():
+        if needle not in line and comment not in line:
+            continue
+        match = re.search(r"handle\s+(\d+)", line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _synrl_drop_spec(listing: str) -> tuple[str | None, str | None, str | None]:
+    """Return ``(handle, rate, burst)`` for an existing synrl drop rule."""
+    for line in listing.splitlines():
+        if "sysspectogram:synrl:drop" not in line:
+            continue
+        handle_m = re.search(r"handle\s+(\d+)", line)
+        rate_m = re.search(r"rate over\s+(\S+)", line)
+        burst_m = re.search(r"burst\s+(\d+)", line)
+        return (
+            handle_m.group(1) if handle_m else None,
+            rate_m.group(1) if rate_m else None,
+            burst_m.group(1) if burst_m else None,
+        )
+    return None, None, None
 
 
 def _cidr_targets(cidrs: list[str]) -> list[tuple[str, str]]:
@@ -758,31 +852,47 @@ class NftBackend:
                 self._drop_comments(added)
                 return f"lockdown established rule failed: {out_est.strip()}"
             added.append(est)
+        syn = "sysspectogram:lockdown:syn"
+        syn_handle = _comment_handle(listing, syn) if syn in listing else None
+        if syn in listing and not syn_handle:
+            self._drop_comments(added)
+            return "lockdown failed: syn drop has no handle; refusing to append allow after it"
         for fam, canon in families:
             allow_c = f"sysspectogram:lockdown:allow:{canon}"
             if allow_c in listing or allow_c in added:
                 continue
-            code, out = self._run(
-                [
+            expr = [fam, "saddr", canon, "accept"]
+            if syn_handle:
+                argv = [
+                    "nft",
+                    "insert",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "position",
+                    syn_handle,
+                    *expr,
+                    "comment",
+                    self._nft_comment(allow_c),
+                ]
+            else:
+                argv = [
                     "nft",
                     "add",
                     "rule",
                     "inet",
                     "sysspectogram",
                     "input",
-                    fam,
-                    "saddr",
-                    canon,
-                    "accept",
+                    *expr,
                     "comment",
                     self._nft_comment(allow_c),
                 ]
-            )
+            code, out = self._run(argv)
             if code != 0:
                 self._drop_comments(added)
                 return f"lockdown allow failed for {canon}: {out.strip()}"
             added.append(allow_c)
-        syn = "sysspectogram:lockdown:syn"
         if syn not in listing:
             code, out = self._run(
                 [
@@ -821,6 +931,13 @@ class NftBackend:
         self._ensure_chain()
         added: list[str] = []
         listing = self._input_chain_text()
+        drop_c = "sysspectogram:synrl:drop"
+        drop_handle = _comment_handle(listing, drop_c) if drop_c in listing else None
+        if drop_c in listing and not drop_handle:
+            return (
+                "syn_rate_limit unchanged: drop rule has no handle "
+                "(installed rate was not updated)"
+            )
         for cidr in allows:
             try:
                 from sysspectogram.net_ip import nft_cidr_family
@@ -831,27 +948,40 @@ class NftBackend:
             allow_c = f"sysspectogram:synrl:allow:{canon}"
             if allow_c in listing:
                 continue
-            code_a, out_a = self._run(
-                [
+            expr = [fam, "saddr", canon, "accept"]
+            if drop_handle:
+                argv = [
+                    "nft",
+                    "insert",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "position",
+                    drop_handle,
+                    *expr,
+                    "comment",
+                    self._nft_comment(allow_c),
+                ]
+            else:
+                argv = [
                     "nft",
                     "add",
                     "rule",
                     "inet",
                     "sysspectogram",
                     "input",
-                    fam,
-                    "saddr",
-                    canon,
-                    "accept",
+                    *expr,
                     "comment",
                     self._nft_comment(allow_c),
                 ]
-            )
+            code_a, out_a = self._run(argv)
             if code_a != 0:
                 self._drop_comments(added)
                 return f"syn_rate_limit allow failed for {canon}: {out_a.strip()}"
             added.append(allow_c)
-        drop_c = "sysspectogram:synrl:drop"
+        want_rate = str(rate)
+        want_burst = str(int(burst))
         if drop_c not in listing:
             code, out = self._run(
                 [
@@ -866,9 +996,9 @@ class NftBackend:
                     "limit",
                     "rate",
                     "over",
-                    str(rate),
+                    want_rate,
                     "burst",
-                    str(int(burst)),
+                    want_burst,
                     "packets",
                     "drop",
                     "comment",
@@ -878,7 +1008,49 @@ class NftBackend:
             if code != 0:
                 self._drop_comments(added)
                 return f"syn_rate_limit failed: {out.strip()}"
-        return f"syn_rate_limit active rate over {rate} burst={burst} allow={allows or '-'}"
+            return f"syn_rate_limit active rate over {want_rate} burst={want_burst} allow={allows or '-'}"
+        handle, installed_rate, installed_burst = _synrl_drop_spec(listing)
+        if installed_rate == want_rate and installed_burst == want_burst:
+            return (
+                f"syn_rate_limit active rate over {installed_rate} "
+                f"burst={installed_burst} allow={allows or '-'}"
+            )
+        if not handle:
+            return (
+                "syn_rate_limit unchanged: drop rule has no handle "
+                f"(installed rate over {installed_rate or '?'} burst={installed_burst or '?'})"
+            )
+        code, out = self._run(
+            [
+                "nft",
+                "replace",
+                "rule",
+                "inet",
+                "sysspectogram",
+                "input",
+                "handle",
+                handle,
+                "tcp",
+                *_TCP_FLAGS_SYN_ONLY,
+                "limit",
+                "rate",
+                "over",
+                want_rate,
+                "burst",
+                want_burst,
+                "packets",
+                "drop",
+                "comment",
+                self._nft_comment(drop_c),
+            ]
+        )
+        if code != 0:
+            return (
+                "syn_rate_limit unchanged: "
+                f"installed rate over {installed_rate or '?'} burst={installed_burst or '?'} "
+                f"(replace failed: {out.strip()})"
+            )
+        return f"syn_rate_limit active rate over {want_rate} burst={want_burst} allow={allows or '-'}"
 
     def shield_port(
         self,
@@ -895,8 +1067,11 @@ class NftBackend:
             return f"shield refused: invalid port {port!r}"
         if port_i < 1 or port_i > 65535:
             return f"shield refused: port out of range {port_i}"
-        ssh = self.ssh_port if ssh_port is None else int(ssh_port)
-        if not force and port_i == int(ssh):
+        try:
+            ssh = self.ssh_port if ssh_port is None else _strict_port(ssh_port)
+        except ValueError:
+            return f"shield refused: invalid ssh port {ssh_port!r}"
+        if not force and port_i in {int(ssh), 22}:
             return f"shield refused: port {port_i} is SSH (pass force=True to override)"
         try:
             ttl = self._clamp_ttl(ttl_sec)
@@ -980,14 +1155,17 @@ class NftBackend:
         """
         raw_ports = list(ports or [80, 443])
         cleaned: list[int] = []
+        try:
+            ssh = self.ssh_port if ssh_port is None else _strict_port(ssh_port)
+        except ValueError:
+            return f"quarantine refused: invalid ssh port {ssh_port!r}"
         for p in raw_ports:
             try:
-                pi = int(p)
-            except (TypeError, ValueError):
+                pi = _strict_port(p)
+            except ValueError:
                 return f"quarantine refused: invalid port {p!r}"
             if pi < 1 or pi > 65535:
                 return f"quarantine refused: port out of range {pi}"
-            ssh = self.ssh_port if ssh_port is None else int(ssh_port)
             if pi == int(ssh) or pi == 22:
                 return f"quarantine refused: port {pi} (SSH) — leave SSH untouched"
             cleaned.append(pi)
@@ -1212,27 +1390,31 @@ class NftBackend:
             if code != 0:
                 return _rollback(f"base allow: {out.strip()}")
         # DNS only toward configured resolvers (stub 127.0.0.53 stays on oif lo).
-        for fam, addr in _dns_egress_targets():
-            for proto in ("udp", "tcp"):
-                code, out = self._run(
-                    [
-                        "nft",
-                        "add",
-                        "rule",
-                        "inet",
-                        "ss_kirk",
-                        "output",
-                        fam,
-                        "daddr",
-                        addr,
-                        proto,
-                        "dport",
-                        "53",
-                        "accept",
-                    ]
-                )
-                if code != 0:
-                    return _rollback(f"dns allow {addr}: {out.strip()}")
+        # DoT resolvers (#name) also get 853. A 2-tuple target is plain port 53.
+        for spec in _dns_egress_targets():
+            fam, addr = spec[0], spec[1]
+            ports = spec[2] if len(spec) > 2 else (53,)
+            for port in ports:
+                for proto in ("udp", "tcp"):
+                    code, out = self._run(
+                        [
+                            "nft",
+                            "add",
+                            "rule",
+                            "inet",
+                            "ss_kirk",
+                            "output",
+                            fam,
+                            "daddr",
+                            addr,
+                            proto,
+                            "dport",
+                            str(port),
+                            "accept",
+                        ]
+                    )
+                    if code != 0:
+                        return _rollback(f"dns allow {addr}:{port}: {out.strip()}")
         # HTTPS only to Telegram publish ranges (or kirk.egress_allow_cidrs override).
         for fam, cidr in self._https_targets():
             code, out = self._run(
