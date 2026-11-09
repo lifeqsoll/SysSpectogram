@@ -59,12 +59,17 @@ def test_journal_reachable_rejects_empty_and_denied(monkeypatch):
             self.stderr = err
             self.returncode = code
 
-    def _run_denied(*_a, **_k):
+    seen: list[list[str]] = []
+
+    def _run_denied(argv, *_a, **_k):
+        seen.append(list(argv))
         return _Proc("", "No journal files were found.\n", 0)
 
     monkeypatch.setattr("sysspectogram.perimeter.auth.subprocess.run", _run_denied)
-    monkeypatch.setattr("sysspectogram.perimeter.auth.os.geteuid", lambda: 1000)
+    monkeypatch.setattr("sysspectogram.perimeter.auth.os.geteuid", lambda: 0)
     assert _journal_ssh_reachable() is False
+    assert seen and "-q" not in seen[0]
+    assert "--system" in seen[0]
 
     def _run_other_users(*_a, **_k):
         return _Proc("", "Hint: You are currently not seeing messages from other users and the system.\n", 0)

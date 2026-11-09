@@ -232,8 +232,9 @@ def _journal_ssh_reachable(lines: int = 1) -> bool:
     import os
 
     try:
+        # No -q: it hides "No journal files were found", which still exits 0.
         proc = subprocess.run(
-            ["journalctl", "--system", "-n", str(max(1, lines)), "-q", "--no-pager"],
+            ["journalctl", "--system", "-n", str(max(1, lines)), "--no-pager"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -246,6 +247,7 @@ def _journal_ssh_reachable(lines: int = 1) -> bool:
         return False
     if (proc.stdout or "").strip():
         return True
+    # Journal exists but has no lines yet (rc 0, no denial text).
     privileged = os.geteuid() == 0 or _in_journal_group()
     return privileged and proc.returncode == 0
 
