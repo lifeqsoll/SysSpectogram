@@ -154,6 +154,9 @@ kirk:
   host_risk_threshold: 0.99
   isolate_ttl_sec: 3600
   allow_ssh_cidrs: []
+  # TCP/443 during kirk isolate. null = built-in Telegram publish ranges.
+  # Set [] to allow no HTTPS egress. Never "any :443".
+  egress_allow_cidrs: null
   # Hide/drift/IMA: require N hits before TG / auto_isolate (noise control)
   confirm_streak: 2
   confirm_ttl_sec: 180

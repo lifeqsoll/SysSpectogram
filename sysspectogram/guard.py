@@ -292,6 +292,10 @@ def run_guard(
     nft = NftBackend(
         never_ban_cidrs=[str(x) for x in (resp_cfg_early.get("never_ban_cidrs") or [])]
     )
+    try:
+        nft.reconcile_kirk_from_disk()
+    except Exception as exc:
+        console.print(f"[yellow]kirk deadline reconcile[/] {exc}")
 
     kirk_cfg = dict(config.get("kirk") or {})
     kirk_enabled = bool(kirk_cfg.get("enabled", False))
@@ -1735,7 +1739,8 @@ def run_guard(
                                             f"KIRK [critical] AUTO ISOLATE after {alert.rule_id}: {msg_iso}\n"
                                             f"Release: /kirk_release after /unlock, or SSH: "
                                             f"sysspectogram control action kirk_release "
-                                            f"(TTL={kirk_isolate_ttl}s; DNS/443 egress kept)"
+                                            f"(TTL={kirk_isolate_ttl}s; DNS only to resolvers, "
+                                            f"443 only to kirk.egress_allow_cidrs)"
                                         )
                                     )
                                 except Exception:

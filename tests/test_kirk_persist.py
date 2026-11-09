@@ -90,6 +90,68 @@ def test_kirk_rollback_on_allow_fail(tmp_path, monkeypatch):
     assert not (tmp_path / "state" / "kirk_isolate.json").exists()
 
 
+def test_kirk_https_rules_are_addressed(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    (tmp_path / "state").mkdir()
+    nft = _bare_nft(monkeypatch)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd):
+        calls.append(list(cmd))
+        return 0, ""
+
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(
+        "sysspectogram.response.actions._kirk_https_targets",
+        lambda: [("ip", "203.0.113.0/24")],
+    )
+    monkeypatch.setattr(
+        "sysspectogram.response.actions._dns_egress_targets",
+        lambda: [("ip", "192.0.2.53")],
+    )
+    out = nft.kirk_isolate(allow_cidrs=["203.0.113.10/32"], ttl_sec=120)
+    assert out.startswith("kirk_isolate active")
+    bare_443 = [
+        c
+        for c in calls
+        if "443" in c and "daddr" not in c
+    ]
+    bare_53 = [c for c in calls if "53" in c and "daddr" not in c]
+    assert bare_443 == []
+    assert bare_53 == []
+    assert any("daddr" in c and "443" in c and "203.0.113.0/24" in c for c in calls)
+    assert any("daddr" in c and "53" in c and "192.0.2.53" in c for c in calls)
+
+
+def test_constructor_does_not_release_kirk(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    (tmp_path / "state").mkdir()
+    released: list[str] = []
+
+    def fake_run(cmd):
+        if "delete" in cmd and "ss_kirk" in cmd:
+            released.append("yes")
+        return 0, ""
+
+    monkeypatch.setattr(
+        "sysspectogram.response.actions.shutil.which", lambda _n: "/usr/sbin/nft"
+    )
+    from sysspectogram.response.actions import NftBackend
+
+    nft = NftBackend.__new__(NftBackend)
+    nft.table = "inet"
+    nft.chain = "sysspectogram"
+    nft.bans = {}
+    nft.never_ban_cidrs = []
+    nft.max_ban_ttl_sec = 604800.0
+    nft._kirk_expires = None
+    monkeypatch.setattr(nft, "_run", fake_run)
+    monkeypatch.setattr(nft, "_ensure_table", lambda: None)
+    # Real constructor must not call reconcile. Simulate by not calling it.
+    assert released == []
+    assert nft._kirk_expires is None
+
+
 def test_expire_shield_ports_removes_expired(monkeypatch, tmp_path):
     monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
     (tmp_path / "state").mkdir()

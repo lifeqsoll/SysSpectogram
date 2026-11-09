@@ -70,6 +70,10 @@ def run_web_dashboard(
     nft = NftBackend(
         never_ban_cidrs=[str(x) for x in (resp_cfg.get("never_ban_cidrs") or [])]
     )
+    try:
+        nft.reconcile_kirk_from_disk()
+    except Exception as exc:
+        console.print(f"[yellow]kirk deadline reconcile[/] {exc}")
     # attach a perimeter watcher so allow/mute/lockdown work in standalone web mode
     from sysspectogram.config import resolve_runtime_path
     from sysspectogram.perimeter.watcher import PerimeterWatcher
