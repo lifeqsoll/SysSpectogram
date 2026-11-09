@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import subprocess
 from collections import OrderedDict
@@ -206,29 +207,47 @@ def _auth_tail_helper(lines: int = 200, cursor: str | None = None) -> tuple[list
     return [str(x) for x in raw if str(x).strip()], True
 
 
+def _journal_denied(text: str) -> bool:
+    low = (text or "").lower()
+    return "no journal files" in low or "not seeing messages from other users" in low
+
+
+def _in_journal_group() -> bool:
+    import grp
+
+    wanted = {"systemd-journal", "adm", "wheel"}
+    try:
+        names = {grp.getgrgid(gid).gr_name for gid in os.getgroups()}
+    except OSError:
+        return False
+    return bool(names & wanted)
+
+
 def _journal_ssh_reachable(lines: int = 1) -> bool:
-    """True when journalctl for sshd succeeds (even with zero lines)."""
-    specs: list[list[str]] = [
-        ["-u", "sshd"],
-        ["-u", "sshd-session"],
-        ["-u", "ssh"],
-        ["_COMM=sshd-session"],
-        ["_COMM=sshd"],
-    ]
-    for spec in specs:
-        try:
-            proc = subprocess.run(
-                ["journalctl", *spec, "-n", str(lines), "-o", "cat", "--no-pager"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            if proc.returncode == 0:
-                return True
-        except (OSError, subprocess.SubprocessError):
-            continue
-    return False
+    """True only when this user can actually read the system journal.
+
+    ``journalctl`` exits 0 for "No journal files were found" and for a user
+    who only sees their own journal. Those are not an ssh source.
+    """
+    import os
+
+    try:
+        proc = subprocess.run(
+            ["journalctl", "--system", "-n", str(max(1, lines)), "-q", "--no-pager"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    if _journal_denied(blob):
+        return False
+    if (proc.stdout or "").strip():
+        return True
+    privileged = os.geteuid() == 0 or _in_journal_group()
+    return privileged and proc.returncode == 0
 
 
 def ssh_auth_lines(lines: int = 200) -> tuple[list[str], str]:

@@ -50,6 +50,29 @@ def test_ssh_auth_lines_helper_fallback(monkeypatch):
     assert len(got) == 1
 
 
+def test_journal_reachable_rejects_empty_and_denied(monkeypatch):
+    from sysspectogram.perimeter.auth import _journal_ssh_reachable
+
+    class _Proc:
+        def __init__(self, out: str, err: str, code: int = 0):
+            self.stdout = out
+            self.stderr = err
+            self.returncode = code
+
+    def _run_denied(*_a, **_k):
+        return _Proc("", "No journal files were found.\n", 0)
+
+    monkeypatch.setattr("sysspectogram.perimeter.auth.subprocess.run", _run_denied)
+    monkeypatch.setattr("sysspectogram.perimeter.auth.os.geteuid", lambda: 1000)
+    assert _journal_ssh_reachable() is False
+
+    def _run_other_users(*_a, **_k):
+        return _Proc("", "Hint: You are currently not seeing messages from other users and the system.\n", 0)
+
+    monkeypatch.setattr("sysspectogram.perimeter.auth.subprocess.run", _run_other_users)
+    assert _journal_ssh_reachable() is False
+
+
 def test_ssh_auth_lines_helper_empty_still_ok(monkeypatch):
     monkeypatch.setattr("sysspectogram.perimeter.auth._journal_ssh", lambda lines=200: [])
     monkeypatch.setattr(
