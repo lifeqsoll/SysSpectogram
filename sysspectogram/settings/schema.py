@@ -55,6 +55,8 @@ def set_value(cfg: dict[str, Any], dotted: str, value: Any) -> None:
 
 
 def validate_value(entry: dict[str, Any], value: Any) -> list[str]:
+    import math
+
     errors: list[str] = []
     kind = entry.get("type")
     key = entry["key"]
@@ -65,13 +67,16 @@ def validate_value(entry: dict[str, Any], value: Any) -> list[str]:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             errors.append(f"{key}: expected a number")
         else:
-            if kind == "int" and not isinstance(value, int):
+            if not math.isfinite(float(value)):
+                errors.append(f"{key}: must be a finite number")
+            elif kind == "int" and not isinstance(value, int):
                 errors.append(f"{key}: expected an integer")
-            lo, hi = entry.get("min"), entry.get("max")
-            if lo is not None and value < lo:
-                errors.append(f"{key}: below minimum {lo}")
-            if hi is not None and value > hi:
-                errors.append(f"{key}: above maximum {hi}")
+            else:
+                lo, hi = entry.get("min"), entry.get("max")
+                if lo is not None and value < lo:
+                    errors.append(f"{key}: below minimum {lo}")
+                if hi is not None and value > hi:
+                    errors.append(f"{key}: above maximum {hi}")
     elif kind == "enum":
         if value not in (entry.get("choices") or []):
             errors.append(f"{key}: must be one of {entry.get('choices')}")

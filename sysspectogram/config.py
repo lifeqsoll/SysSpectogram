@@ -106,6 +106,42 @@ def state_root() -> Path:
     return checkout if checkout is not None else ROOT
 
 
+def ensure_writable_state_root() -> Path:
+    """Return ``state_root()`` after checking it is a usable directory.
+
+    Raises ``RuntimeError`` with a clear message when ``SYSSPECTOGRAM_HOME``
+    points at a file or an unreadable/unwritable location.
+    """
+    root = state_root()
+    if root.exists() and not root.is_dir():
+        raise RuntimeError(f"{STATE_ENV} must be a directory, not a file: {root}")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        state_dir = root / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(state_dir, 0o700)
+        except OSError:
+            pass
+        probe = state_dir / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"state directory not writable ({root}): {exc}") from exc
+    return root
+
+
+def resolve_runtime_path(path: str | Path) -> Path:
+    """Resolve relative runtime paths under ``state_root()`` when under state/reports/artifacts."""
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    rel = str(path).replace("\\", "/")
+    if rel.startswith(("state/", "reports/", "artifacts/")):
+        return (state_root() / p).resolve()
+    return (ROOT / p).resolve()
+
+
 def dotenv_path() -> Path:
     """Telegram / Cloudflare secrets — always under state_root, never site-packages."""
     return state_root() / ".env"
@@ -248,6 +284,17 @@ def _parse_cidr_list(value: Any) -> list[str]:
 
 
 def _merge_overlay_dict(data: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    import logging
+
+    log = logging.getLogger(__name__)
+    schema_by_key: dict[str, dict[str, Any]] = {}
+    try:
+        from sysspectogram.settings.schema import load_schema, settings_by_key, validate_value
+
+        schema_by_key = settings_by_key(load_schema(configs_dir() / "schema.yaml"))
+    except Exception as exc:
+        log.warning("overlay schema unavailable; type checks limited: %s", exc)
+
     for dotted, value in overlay.items():
         if dotted not in OVERLAY_ALLOWED:
             continue
@@ -269,9 +316,7 @@ def _merge_overlay_dict(data: dict[str, Any], overlay: dict[str, Any]) -> dict[s
                 else:
                     dropped.append(f"{item} ({err or 'invalid'})")
             if dropped:
-                import logging
-
-                logging.getLogger(__name__).warning(
+                log.warning(
                     "scrubbed invalid response.never_ban_cidrs from overlay: %s",
                     ", ".join(dropped),
                 )
@@ -287,15 +332,23 @@ def _merge_overlay_dict(data: dict[str, Any], overlay: dict[str, Any]) -> dict[s
                 except ValueError as exc:
                     dropped_a.append(f"{item} ({exc})")
             if dropped_a:
-                import logging
-
-                logging.getLogger(__name__).warning(
+                log.warning(
                     "scrubbed invalid kirk.allow_ssh_cidrs from overlay: %s",
                     ", ".join(dropped_a),
                 )
             value = scrubbed_a
-        elif not isinstance(value, _OVERLAY_TYPES):
-            continue
+        else:
+            entry = schema_by_key.get(str(dotted))
+            if entry is not None:
+                from sysspectogram.settings.schema import validate_value
+
+                errs = validate_value(entry, value)
+                if errs:
+                    log.warning("skipping invalid overlay %s: %s", dotted, "; ".join(errs))
+                    continue
+            elif not isinstance(value, _OVERLAY_TYPES):
+                log.warning("skipping non-scalar overlay %s=%r", dotted, value)
+                continue
         cur: dict[str, Any] = data
         parts = str(dotted).split(".")
         for part in parts[:-1]:

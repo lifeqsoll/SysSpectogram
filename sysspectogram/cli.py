@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 from pathlib import Path
@@ -15,10 +16,9 @@ console = Console()
 
 
 def _resolve(path: str | Path) -> Path:
-    p = Path(path)
-    if p.is_absolute():
-        return p
-    return (ROOT / p).resolve()
+    from sysspectogram.config import resolve_runtime_path
+
+    return resolve_runtime_path(path)
 
 
 def _cmd_collect(args: argparse.Namespace) -> int:
@@ -500,14 +500,21 @@ def _cmd_configure(args: argparse.Namespace) -> int:
     from sysspectogram.configure_tui import run_configure
 
     prefix = state_root() if args.prefix is None else _resolve(args.prefix)
-    run_configure(
-        prefix=prefix,
-        config_path=_resolve(args.config) if args.config else None,
-        accept_recommended=bool(args.accept_recommended),
-        non_interactive=bool(args.non_interactive or args.accept_recommended),
-        role=getattr(args, "role", None),
-        seed_fp=not bool(args.no_seed_fp),
-    )
+    try:
+        run_configure(
+            prefix=prefix,
+            config_path=_resolve(args.config) if args.config else None,
+            accept_recommended=bool(args.accept_recommended),
+            non_interactive=bool(args.non_interactive or args.accept_recommended),
+            role=getattr(args, "role", None),
+            seed_fp=not bool(args.no_seed_fp),
+        )
+    except EOFError:
+        print(
+            "configure: stdin closed — re-run with --non-interactive "
+            "(or --accept-recommended) for unattended setup"
+        )
+        return 2
     return 0
 
 
@@ -993,15 +1000,16 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
         from sysspectogram.perimeter.auth import ssh_auth_lines
 
         auth_lines, auth_src = ssh_auth_lines(50)
-        if auth_lines:
-            ssh_ok = True
-            ssh_detail = f"{auth_src} ok ({len(auth_lines)} lines)"
-        elif auth_src == "none":
+        if auth_src == "none":
             ssh_detail = (
                 "no access: add user to systemd-journal group or install helper (auth.tail)"
             )
         else:
-            ssh_detail = "no sshd journal lines yet"
+            ssh_ok = True
+            if auth_lines:
+                ssh_detail = f"{auth_src} ok ({len(auth_lines)} lines)"
+            else:
+                ssh_detail = f"{auth_src} ok (0 lines yet — source reachable)"
     except Exception as exc:
         ssh_detail = f"ssh_source check error: {exc}"
     add(
@@ -1010,6 +1018,15 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
         ssh_detail,
         severity="warn" if enforcing and not ssh_ok else ("info" if not ssh_ok else "ok"),
     )
+
+    # State directory writable (SYSSPECTOGRAM_HOME must be a directory)
+    try:
+        from sysspectogram.config import ensure_writable_state_root
+
+        ensure_writable_state_root()
+        add("state_dir", True, f"writable at {root}")
+    except Exception as exc:
+        add("state_dir", False, str(exc), severity="warn")
 
     # Host ML baseline (Phase 7.2) — informational; experimental by default
     try:
@@ -1032,7 +1049,7 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
     except Exception as exc:
         add("ml_baseline", False, f"unavailable: {exc}", severity="info")
 
-    required = ["helper", "guard", "metrics"]
+    required = ["helper", "guard", "metrics", "state_dir"]
     if enforcing:
         required.append("ban_backend")
         required.append("ssh_source")
@@ -1046,7 +1063,12 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
         ok = False
     if enforcing and not ssh_ok:
         ok = False
+    if any(c["id"] == "state_dir" and not c["ok"] for c in checks):
+        ok = False
     print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False))
+    strict = bool(getattr(args, "strict", False))
+    if strict and not ok:
+        return 1
     return 0 if ok else 1
 
 
@@ -1411,9 +1433,15 @@ def _cmd_bans(args: argparse.Namespace) -> int:
                 )
             )
             return 1
+        source = result.get("source")
+        if source is None and not isinstance(backend, NoneBanBackend):
+            from sysspectogram.response.helper_ban import HelperBanBackend
+
+            if isinstance(backend, HelperBanBackend):
+                source = "helper"
         print(
             json.dumps(
-                {"ok": True, "ips": list(result.get("ips") or []), "source": result.get("source")},
+                {"ok": True, "ips": list(result.get("ips") or []), "source": source},
                 ensure_ascii=False,
             )
         )
@@ -1426,7 +1454,23 @@ def _cmd_bans(args: argparse.Namespace) -> int:
     if action == "test-ban":
         if getattr(args, "force", False):
             nft._force_ban = True  # type: ignore[attr-defined]
-        msg = nft.ban_ip(str(args.ip), ttl_sec=float(getattr(args, "ttl", 60) or 60))
+        try:
+            ttl = float(getattr(args, "ttl", 60))
+        except (TypeError, ValueError):
+            print(json.dumps({"ok": False, "error": "invalid ttl"}))
+            return 2
+        if not math.isfinite(ttl) or ttl <= 0 or ttl > 3600:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "test-ban ttl must be in (0, 3600]",
+                        "hint": "lab self-test only; use a short positive TTL",
+                    }
+                )
+            )
+            return 2
+        msg = nft.ban_ip(str(args.ip), ttl_sec=ttl)
         ok = msg.startswith("banned")
         print(json.dumps({"ok": ok, "detail": msg}, ensure_ascii=False))
         return 0 if ok else 1
@@ -1647,7 +1691,20 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
     """Write allowlisted keys to state/user-settings.json (no root helper required)."""
     import json
 
-    from sysspectogram.config import OVERLAY_ALLOWED, user_settings_path
+    from sysspectogram.config import (
+        OVERLAY_ALLOWED,
+        configs_dir,
+        ensure_writable_state_root,
+        user_settings_path,
+    )
+    from sysspectogram.settings.schema import load_schema, validate_changes
+    from sysspectogram.settings_lock import update_user_settings
+
+    try:
+        ensure_writable_state_root()
+    except RuntimeError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 2
 
     raw = getattr(args, "changes", None) or "{}"
     try:
@@ -1658,26 +1715,16 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
     if not isinstance(changes, dict):
         print(json.dumps({"ok": False, "error": "changes must be an object"}))
         return 2
-    path = user_settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current: dict = {}
-    if path.is_file():
-        try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(current, dict):
-                current = {}
-        except (OSError, ValueError):
-            current = {}
-    # Canonical modes match schema; synonyms normalize before write.
+
+    # Canonical modes match schema; synonyms normalize before validate/write.
     _MODE_ALIASES = {
         "enforce": "shield",
         "soft": "shield",
         "full": "aggressive",
         "notify": "observe",
     }
-    _MODE_CANONICAL = frozenset({"observe", "shield", "aggressive", "isolate"})
     _MODE_ENFORCING = frozenset({"shield", "aggressive", "isolate"})
-    applied: dict = {}
+    normalized: dict = {}
     rejected: list[str] = []
     for key, value in changes.items():
         if key not in OVERLAY_ALLOWED:
@@ -1695,20 +1742,7 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
                     )
                 )
                 return 2
-            mode = str(value).strip().lower()
-            mode = _MODE_ALIASES.get(mode, mode)
-            if mode not in _MODE_CANONICAL:
-                print(
-                    json.dumps(
-                        {
-                            "ok": False,
-                            "error": f"invalid response.mode={value!r}",
-                            "hint": "allowed: observe, shield, aggressive, isolate "
-                            "(aliases soft/full/notify/enforce)",
-                        }
-                    )
-                )
-                return 2
+            mode = _MODE_ALIASES.get(str(value).strip().lower(), str(value).strip().lower())
             value = mode
             if mode in _MODE_ENFORCING:
                 from sysspectogram.response.helper_ban import helper_available
@@ -1750,16 +1784,42 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 print(json.dumps({"ok": False, "error": f"allow_ssh_cidrs: {exc}"}))
                 return 2
-        elif key != "response.mode" and not isinstance(value, (bool, int, float, str)):
-            rejected.append(str(key))
-            continue
-        current[str(key)] = value
-        applied[str(key)] = value
-    path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        normalized[str(key)] = value
+
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        schema = load_schema(configs_dir() / "schema.yaml")
+        errs = validate_changes(schema, normalized)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"schema validate failed: {exc}"}))
+        return 2
+    if errs:
+        print(json.dumps({"ok": False, "error": errs[0], "errors": errs}))
+        return 2
+
+    force = bool(getattr(args, "force", False))
+    path = user_settings_path()
+    applied: dict = {}
+
+    def _mutator(current: dict) -> dict | None:
+        for key, value in normalized.items():
+            current[key] = value
+            applied[key] = value
+        return current
+
+    result = update_user_settings(_mutator, path=path, force=force)
+    if not result.get("ok"):
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": result.get("reason") or "write_failed",
+                    "hint": result.get("hint")
+                    or "fix state/user-settings.json or re-run with --force (backs up .bak)",
+                }
+            )
+        )
+        return 2
+
     rollback_info = None
     mode_applied = applied.get("response.mode")
     if (
@@ -1770,10 +1830,16 @@ def _cmd_home_settings(args: argparse.Namespace) -> int:
         from sysspectogram.response.mode_rollback import schedule_mode_pending
 
         rollback_info = schedule_mode_pending(str(mode_applied))
-    out = {"ok": True, "path": str(path), "applied": applied, "rejected": rejected}
+    out = {
+        "ok": True,
+        "path": str(path),
+        "applied": applied,
+        "rejected": rejected,
+        "written": bool(result.get("written")),
+    }
     if rollback_info is not None:
         out["mode_pending"] = rollback_info
-    print(json.dumps(out, ensure_ascii=False))
+    print(json.dumps(out, ensure_ascii=False, allow_nan=False))
     return 0
 
 
@@ -3029,6 +3095,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not schedule auto-rollback when switching to soft/full/isolate",
     )
+    hm_set.add_argument(
+        "--force",
+        action="store_true",
+        help="backup corrupt user-settings.json to .bak and start fresh",
+    )
     hm_set.set_defaults(func=_cmd_home_settings)
     hm_warm = hm_sub.add_parser("warmup", help="shield readiness checklist (never_ban, labels, …)")
     hm_warm.set_defaults(func=_cmd_home_warmup)
@@ -3068,6 +3139,11 @@ def build_parser() -> argparse.ArgumentParser:
     hm_fp.set_defaults(func=_cmd_home_false_positive)
     hm_health = hm_sub.add_parser("health", help="quick health: helper, guard, metrics, telegram")
     hm_health.add_argument("--ping", action="store_true", help="send a Telegram test message")
+    hm_health.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero when ok=false (default already does; kept for scripts)",
+    )
     hm_health.set_defaults(func=_cmd_home_health)
     hm_confirm = hm_sub.add_parser(
         "confirm-mode",
