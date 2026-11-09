@@ -8,6 +8,28 @@ from sysspectogram.response.actions import NftBackend, kill_pid
 from sysspectogram.web.bus import LiveAlert, LiveBus
 
 
+def _require_ok(msg: str) -> str:
+    """Turn nft refuse/fail strings into errors so web does not report ok:true."""
+    low = str(msg or "").lower()
+    if (
+        "refused" in low
+        or "failed" in low
+        or "nft required" in low
+    ):
+        raise ValueError(str(msg))
+    return str(msg)
+
+
+def _ssh_port() -> int:
+    try:
+        from sysspectogram.config import load_config
+
+        raw = (load_config().get("ssh") or {}).get("port", 22)
+        return int(raw)
+    except (TypeError, ValueError, OSError):
+        return 22
+
+
 @dataclass
 class WebControllers:
     bus: LiveBus
@@ -124,7 +146,15 @@ class WebControllers:
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid ttl: {ttl_raw!r}") from exc
             force = bool(payload.get("force") is True)
-            return self.nft.shield_port(port, ttl_sec=ttl, dry_run=self.dry_run, force=force)
+            return _require_ok(
+                self.nft.shield_port(
+                    port,
+                    ttl_sec=ttl,
+                    dry_run=self.dry_run,
+                    force=force,
+                    ssh_port=_ssh_port(),
+                )
+            )
         if action == "kill":
             from sysspectogram.response.actions import read_proc_comm
 
@@ -212,11 +242,17 @@ class WebControllers:
             ports = payload.get("ports") or [80, 443]
             if isinstance(ports, (str, int)):
                 ports = [ports]
+            cleaned: list[int] = []
+            for p in ports:
+                try:
+                    cleaned.append(int(p))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"invalid port {p!r}") from exc
             ttl = float(payload.get("ttl") or 3600)
             msg = self.nft.quarantine_ports(
-                [int(p) for p in ports], dry_run=self.dry_run, ttl_sec=ttl
+                cleaned, dry_run=self.dry_run, ttl_sec=ttl, ssh_port=_ssh_port()
             )
-            return msg
+            return _require_ok(msg)
         if action == "release_quarantine":
             return self.nft.release_quarantine(dry_run=self.dry_run)
         if action == "release_lockdown":

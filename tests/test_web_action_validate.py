@@ -43,6 +43,26 @@ def test_mute_rejects_nan_ttl():
     assert c.run("mute", {"ip": "x", "ttl": "1e308"})["ok"] is False
 
 
+def test_shield_and_quarantine_refuse_are_not_ok():
+    c = _ctrl()
+
+    def boom(*_a, **_k):
+        raise AssertionError("nft should not be called")
+
+    c.nft.shield_port = lambda *a, **k: "shield refused: port 22 is SSH"
+    c.nft.quarantine_ports = lambda *a, **k: "quarantine refused: port 22 (SSH)"
+    assert c.run("shield", {"port": 22})["ok"] is False
+    assert c.run("quarantine", {"ports": [22]})["ok"] is False
+    c.nft.shield_port = lambda *a, **k: "shield refused: port out of range 0"
+    assert c.run("shield", {"port": 0})["ok"] is False
+    assert c.run("shield", {"port": 70000})["ok"] is False
+    assert c.run("shield", {"port": "x"})["ok"] is False
+    bad = c.run("quarantine", {"ports": ["x", 80]})
+    assert bad["ok"] is False
+    assert "invalid port" in bad["error"]
+    _ = boom
+
+
 def test_quiet_requires_bool():
     c = _ctrl()
     assert c.run("quiet", {"on": "false"})["ok"] is False

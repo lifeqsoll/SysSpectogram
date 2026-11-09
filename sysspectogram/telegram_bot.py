@@ -1004,19 +1004,22 @@ class TelegramBot:
             ):
                 pass  # handled via ask| path already
             result = self._run_action(action, payload)
+            failed = any(
+                tok in result.lower() for tok in ("refused", "failed", "nft required")
+            )
             if self.audit is not None:
                 try:
                     self.audit.record(
                         action,
                         dry_run=self.dry_run,
-                        ok="fail" not in result.lower() and "error" not in result.lower(),
+                        ok=not failed and "error" not in result.lower(),
                         detail=result[:300],
                         payload=payload,
                         host_id=self.host_id,
                     )
                 except Exception:
                     pass
-            self.client.answer_callback(cq_id, "ok")
+            self.client.answer_callback(cq_id, "failed" if failed else "ok")
             self.client.send_message(self.prefix(result), chat_id=chat_id)
             if action == "kill" and "skip" not in result.lower() and "refusing" not in result.lower():
                 try:
@@ -1045,8 +1048,12 @@ class TelegramBot:
         if action == "unban":
             return self.nft.unban_ip(str(payload.get("ip")), dry_run=self.dry_run)
         if action == "shield":
+            try:
+                port = int(payload.get("port"))
+            except (TypeError, ValueError):
+                return f"shield refused: invalid port {payload.get('port')!r}"
             return self.nft.shield_port(
-                int(payload.get("port")), float(payload.get("ttl") or 3600), dry_run=self.dry_run
+                port, float(payload.get("ttl") or 3600), dry_run=self.dry_run
             )
         if action == "kill":
             pid = int(payload.get("pid") or 0)
