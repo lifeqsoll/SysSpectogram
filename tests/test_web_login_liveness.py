@@ -44,6 +44,30 @@ def test_eperm_with_sysspectogram_cmdline_is_alive(monkeypatch: pytest.MonkeyPat
     assert login_process_alive(4242) is True
 
 
+def test_guard_cmdline_without_web_is_dead(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sysspectogram.web.login_code.os.kill", lambda pid, sig: None)
+
+    def fake_read(self: Path) -> bytes:
+        if self.name == "cmdline":
+            return b"python\x00-m\x00sysspectogram\x00guard\x00"
+        raise AssertionError(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read)
+    assert login_process_alive(4242) is False
+
+
+def test_sysspectogram_web_substring_is_not_enough(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sysspectogram.web.login_code.os.kill", lambda pid, sig: None)
+
+    def fake_read(self: Path) -> bytes:
+        if self.name == "cmdline":
+            return b"sysspectogram-web\x00sleep\x005\x00"
+        raise AssertionError(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read)
+    assert login_process_alive(4242) is False
+
+
 def test_reused_pid_is_not_web(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sysspectogram.web.login_code.os.kill", lambda pid, sig: None)
 

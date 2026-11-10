@@ -165,8 +165,35 @@ def login_process_alive(pid: int | None) -> bool:
         raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
     except OSError:
         return True
-    text = raw.replace(b"\x00", b" ").decode("utf-8", "replace").lower()
-    return "sysspectogram" in text
+    tokens = [
+        t.decode("utf-8", "replace")
+        for t in raw.split(b"\x00")
+        if t
+    ]
+    joined = " ".join(tokens).lower()
+    if "sysspectogram" not in joined and not any("sysspectogram" in t for t in tokens):
+        return False
+    has_web = (
+        "run_web_dashboard" in joined
+        or any(t in {"web", "--web"} or t.endswith("/web") for t in tokens)
+    )
+    if not has_web:
+        return False
+    home = os.environ.get("SYSSPECTOGRAM_HOME")
+    if home:
+        want = f"SYSSPECTOGRAM_HOME={home}".encode("utf-8")
+        try:
+            env = Path(f"/proc/{int(pid)}/environ").read_bytes()
+        except OSError:
+            env = b""
+        if env and want not in env.split(b"\x00"):
+            try:
+                cwd = Path(f"/proc/{int(pid)}/cwd").resolve()
+            except OSError:
+                return False
+            if cwd != Path(home).resolve():
+                return False
+    return True
 
 
 def read_login_code(path: Path) -> tuple[str | None, float | None, int | None]:

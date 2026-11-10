@@ -956,7 +956,7 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
             add("metrics", False, f"cannot read store: {exc}", severity="warn")
 
     # Telegram
-    cfg = load_config()
+    cfg = load_config(getattr(args, "config", None))
     try:
         from sysspectogram.response.actions import policy_from_config
 
@@ -1047,9 +1047,15 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
 
         auth_lines, auth_src = ssh_auth_lines(50)
         if auth_src == "none":
-            ssh_detail = (
-                "no access: add user to systemd-journal group or install helper (auth.tail)"
-            )
+            if os.geteuid() == 0:
+                ssh_detail = (
+                    "no access: no readable system journal "
+                    "(install systemd-journald or the helper auth.tail unit)"
+                )
+            else:
+                ssh_detail = (
+                    "no access: add user to systemd-journal group or install helper (auth.tail)"
+                )
         else:
             ssh_ok = True
             if auth_lines:

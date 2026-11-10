@@ -256,3 +256,23 @@ def test_live_second_lockdown_allow_before_drop() -> None:
         assert allow_at < drop_at
     finally:
         nft.release_lockdown(dry_run=False)
+
+
+@pytest.mark.skipif(not shutil.which("nft"), reason="nft binary required")
+@pytest.mark.skipif(__import__("os").geteuid() != 0, reason="root required for live nft")
+def test_live_lockdown_inserts_synrl_allow_before_drop() -> None:
+    nft = NftBackend(never_ban_cidrs=["192.0.2.11/32"])
+    try:
+        syn = nft.apply_syn_rate_limit(allow_cidrs=["192.0.2.11/32"])
+        assert "failed" not in syn.lower()
+        nft.never_ban_cidrs = ["192.0.2.11/32", "203.0.113.7/32"]
+        lock = nft.apply_lockdown(dry_run=False)
+        assert "failed" not in lock.lower()
+        code, out = nft._run(["nft", "-a", "list", "chain", "inet", "sysspectogram", "input"])
+        assert code == 0
+        allow_at = out.find("sysspectogram:synrl:allow:203.0.113.7/32")
+        drop_at = out.find("sysspectogram:synrl:drop")
+        assert allow_at != -1 and drop_at != -1
+        assert allow_at < drop_at
+    finally:
+        nft.release_lockdown(dry_run=False)
