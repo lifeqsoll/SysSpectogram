@@ -32,4 +32,10 @@ def validate_webapp_init_data(init_data: str, bot_token: str, max_age_sec: float
             user = json.loads(pairs["user"])
         except json.JSONDecodeError:
             return None
-    return {"user": user, "auth_date": auth_date, "raw": pairs}
+    chat = None
+    if pairs.get("chat"):
+        try:
+            chat = json.loads(pairs["chat"])
+        except json.JSONDecodeError:
+            chat = None
+    return {"user": user, "chat": chat, "auth_date": auth_date, "raw": pairs}

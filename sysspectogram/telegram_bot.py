@@ -108,6 +108,21 @@ def _markup(rows: list[list[dict]]) -> dict:
     return {"inline_keyboard": rows}
 
 
+def parse_allowed_user_ids(tg_cfg: dict | None = None) -> set[str]:
+    """User ids from telegram.allowed_user_ids and TELEGRAM_ALLOWED_USER_IDS."""
+    raw = ""
+    if isinstance(tg_cfg, dict):
+        val = tg_cfg.get("allowed_user_ids")
+        if isinstance(val, (list, tuple, set)):
+            raw = ",".join(str(x) for x in val)
+        elif val:
+            raw = str(val)
+    env = (os.environ.get("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if env:
+        raw = f"{raw},{env}" if raw else env
+    return {x.strip() for x in raw.replace(";", ",").split(",") if x.strip()}
+
+
 class TelegramBot:
     def __init__(
         self,
@@ -222,10 +237,9 @@ class TelegramBot:
         # In groups/supergroups any member can hit the bot — require user allowlist.
         ctype = (chat_type or "").lower()
         if ctype in ("group", "supergroup"):
-            raw = (os.environ.get("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
-            if not raw:
+            allowed = parse_allowed_user_ids()
+            if not allowed:
                 return False
-            allowed = {x.strip() for x in raw.replace(";", ",").split(",") if x.strip()}
             return str(from_user_id or "") in allowed
         return True
 

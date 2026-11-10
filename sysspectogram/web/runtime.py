@@ -17,6 +17,7 @@ from sysspectogram.response.actions import NftBackend
 from sysspectogram.console_unlock import ConsoleUnlock
 from sysspectogram.web.actions import WebControllers
 from sysspectogram.web.bus import GLOBAL_BUS, LiveAlert, LiveBus
+from sysspectogram.telegram_bot import parse_allowed_user_ids
 from sysspectogram.web.server import start_web_server
 
 console = Console()
@@ -78,6 +79,7 @@ def run_web_dashboard(
         never_ban_cidrs=[str(x) for x in (resp_cfg.get("never_ban_cidrs") or [])],
         ssh_port=ssh_port,
         https_egress_cidrs=https_egress,
+        allow_private_bans=bool(resp_cfg.get("allow_private_bans", False)),
     )
     try:
         nft.reconcile_kirk_from_disk()
@@ -153,6 +155,7 @@ def run_web_dashboard(
         port=listen_port,
         bot_token=tg_cfg.get("bot_token"),
         allowed_chat_id=tg_cfg.get("chat_id"),
+        allowed_user_ids=parse_allowed_user_ids(tg_cfg),
         public_url=public_url,
         controllers=controllers,
         unlock=unlock_gate if unlock_gate.enabled else None,

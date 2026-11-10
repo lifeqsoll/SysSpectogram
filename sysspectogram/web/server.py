@@ -36,7 +36,9 @@ SECURITY_CSP = (
     "frame-ancestors 'self' https://web.telegram.org"
 )
 UNLOCK_RATE_MAX = 5
-UNLOCK_RATE_WINDOW_SEC = 60.0
+UNLOCK_RATE_WINDOW_SEC = 300.0
+UNLOCK_LOCKOUT_SEC = 300.0
+SSE_SESSION_RECHECK_SEC = 5.0
 
 
 class WebAppState:
@@ -52,10 +54,12 @@ class WebAppState:
         unlock: ConsoleUnlock | None = None,
         login: WebLoginCode | None = None,
         launch_token: str | None = None,
+        allowed_user_ids: set[str] | list[str] | None = None,
     ) -> None:
         self.bus = bus
         self.bot_token = bot_token or ""
         self.allowed_chat_id = str(allowed_chat_id or "")
+        self.allowed_user_ids = {str(x).strip() for x in (allowed_user_ids or set()) if str(x).strip()}
         self.public_url = (public_url or "").rstrip("/")
         self.bind_host = bind_host
         self.controllers = controllers
@@ -77,8 +81,10 @@ class WebAppState:
                 q.popleft()
             n = len(q)
             if n >= UNLOCK_RATE_MAX:
-                backoff = min(2.0, 0.25 * (2 ** min(n - UNLOCK_RATE_MAX, 4)))
-                return False, backoff, n
+                locked_from = q[UNLOCK_RATE_MAX - 1]
+                remaining = UNLOCK_LOCKOUT_SEC - (now - locked_from)
+                if remaining > 0:
+                    return False, remaining, n
             backoff = min(1.5, 0.08 * (2 ** n)) if n else 0.0
             return True, backoff, n
 
@@ -91,6 +97,12 @@ class WebAppState:
         with self._lock:
             self._sessions[tok] = time.time() + 86400.0
         return tok
+
+    def revoke_session(self, tok: str | None) -> None:
+        if not tok:
+            return
+        with self._lock:
+            self._sessions.pop(tok, None)
 
     def session_ok(self, tok: str | None) -> bool:
         if not tok:
@@ -338,7 +350,7 @@ def _make_handler(app: WebAppState):
                 return self._json(413, {"ok": False, "error": "body too large"})
             raw = self.rfile.read(length) if length else b"{}"
 
-            if path in {"/api/auth/telegram", "/api/unlock", "/api/login", "/api/action"}:
+            if path in {"/api/auth/telegram", "/api/unlock", "/api/login", "/api/logout", "/api/action"}:
                 if not self._require_json_ctype():
                     return self._json(415, {"ok": False, "error": "Content-Type must be application/json"})
 
@@ -356,15 +368,28 @@ def _make_handler(app: WebAppState):
                     return self._json(403, {"ok": False, "error": "invalid initData"})
                 user = parsed.get("user") or {}
                 uid = str(user.get("id") or "")
-                allowed = (app.allowed_chat_id or "").strip()
-                # Public Mini App must pin chat/user; empty allowlist was any valid initData.
-                if app.public_url and not allowed:
+                chat_from = ""
+                raw_chat = (parsed.get("chat") or {})
+                if isinstance(raw_chat, dict):
+                    chat_from = str(raw_chat.get("id") or "")
+                allowed_chat = (app.allowed_chat_id or "").strip()
+                allowed_users = set(app.allowed_user_ids)
+                # Public Mini App must pin user allowlist and/or chat; never lstrip("-")
+                # (group -100123 must not match user 100123).
+                if app.public_url and not allowed_chat and not allowed_users:
                     return self._json(
                         403,
-                        {"ok": False, "error": "allowed_chat_id required when public_url is set"},
+                        {"ok": False, "error": "allowed_chat_id or allowed_user_ids required when public_url is set"},
                     )
-                if allowed:
-                    ok = uid == allowed or uid == allowed.lstrip("-")
+                ok = True
+                if allowed_users or allowed_chat:
+                    ok = False
+                    if allowed_users and uid in allowed_users:
+                        ok = True
+                        if allowed_chat and chat_from and chat_from != allowed_chat:
+                            ok = False
+                    elif not allowed_users and allowed_chat:
+                        ok = uid == allowed_chat or (bool(chat_from) and chat_from == allowed_chat)
                     if not ok:
                         return self._json(403, {"ok": False, "error": "chat not allowlisted"})
                 sess = app.issue_session()
@@ -390,7 +415,7 @@ def _make_handler(app: WebAppState):
                 ip = self._client_ip()
                 allowed, backoff, _n = app._unlock_rate_status(ip)
                 if not allowed:
-                    retry = str(max(1, int(backoff) if backoff >= 1 else 1))
+                    retry = str(max(1, int(backoff + 0.999)))
                     return self._json(
                         429,
                         {"ok": False, "error": "rate limited"},
@@ -467,7 +492,7 @@ def _make_handler(app: WebAppState):
                     ip = self._client_ip()
                     allowed, backoff, _n = app._unlock_rate_status(ip)
                     if not allowed:
-                        retry = str(max(1, int(backoff) if backoff >= 1 else 1))
+                        retry = str(max(1, int(backoff + 0.999)))
                         return self._json(
                             429,
                             {"ok": False, "error": "rate limited", "unlocked": False},
@@ -493,10 +518,18 @@ def _make_handler(app: WebAppState):
                     {
                         "ok": False,
                         "error": "bad unlock code",
-                        "fails": app.unlock.fail_count,
                         "unlocked": False,
                     },
                 )
+
+            if path == "/api/logout":
+                if not self._csrf_ok():
+                    return self._json(403, {"ok": False, "error": "csrf"})
+                app.revoke_session(self._cookie("ss_session"))
+                extra = {
+                    "Set-Cookie": "ss_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+                }
+                return self._json(200, {"ok": True, "logged_out": True}, extra=extra)
 
             if not self._authorized():
                 return self._json(401, {"ok": False, "error": "unauthorized"})
@@ -534,7 +567,13 @@ def _make_handler(app: WebAppState):
                 self.send_header("Connection", "keep-alive")
                 self.end_headers()
                 deadline = time.time() + SSE_MAX_LIFE_SEC
+                last_auth = 0.0
                 while time.time() < deadline:
+                    now = time.time()
+                    if now - last_auth >= SSE_SESSION_RECHECK_SEC:
+                        if not self._authorized():
+                            return
+                        last_auth = now
                     snap = app.enriched_snapshot()
                     line = f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
                     self.wfile.write(line.encode("utf-8"))
@@ -603,6 +642,7 @@ def start_web_server(
     login: WebLoginCode | None = None,
     token_path: Path | None | bool = True,
     max_connections: int = MAX_WEB_CONNECTIONS,
+    allowed_user_ids: set[str] | list[str] | None = None,
 ) -> ThreadingHTTPServer:
     launch_token = secrets.token_urlsafe(32)
     # token_path=True → default state/web.token; Path → that path; False/None → memory only.
@@ -646,6 +686,7 @@ def start_web_server(
         unlock=unlock,
         login=login,
         launch_token=launch_token,
+        allowed_user_ids=allowed_user_ids,
     )
 
     try:
