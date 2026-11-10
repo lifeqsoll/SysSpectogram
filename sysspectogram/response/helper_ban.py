@@ -33,10 +33,12 @@ class HelperBanBackend:
         socket_path: Path | str | None = None,
         never_ban_cidrs: list[str] | None = None,
         timeout_sec: float = 5.0,
+        allow_private_bans: bool = False,
     ) -> None:
         self.socket_path = Path(socket_path) if socket_path else helper_socket_path()
         self.never_ban_cidrs = list(never_ban_cidrs or [])
         self.timeout_sec = float(timeout_sec)
+        self.allow_private_bans = bool(allow_private_bans)
         self.bans: dict[str, Any] = {}
 
     def is_never_ban(self, ip: str) -> bool:
@@ -70,7 +72,7 @@ class HelperBanBackend:
         from sysspectogram.net_ip import parse_ban_ip
 
         try:
-            ip = parse_ban_ip(ip)
+            ip = parse_ban_ip(ip, allow_private=self.allow_private_bans)
         except ValueError as exc:
             return f"refuse ban: {exc}"
         if self.is_never_ban(ip):
@@ -79,7 +81,11 @@ class HelperBanBackend:
         if not force:
             from sysspectogram.response.protect import is_protected
 
-            reason = is_protected(ip, never_ban_cidrs=self.never_ban_cidrs)
+            reason = is_protected(
+                ip,
+                never_ban_cidrs=self.never_ban_cidrs,
+                allow_private_bans=self.allow_private_bans,
+            )
             if reason:
                 return f"protected skip {ip} ({reason})"
         if dry_run:
@@ -95,7 +101,7 @@ class HelperBanBackend:
         from sysspectogram.net_ip import parse_ban_ip
 
         try:
-            ip = parse_ban_ip(ip)
+            ip = parse_ban_ip(ip, allow_private=True)
         except ValueError as exc:
             return f"refuse unban: {exc}"
         if dry_run:

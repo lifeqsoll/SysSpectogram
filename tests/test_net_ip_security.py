@@ -29,6 +29,11 @@ def test_parse_ban_ip_accepts_host():
         "fe80::1",
         "fe80::1%eth0",
         "::ffff:203.0.113.9",
+        "10.0.0.2",
+        "192.168.1.1",
+        "172.16.0.1",
+        "100.64.0.1",
+        "fc00::1",
     ],
 )
 def test_parse_ban_ip_rejects(bad):

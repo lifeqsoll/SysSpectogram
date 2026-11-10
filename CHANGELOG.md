@@ -36,6 +36,8 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Accept LAN/ULA never_ban with warning; CGNAT warns; anycast check covers CIDRs; prefer `SSH_CONNECTION` when seeding without `--ip`.
 - Quote nft rule comments so lockdown/quarantine/shield actually apply; check established rule rc.
 - Lockdown/syn-rate-limit use `tcp flags syn / fin,syn,rst,ack` (nft 1.1.x). A failed apply rolls back only the rules that call added.
+- Spoofed SYN_RECV no longer auto-bans Telegram/DNS/gateway/LAN: `ban_ip` refuses those, `flow.auto_ban` defaults off, RFC1918/ULA/CGNAT need `allow_private_bans`.
+- Mini App auth no longer treats `lstrip("-")` of a group chat id as a user id; auth log keeps the first `from IP port`; IPv6 SSH fails can aggregate on `/64`.
 - `home health` does not treat a host with no journal files as an ssh source, including root (`journalctl` without `-q`).
 - A second lockdown inserts a new admin allow before the SYN drop. syn-rate-limit does the same for its allow rules, and replaces the drop when rate/burst change.
 - Kirk isolate keeps IPv6 resolvers from `resolvectl dns` and opens TCP/UDP 853 when the resolver is DNS-over-TLS (`#name`).

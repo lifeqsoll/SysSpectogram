@@ -2,15 +2,42 @@
 
 from __future__ import annotations
 
-from ipaddress import IPv4Address, IPv6Address, ip_address
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address
 from typing import Any
 
+# RFC1918 / CGNAT / ULA only — not TEST-NET (192.0.2.0/24, 203.0.113.0/24, 2001:db8::/32).
+# Python ``is_private`` treats documentation ranges as private.
+_RFC1918 = (
+    IPv4Network("10.0.0.0/8"),
+    IPv4Network("172.16.0.0/12"),
+    IPv4Network("192.168.0.0/16"),
+)
+_CGNAT = IPv4Network("100.64.0.0/10")
+_ULA = IPv6Network("fc00::/7")
 
-def parse_ban_ip(raw: Any) -> str:
+
+def unwrap_mapped_ip(addr: IPv4Address | IPv6Address) -> IPv4Address | IPv6Address:
+    """Map ``::ffff:x.x.x.x`` to the inner IPv4 address."""
+    mapped = getattr(addr, "ipv4_mapped", None)
+    return mapped if mapped is not None else addr
+
+
+def is_lan_like(addr: IPv4Address | IPv6Address) -> bool:
+    """True for RFC1918, ULA, and CGNAT (spoofed SYN must not ban these)."""
+    addr = unwrap_mapped_ip(addr)
+    if isinstance(addr, IPv4Address):
+        return any(addr in net for net in _RFC1918) or addr in _CGNAT
+    if isinstance(addr, IPv6Address):
+        return addr in _ULA
+    return False
+
+
+def parse_ban_ip(raw: Any, *, allow_private: bool = False) -> str:
     """Return a canonical single-host IP string, or raise ValueError.
 
     Rejects CIDRs (``0.0.0.0/0``), unspecified/loopback/link-local, zone IDs
     (``fe80::1%eth0``), junk, and metacharacters.
+    Private / ULA / CGNAT are refused unless ``allow_private`` is true.
     Use this on every ban/unban path before nft/iptables.
     """
     token = str(raw or "").strip()
@@ -18,7 +45,10 @@ def parse_ban_ip(raw: Any) -> str:
         raise ValueError(f"invalid ban ip: {token!r}")
     if any(c in token for c in ";|&`$(){}[]<>\\\"' \t\n\r"):
         raise ValueError(f"invalid ban ip: {token!r}")
-    addr = ip_address(token)
+    raw_addr = ip_address(token)
+    if getattr(raw_addr, "ipv4_mapped", None) is not None:
+        raise ValueError(f"refusing ban of special address: {raw_addr}")
+    addr = unwrap_mapped_ip(raw_addr)
     if not isinstance(addr, (IPv4Address, IPv6Address)):
         raise ValueError(f"invalid ban ip: {token!r}")
     if (
@@ -26,17 +56,18 @@ def parse_ban_ip(raw: Any) -> str:
         or addr.is_multicast
         or addr.is_loopback
         or addr.is_link_local
-        or getattr(addr, "ipv4_mapped", None) is not None
     ):
         raise ValueError(f"refusing ban of special address: {addr}")
     if isinstance(addr, IPv4Address) and (int(addr) == 0xFFFFFFFF or addr.packed[0] >= 240):
         raise ValueError(f"refusing ban of special address: {addr}")
+    if not allow_private and is_lan_like(addr):
+        raise ValueError(f"refusing ban of private/ULA/CGNAT address: {addr}")
     return str(addr)
 
 
-def nft_saddr_family(ip: str) -> tuple[str, str]:
+def nft_saddr_family(ip: str, *, allow_private: bool = False) -> tuple[str, str]:
     """Return ``(family_token, canonical_ip)`` for nft: ``ip`` or ``ip6``."""
-    canonical = parse_ban_ip(ip)
+    canonical = parse_ban_ip(ip, allow_private=allow_private)
     addr = ip_address(canonical)
     return ("ip6" if addr.version == 6 else "ip"), canonical
 

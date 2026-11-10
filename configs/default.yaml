@@ -46,9 +46,13 @@ perimeter:
     - flow_syn_burst
     - flow_port_scan
     ttl_sec: 3600
+  # Aggregate IPv6 SSH fails into one /64 (0 = exact address only)
+  v6_brute_prefix: 64
 response:
   mode: observe
   never_ban_cidrs: []
+  # RFC1918 / ULA / CGNAT bans require this opt-in (spoofed SYN otherwise blinds LAN DNS)
+  allow_private_bans: false
   learn_hours: 24
 ui:
   lang: en
@@ -71,6 +75,7 @@ telegram:
   unlock_code_ttl_sec: 300
   unlock_code_len: 10
   health_ping_hours: 0
+  allowed_user_ids: []
 web:
   enabled: false
   host: 127.0.0.1
@@ -115,8 +120,10 @@ flow:
   window_sec: 30
   syn_threshold: 120
   unique_port_threshold: 60
-  # Per-source SYN-ish count → flow_syn_burst with IP (host soft-mitigation; not anti-DDoS)
+  # Per-source SYN-ish count → flow_syn_burst with IP (host soft-mitigation; not anti-DDoS).
+  # SYN_RECV is spoofable — alerts only unless auto_ban: true.
   per_ip_syn_threshold: 40
+  auto_ban: false
 agent:
   enabled: true
   auto_start: true

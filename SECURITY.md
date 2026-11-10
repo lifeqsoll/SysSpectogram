@@ -89,7 +89,9 @@ Defaults are intentionally cautious.
 - POST bodies: Host checked before read; `Content-Length` must be a non-negative integer ≤ 64 KiB.
 - `home settings` / seed writes are flocked; schema type checks reject non-finite / out-of-range values (`allow_nan=False`).
 - `kirk_isolate` deadline is on disk (`state/kirk_isolate.json` 0600); expired tables are cleared on backend start; failed SSH-allow install rolls the table back.
-- Helper: concurrent connection handlers (ban.* not blocked by silent peers); pkcheck bounded; ban IP rules match Python (no IPv4-mapped / broadcast / `240/4`).
+- Helper: concurrent connection handlers (ban.* not blocked by silent peers); pkcheck bounded; ban IP rules match Python (no IPv4-mapped / broadcast / `240/4`, no RFC1918/ULA/CGNAT unless `allow_private_bans`).
+- SYN_RECV/SYN_SENT counts are spoofable (not anti-DDoS). `flow_syn_burst` alerts only unless `flow.auto_ban: true`. `ban_ip` always refuses Telegram publish ranges, resolvers, default gateways, and private/ULA/CGNAT.
+- Mini App `/api/auth/telegram` matches user id only to `TELEGRAM_ALLOWED_USER_IDS` / `telegram.allowed_user_ids` and chat id exactly (no `lstrip("-")`). Unlock/login lock out for minutes after five failures and do not return a fail counter. `/api/logout` drops the session; SSE re-checks it.
 
 **Same-UID ceiling for unlock (I-03):** the unlock gate protects a stolen Telegram bot token / Mini App session — **not** malware running as the same Unix user as the guard. That process can already read `state/unlock.code` (mode 0600, owner-only) or the `.env` bot token. Persisted `state/control.unlocked` (only when unlock TTL is 0) accepts the exact marker `1` and refuses symlinks / arbitrary content; it is still same-UID writable by design. Treat same-UID compromise as full control of the guard process.
 

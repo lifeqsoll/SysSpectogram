@@ -316,6 +316,7 @@ class NftBackend:
         max_ban_ttl_sec: float = DEFAULT_MAX_BAN_TTL_SEC,
         ssh_port: int = 22,
         https_egress_cidrs: list[str] | None = None,
+        allow_private_bans: bool = False,
     ) -> None:
         self.table = table
         self.chain = chain
@@ -330,6 +331,7 @@ class NftBackend:
         self.https_egress_cidrs = (
             None if https_egress_cidrs is None else [str(c) for c in https_egress_cidrs]
         )
+        self.allow_private_bans = bool(allow_private_bans)
         self._kirk_expires: float | None = None
         self._ensure_table()
 
@@ -343,9 +345,9 @@ class NftBackend:
 
     def is_never_ban(self, ip: str) -> bool:
         try:
-            from sysspectogram.net_ip import parse_ban_ip
+            from sysspectogram.net_ip import unwrap_mapped_ip
 
-            addr = ip_address(parse_ban_ip(ip))
+            addr = unwrap_mapped_ip(ip_address(str(ip).strip()))
         except ValueError:
             # Fail-closed for never-ban checks: invalid IPs are not "protected",
             # but ban_ip must also reject them before touching nft.
@@ -512,7 +514,7 @@ class NftBackend:
         from sysspectogram.net_ip import nft_saddr_family
 
         try:
-            family, ip = nft_saddr_family(ip)
+            family, ip = nft_saddr_family(ip, allow_private=self.allow_private_bans)
         except ValueError as exc:
             return f"refuse ban: {exc}"
         if self.is_never_ban(ip):
@@ -521,7 +523,15 @@ class NftBackend:
         if not force:
             from sysspectogram.response.protect import is_protected
 
-            reason = is_protected(ip, never_ban_cidrs=self.never_ban_cidrs)
+            extra = list(DEFAULT_TELEGRAM_EGRESS_CIDRS)
+            if self.https_egress_cidrs:
+                extra.extend(self.https_egress_cidrs)
+            reason = is_protected(
+                ip,
+                never_ban_cidrs=self.never_ban_cidrs,
+                allow_private_bans=self.allow_private_bans,
+                extra_cidrs=extra,
+            )
             if reason:
                 return f"protected skip {ip} ({reason})"
         try:
@@ -538,9 +548,10 @@ class NftBackend:
             from sysspectogram.response.helper_ban import HelperBanBackend, helper_available
 
             if helper_available():
-                return HelperBanBackend(never_ban_cidrs=self.never_ban_cidrs).ban_ip(
-                    ip, ttl_sec=ttl, dry_run=False
-                )
+                return HelperBanBackend(
+                    never_ban_cidrs=self.never_ban_cidrs,
+                    allow_private_bans=self.allow_private_bans,
+                ).ban_ip(ip, ttl_sec=ttl, dry_run=False)
             return "nft failed: no privileges (install helper and join group sysspectogram)"
         backend = "memory"
         if shutil.which("nft"):
@@ -893,6 +904,7 @@ class NftBackend:
                 self._drop_comments(added)
                 return f"lockdown allow failed for {canon}: {out.strip()}"
             added.append(allow_c)
+        self._ensure_synrl_allows(families)
         if syn not in listing:
             code, out = self._run(
                 [
@@ -1051,6 +1063,38 @@ class NftBackend:
                 f"(replace failed: {out.strip()})"
             )
         return f"syn_rate_limit active rate over {want_rate} burst={want_burst} allow={allows or '-'}"
+
+    def _ensure_synrl_allows(self, families: list[tuple[str, str]]) -> None:
+        """If syn-rate-limit is active, insert matching allows before the drop."""
+        listing = self._input_chain_text()
+        drop_c = "sysspectogram:synrl:drop"
+        if drop_c not in listing:
+            return
+        drop_handle = _comment_handle(listing, drop_c)
+        if not drop_handle:
+            return
+        for fam, canon in families:
+            allow_c = f"sysspectogram:synrl:allow:{canon}"
+            if allow_c in listing:
+                continue
+            self._run(
+                [
+                    "nft",
+                    "insert",
+                    "rule",
+                    "inet",
+                    "sysspectogram",
+                    "input",
+                    "position",
+                    drop_handle,
+                    fam,
+                    "saddr",
+                    canon,
+                    "accept",
+                    "comment",
+                    self._nft_comment(allow_c),
+                ]
+            )
 
     def shield_port(
         self,

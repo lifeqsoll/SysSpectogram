@@ -28,7 +28,7 @@ from sysspectogram.perimeter.watcher import PerimeterWatcher
 from sysspectogram.preprocess.window import rows_to_matrix
 from sysspectogram.response.actions import NftBackend
 from sysspectogram.response.tokens import TokenStore
-from sysspectogram.telegram_bot import TelegramBot
+from sysspectogram.telegram_bot import TelegramBot, parse_allowed_user_ids
 from sysspectogram.alert_text import describe, is_unattributed
 from sysspectogram.console_unlock import ConsoleUnlock
 from sysspectogram.control_socket import ControlSocketServer, make_handler
@@ -47,6 +47,22 @@ from sysspectogram.viz.panels import (
 )
 
 console = Console()
+
+
+def _guard_interrupt(signum, frame):  # noqa: ARG001
+    """SIGINT/SIGTERM: same path as Ctrl-C (stop Event is set in run_guard finally)."""
+    raise KeyboardInterrupt
+
+
+def wait_stop(stop: threading.Event, timeout: float) -> bool:
+    """Wait up to ``timeout`` seconds, waking at least once a second so SIGINT is not stuck."""
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while not stop.is_set():
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        threading.Event.wait(stop, min(1.0, left))
+    return True
 
 
 def _ebpf_path_benign(path: str) -> bool:
@@ -300,6 +316,7 @@ def run_guard(
         never_ban_cidrs=[str(x) for x in (resp_cfg_early.get("never_ban_cidrs") or [])],
         ssh_port=ssh_port,
         https_egress_cidrs=https_egress,
+        allow_private_bans=bool(resp_cfg_early.get("allow_private_bans", False)),
     )
     try:
         nft.reconcile_kirk_from_disk()
@@ -401,44 +418,24 @@ def run_guard(
     resp_mode = str(resp_cfg.get("mode") or "observe").strip().lower()
     never_ban = set(str(x) for x in (resp_cfg.get("never_ban_cidrs") or []))
     auto_ban_cfg = dict(per_cfg.get("auto_ban") or {})
-    _host_flood_rules = {
-        "flow_syn_burst",
-        "flow_port_scan",
-    }
-    _aggressive_rules = {
-        "bruteforce_ssh",
-        "honeypot_hit",
-        "canary_hit",
-        "egress_denylist_hit",
-        "port_scan_suspected",
-        *_host_flood_rules,
-    }
-    # Derive auto_ban (+ kirk isolate) from response.mode
+    flow_auto_ban = bool((config.get("flow") or {}).get("auto_ban", False))
+    from sysspectogram.response.autoban_policy import derive_auto_ban_rules
+
+    # Derive auto_ban (+ kirk isolate) from response.mode.
+    # flow_syn_burst / flow_port_scan stay alerts unless flow.auto_ban (spoofable SYN_RECV).
     if resp_mode == "observe":
         auto_ban_cfg["enabled"] = False
-        auto_ban_rules: set[str] = set()
-    elif resp_mode in ("shield", "enforce", "soft"):
-        # soft/shield: SSH abuse + host flood soft-mitigation (needs never_ban)
+    elif resp_mode in ("shield", "enforce", "soft", "aggressive"):
         auto_ban_cfg["enabled"] = True
-        auto_ban_rules = {
-            "bruteforce_ssh",
-            "honeypot_hit",
-            "canary_hit",
-            *_host_flood_rules,
-        }
-    elif resp_mode == "aggressive":
-        auto_ban_cfg["enabled"] = True
-        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or set(_aggressive_rules)
     elif resp_mode == "isolate":
-        # Full auto-ban + enable kirk network isolation on critical signals
         auto_ban_cfg["enabled"] = True
-        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) or set(_aggressive_rules)
         kirk_auto_isolate = True
         if not kirk_enabled:
             kirk_enabled = True
             console.print("[cyan]response.mode=isolate[/] enabling kirk for auto-isolate")
-    else:
-        auto_ban_rules = set(auto_ban_cfg.get("rules") or []) if auto_ban_cfg.get("enabled") else set()
+    auto_ban_rules: set[str] = derive_auto_ban_rules(
+        resp_mode, auto_ban_cfg, flow_auto_ban=flow_auto_ban
+    )
     auto_ban_ttl = float(auto_ban_cfg.get("ttl_sec", 3600))
     console.print(
         f"[cyan]response.mode[/] {resp_mode} auto_ban_rules={sorted(auto_ban_rules) or '-'} "
@@ -577,6 +574,7 @@ def run_guard(
         host_id=host_id,
         fail_threshold=int(per_cfg.get("fail_threshold", 8)),
         fail_window_sec=float(per_cfg.get("fail_window_sec", 60)),
+        v6_brute_prefix=int(per_cfg.get("v6_brute_prefix", 0) or 0),
         scan_unique_ips=int(per_cfg.get("scan_unique_ips", 8)),
         scan_window_sec=float(per_cfg.get("scan_window_sec", 60)),
         denylist_paths=denylist_paths,
@@ -764,6 +762,7 @@ def run_guard(
             port=port,
             bot_token=tg_cfg.get("bot_token"),
             allowed_chat_id=tg_cfg.get("chat_id"),
+            allowed_user_ids=parse_allowed_user_ids(tg_cfg),
             public_url=webapp_url,
             controllers=controllers,
             unlock=unlock_gate if unlock_gate.enabled else None,
@@ -794,7 +793,7 @@ def run_guard(
                 console.print(f"[yellow]perimeter tick[/] {exc}")
             if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                 break
-            stop.wait(watcher.poll_sec)
+            wait_stop(stop, watcher.poll_sec)
         watcher.persist()
 
     def telegram_loop():
@@ -1458,7 +1457,7 @@ def run_guard(
                     seen = len(honeypot.hits)
                 if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                     break
-                stop.wait(1.0)
+                wait_stop(stop, 1.0)
 
         threads.append(threading.Thread(target=honeypot_loop, name="honeypot", daemon=True))
 
@@ -1491,7 +1490,7 @@ def run_guard(
                     seen = len(canary.hits)
                 if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                     break
-                stop.wait(1.0)
+                wait_stop(stop, 1.0)
 
         threads.append(threading.Thread(target=canary_loop, name="canary", daemon=True))
 
@@ -1507,7 +1506,7 @@ def run_guard(
                         console.print(f"[cyan]osint[/] tor exits cached={n}")
                 except Exception as exc:
                     console.print(f"[yellow]osint tor[/] {exc}")
-                stop.wait(float((config.get("osint") or {}).get("tor_refresh_sec", 21600)))
+                wait_stop(stop, float((config.get("osint") or {}).get("tor_refresh_sec", 21600)))
 
         threads.append(threading.Thread(target=tor_refresh_loop, name="tor-refresh", daemon=True))
 
@@ -1551,7 +1550,7 @@ def run_guard(
                     console.print(f"[yellow]flow[/] {exc}")
                 if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                     break
-                stop.wait(2.0)
+                wait_stop(stop, 2.0)
 
         threads.append(threading.Thread(target=flow_loop, name="flow", daemon=True))
 
@@ -2027,17 +2026,17 @@ def run_guard(
             while not stop.is_set():
                 now = time.time()
                 if now < float(clean_shutdown_grace.get("until") or 0):
-                    stop.wait(5.0)
+                    wait_stop(stop, 5.0)
                     continue
                 if now < agent_down_grace_until:
-                    stop.wait(5.0)
+                    wait_stop(stop, 5.0)
                     continue
                 # Process alive ⇒ not "down" even if metrics packets were missed
                 # (e.g. socket briefly rebound). Still want metrics eventually.
                 alive_pid = _running_agent_pid(agent_pidfile)
                 if alive_pid is not None:
                     last_agent_seen["ts"] = now
-                    stop.wait(15.0)
+                    wait_stop(stop, 15.0)
                     continue
                 silence = now - last_agent_seen["ts"]
                 # First alert after silence threshold; then at most every backoff (30 min).
@@ -2073,7 +2072,7 @@ def run_guard(
                             bot.client.send_message(bot.prefix(body))
                         except Exception:
                             pass
-                stop.wait(15.0)
+                wait_stop(stop, 15.0)
 
         if agent_listener is not None:
             threads.append(
@@ -2108,7 +2107,7 @@ def run_guard(
                             )
                         except Exception:
                             pass
-                stop.wait(30.0)
+                wait_stop(stop, 30.0)
 
         if kirk_enabled and bool(kirk_cfg.get("ima_watch", True)):
             threads.append(threading.Thread(target=ima_watch_loop, name="ima-watch", daemon=True))
@@ -2355,7 +2354,7 @@ def run_guard(
                             agent_listener.set_allowed_pids(set())
                     except Exception:
                         pass
-                stop.wait(5.0)
+                wait_stop(stop, 5.0)
 
         if agent_listener is not None:
             threads.append(
@@ -2402,7 +2401,7 @@ def run_guard(
                         console.print(f"[yellow]session watch[/] {exc}")
                     if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                         break
-                    stop.wait(float(sess_cfg.get("poll_sec", 15)))
+                    wait_stop(stop, float(sess_cfg.get("poll_sec", 15)))
 
             threads.append(threading.Thread(target=session_loop, name="sessions", daemon=True))
 
@@ -2451,7 +2450,7 @@ def run_guard(
                         console.print(f"[yellow]root watch[/] {exc}")
                     if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                         break
-                    stop.wait(float(root_cfg.get("poll_sec", 60)))
+                    wait_stop(stop, float(root_cfg.get("poll_sec", 60)))
 
             threads.append(threading.Thread(target=root_loop, name="root-watch", daemon=True))
             console.print(
@@ -2465,9 +2464,10 @@ def run_guard(
 
     for t in threads:
         t.start()
-    # SIGTERM (e.g. the Control Center stopping us) shuts down exactly like Ctrl-C.
+    # SIGINT and SIGTERM both raise KeyboardInterrupt so the main loop stops.
     if threading.current_thread() is threading.main_thread():
-        signal.signal(signal.SIGTERM, signal.default_int_handler)
+        signal.signal(signal.SIGINT, _guard_interrupt)
+        signal.signal(signal.SIGTERM, _guard_interrupt)
     clean_stop = False
     try:
         t0 = time.monotonic()

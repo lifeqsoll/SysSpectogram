@@ -723,6 +723,15 @@ fn uid_in_group(uid: u32, group_name: &str) -> Result<bool, String> {
     }
 }
 
+fn is_cgnat(v4: std::net::Ipv4Addr) -> bool {
+    let o = v4.octets();
+    o[0] == 100 && (64..=127).contains(&o[1])
+}
+
+fn is_ula(v6: std::net::Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xfe00) == 0xfc00
+}
+
 /// Single-host IP only; reject CIDR, specials, junk (mirrors Python parse_ban_ip).
 pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
     let token = raw.trim();
@@ -752,6 +761,9 @@ pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
         {
             Err(format!("refusing ban of special address: {addr}"))
         }
+        std::net::IpAddr::V4(v4) if v4.is_private() || is_cgnat(v4) => {
+            Err(format!("refusing ban of private/ULA/CGNAT address: {addr}"))
+        }
         std::net::IpAddr::V6(v6)
             if v6.is_unspecified()
                 || v6.is_loopback()
@@ -760,6 +772,9 @@ pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
                 || v6.to_ipv4_mapped().is_some() =>
         {
             Err(format!("refusing ban of special address: {addr}"))
+        }
+        std::net::IpAddr::V6(v6) if is_ula(v6) => {
+            Err(format!("refusing ban of private/ULA/CGNAT address: {addr}"))
         }
         _ => Ok(addr),
     }
@@ -1364,6 +1379,11 @@ mod tests {
         assert!(parse_helper_ban_ip("::ffff:5.6.7.9").is_err());
         assert!(parse_helper_ban_ip("255.255.255.255").is_err());
         assert!(parse_helper_ban_ip("240.0.0.1").is_err());
+        assert!(parse_helper_ban_ip("10.0.0.2").is_err());
+        assert!(parse_helper_ban_ip("192.168.1.1").is_err());
+        assert!(parse_helper_ban_ip("172.16.0.1").is_err());
+        assert!(parse_helper_ban_ip("100.64.0.1").is_err());
+        assert!(parse_helper_ban_ip("fc00::1").is_err());
     }
 
     #[test]
