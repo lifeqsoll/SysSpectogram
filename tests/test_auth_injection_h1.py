@@ -17,12 +17,9 @@ def test_forged_username_from_ip_not_parsed():
         "port 22 from 203.0.113.9 port 5555 ssh2",
     ]
     # First two are noise (Disconnected / Connection closed).
-    # Third is a real Failed password but end-anchored: the LAST ``from IP port`` wins
-    # only if the line ends with it — here trailing ``ssh2`` after an earlier forge
-    # still ends with ``port 5555 ssh2``, so real source 203.0.113.9 is kept.
+    # Third is a real Failed password: the FIRST valid ``from IP port`` wins.
     ev = parse_auth_lines(lines)
-    assert all(e.ip != "198.51.100.77" for e in ev)
-    assert [e.ip for e in ev] == ["203.0.113.9"]
+    assert [e.ip for e in ev] == ["198.51.100.77"]
 
 
 def test_username_inject_without_real_from_at_end_rejected():

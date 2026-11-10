@@ -15,10 +15,9 @@ from pathlib import Path
 # (no separate noise filter: a substring ``Disconnected`` must not hide real fails).
 #
 # Optional classic syslog or RFC3339 prefix + ``sshd`` / ``sshd-session`` tag
-# (journalctl -o cat may strip both). End-anchored ``from <ip> port N`` so a forged
-# CIDR earlier in the line cannot win. Accepted publickey may append
-# ``ssh2: ED25519 SHA256:…`` or certificate
-# ``ssh2: ED25519-CERT SHA256:… ID user@corp (serial N) CA ED25519 SHA256:…``.
+# (journalctl -o cat may strip both). The **first** valid ``from <ip> port N``
+# after kind/user wins (a concatenated tail must not hide the real source).
+# Accepted publickey may append ``ssh2: ED25519 SHA256:…`` or a certificate id.
 _AUTH_RE = re.compile(
     r"^(?:"
     r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+"
@@ -28,10 +27,15 @@ _AUTH_RE = re.compile(
     r"(?:sshd(?:-session)?\[\d+\]:\s+)?"
     r"(?P<kind>Failed password for invalid user |Failed password for |Invalid user |Accepted \S+ for )"
     r"(?P<user>\S+)"
-    r".*? from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
-    r"(?: ssh2(?:: \S+ SHA256:\S+"
-    r"(?: ID (?P<cert_id>.+?) \(serial (?P<cert_serial>\d+)\) CA \S+ SHA256:\S+)?"
-    r")?)?\s*$",
+    r"(?P<rest>.*)$",
+    re.I,
+)
+_FROM_IP_RE = re.compile(
+    r" from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)",
+    re.I,
+)
+_CERT_TAIL_RE = re.compile(
+    r"ssh2: \S+ SHA256:\S+(?: ID (?P<cert_id>.+?) \(serial (?P<cert_serial>\d+)\) CA \S+ SHA256:\S+)?",
     re.I,
 )
 
@@ -44,7 +48,7 @@ _ACCEPTED_LOOSE_RE = re.compile(
     r")?"
     r"(?:sshd(?:-session)?\[\d+\]:\s+)?"
     r"Accepted \S+ for (?P<user>\S+)"
-    r".*? from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)",
+    r"(?P<rest>.*)$",
     re.I,
 )
 
@@ -61,7 +65,10 @@ class AuthEvent:
 
 
 def _normalize_auth_ip(raw: str) -> str | None:
-    """Keep only a bare host address; drop forged CIDRs / junk from log injection."""
+    """Keep only a bare host address; drop forged CIDRs / junk from log injection.
+
+    ``::ffff:x.x.x.x`` becomes the inner IPv4 so never_ban CIDRs match.
+    """
     token = (raw or "").strip()
     if not token or "/" in token or "%" in token:
         return None
@@ -69,9 +76,20 @@ def _normalize_auth_ip(raw: str) -> str | None:
         addr = ipaddress.ip_address(token)
     except ValueError:
         return None
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
     if addr.is_unspecified or addr.is_multicast or addr.is_loopback:
         return None
     return str(addr)
+
+
+def _first_from_ip(text: str) -> tuple[str, str] | None:
+    for match in _FROM_IP_RE.finditer(text or ""):
+        ip = _normalize_auth_ip(match.group("ip"))
+        if ip is not None:
+            return ip, match.group("port")
+    return None
 
 
 def _sanitize_cert_id(raw: str | None) -> str | None:
@@ -104,21 +122,21 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
         return None
     m = _AUTH_RE.match(text)
     if m:
-        ip = _normalize_auth_ip(m.group("ip"))
-        if ip is None:
+        found = _first_from_ip(m.group("rest") or "")
+        if found is None:
             return None
-        cert_id = _sanitize_cert_id(m.groupdict().get("cert_id"))
-        cert_serial = m.groupdict().get("cert_serial")
+        ip, _port = found
+        cert_m = _CERT_TAIL_RE.search(m.group("rest") or "")
+        cert_id = _sanitize_cert_id(cert_m.group("cert_id") if cert_m else None)
+        cert_serial = cert_m.group("cert_serial") if cert_m else None
         if cert_id is None and cert_serial and "ID " in text:
-            loose = _ACCEPTED_LOOSE_RE.search(text)
-            if loose and _normalize_auth_ip(loose.group("ip")) == ip:
-                return AuthEvent(
-                    "accepted_unparsed",
-                    ip,
-                    m.group("user"),
-                    text,
-                    ts,
-                )
+            return AuthEvent(
+                "accepted_unparsed",
+                ip,
+                m.group("user"),
+                text,
+                ts,
+            )
         return AuthEvent(
             _kind_from_match(m.group("kind")),
             ip,
@@ -132,8 +150,9 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
     if re.search(r"(?i)\bAccepted \S+ for ", text):
         loose = _ACCEPTED_LOOSE_RE.search(text)
         if loose:
-            ip = _normalize_auth_ip(loose.group("ip"))
-            if ip is not None:
+            found = _first_from_ip(loose.group("rest") or "")
+            if found is not None:
+                ip, _port = found
                 return AuthEvent(
                     "accepted_unparsed",
                     ip,

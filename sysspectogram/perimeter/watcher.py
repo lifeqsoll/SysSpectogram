@@ -114,6 +114,7 @@ class PerimeterWatcher:
         auto_ban_rules: set[str] | None = None,
         auto_ban_ttl_sec: float | None = 3600.0,
         dry_run: bool = False,
+        v6_brute_prefix: int = 0,
     ) -> None:
         self.host_id = host_id or socket.gethostname()
         self.state_path = state_path or Path("state/perimeter.json")
@@ -146,6 +147,7 @@ class PerimeterWatcher:
             denylist=denylist,
             known_login_ips=set(self.state.known_logins),
             alert_new_egress=alert_new_egress,
+            v6_brute_prefix=v6_brute_prefix,
         )
         self.auth = AuthWatcher()
         self.dns = DnsWatcher()

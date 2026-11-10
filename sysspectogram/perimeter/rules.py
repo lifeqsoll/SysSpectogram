@@ -63,6 +63,7 @@ class RuleEngine:
         known_login_ips: set[str] | None = None,
         alert_new_egress: bool = False,
         unusual_egress_ports: set[int] | None = None,
+        v6_brute_prefix: int = 0,
     ) -> None:
         self.fail_threshold = fail_threshold
         self.fail_window_sec = fail_window_sec
@@ -73,6 +74,7 @@ class RuleEngine:
         self.known_login_ips = known_login_ips or set()
         self.alert_new_egress = alert_new_egress
         self.unusual_egress_ports = unusual_egress_ports or {4444, 5555, 6666, 1337, 31337}
+        self.v6_brute_prefix = int(v6_brute_prefix or 0)
         self._fails: dict[str, deque[float]] = defaultdict(deque)
         self._port_hits: dict[int, deque[tuple[float, str]]] = defaultdict(deque)
         self._seen_egress: set[str] = set()
@@ -91,15 +93,27 @@ class RuleEngine:
         self._cooldown[key] = now
         return True
 
+    def _fail_bucket(self, ip: str) -> str:
+        prefix = int(self.v6_brute_prefix or 0)
+        if prefix <= 0 or ":" not in str(ip):
+            return ip
+        try:
+            from ipaddress import ip_network
+
+            return str(ip_network(f"{ip}/{prefix}", strict=False))
+        except ValueError:
+            return ip
+
     def on_auth_fail(self, ip: str, user: str = "") -> Alert | None:
         if ip in self.allowlist:
             return None
         now = time.time()
-        q = self._fails[ip]
+        key = self._fail_bucket(ip)
+        q = self._fails[key]
         q.append(now)
         while q and now - q[0] > self.fail_window_sec:
             q.popleft()
-        if len(q) >= self.fail_threshold and self._cool(f"brute:{ip}"):
+        if len(q) >= self.fail_threshold and self._cool(f"brute:{key}"):
             return Alert(
                 rule_id="bruteforce_ssh",
                 severity="critical",
