@@ -136,11 +136,13 @@ class WebLoginCode:
                 return False
             now = time.time()
             self._fails = [t for t in self._fails if now - t < 300.0]
-            if len(self._fails) >= 8:
-                return False
             got = self.normalize(code)
             if len(got) != len(self._code) or not secrets.compare_digest(got, self._code):
                 self._fails.append(now)
+                # Rotate like ConsoleUnlock after repeated fails — never permanently
+                # refuse a freshly printed correct code.
+                if len(self._fails) >= 5:
+                    self._begin_locked()
                 return False
             self._begin_locked()
             return True

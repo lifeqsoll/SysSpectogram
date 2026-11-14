@@ -70,13 +70,14 @@ class WebAppState:
         self._lock = threading.Lock()
         self._sse_slots = threading.BoundedSemaphore(MAX_SSE_STREAMS)
         self._unlock_fails: dict[str, deque[float]] = {}
+        self._login_fails: dict[str, deque[float]] = {}
         self._unlock_rl_lock = threading.Lock()
 
-    def _unlock_rate_status(self, ip: str) -> tuple[bool, float, int]:
-        """Return (allowed, backoff_sec, recent_fail_count)."""
+    def _rate_status(self, bucket: dict[str, deque[float]], ip: str) -> tuple[bool, float, int]:
+        """Return (allowed, backoff_sec, recent_fail_count) for one bucket."""
         now = time.time()
         with self._unlock_rl_lock:
-            q = self._unlock_fails.setdefault(ip, deque())
+            q = bucket.setdefault(ip, deque())
             while q and now - q[0] >= UNLOCK_RATE_WINDOW_SEC:
                 q.popleft()
             n = len(q)
@@ -88,9 +89,19 @@ class WebAppState:
             backoff = min(1.5, 0.08 * (2 ** n)) if n else 0.0
             return True, backoff, n
 
+    def _unlock_rate_status(self, ip: str) -> tuple[bool, float, int]:
+        return self._rate_status(self._unlock_fails, ip)
+
+    def _login_rate_status(self, ip: str) -> tuple[bool, float, int]:
+        return self._rate_status(self._login_fails, ip)
+
     def _unlock_record_fail(self, ip: str) -> None:
         with self._unlock_rl_lock:
             self._unlock_fails.setdefault(ip, deque()).append(time.time())
+
+    def _login_record_fail(self, ip: str) -> None:
+        with self._unlock_rl_lock:
+            self._login_fails.setdefault(ip, deque()).append(time.time())
 
     def issue_session(self) -> str:
         tok = secrets.token_urlsafe(24)
@@ -384,12 +395,16 @@ def _make_handler(app: WebAppState):
                 ok = True
                 if allowed_users or allowed_chat:
                     ok = False
+                    # Negative group chat alone must never grant a session (any member
+                    # can present chat.id). Chat only narrows when users are set.
+                    chat_is_group = allowed_chat.startswith("-")
                     if allowed_users and uid in allowed_users:
                         ok = True
                         if allowed_chat and chat_from and chat_from != allowed_chat:
                             ok = False
-                    elif not allowed_users and allowed_chat:
-                        ok = uid == allowed_chat or (bool(chat_from) and chat_from == allowed_chat)
+                    elif not allowed_users and allowed_chat and not chat_is_group:
+                        # DM / positive chat id: user id may equal chat id.
+                        ok = uid == allowed_chat
                     if not ok:
                         return self._json(403, {"ok": False, "error": "chat not allowlisted"})
                 sess = app.issue_session()
@@ -413,7 +428,19 @@ def _make_handler(app: WebAppState):
                 if not code.strip():
                     return self._json(401, {"ok": False, "error": "auth required"})
                 ip = self._client_ip()
-                allowed, backoff, _n = app._unlock_rate_status(ip)
+                # Correct fresh code always wins (after WebLoginCode rotates on fails);
+                # rate-limit wrong guesses only. Login bucket is separate from unlock.
+                if app.login.try_consume(code):
+                    sess = app.issue_session()
+                    cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                    if app.public_url and str(app.public_url).startswith("https"):
+                        cookie += "; Secure"
+                    return self._json(
+                        200,
+                        {"ok": True, "session": True, "control_unlocked": False},
+                        extra={"Set-Cookie": cookie},
+                    )
+                allowed, backoff, _n = app._login_rate_status(ip)
                 if not allowed:
                     retry = str(max(1, int(backoff + 0.999)))
                     return self._json(
@@ -421,18 +448,8 @@ def _make_handler(app: WebAppState):
                         {"ok": False, "error": "rate limited"},
                         extra={"Retry-After": retry},
                     )
-                if not app.login.try_consume(code):
-                    app._unlock_record_fail(ip)
-                    return self._json(401, {"ok": False, "error": "bad login code"})
-                sess = app.issue_session()
-                cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
-                if app.public_url and str(app.public_url).startswith("https"):
-                    cookie += "; Secure"
-                return self._json(
-                    200,
-                    {"ok": True, "session": True, "control_unlocked": False},
-                    extra={"Set-Cookie": cookie},
-                )
+                app._login_record_fail(ip)
+                return self._json(401, {"ok": False, "error": "bad login code"})
 
             # Console unlock via Mini App / local UI (code never in .env).
             # M-01: never mint ss_session for an unauthenticated loopback client —
@@ -572,6 +589,7 @@ def _make_handler(app: WebAppState):
                     now = time.time()
                     if now - last_auth >= SSE_SESSION_RECHECK_SEC:
                         if not self._authorized():
+                            self.close_connection = True
                             return
                         last_auth = now
                     snap = app.enriched_snapshot()
@@ -579,7 +597,9 @@ def _make_handler(app: WebAppState):
                     self.wfile.write(line.encode("utf-8"))
                     self.wfile.flush()
                     time.sleep(1.0)
+                self.close_connection = True
             except (BrokenPipeError, ConnectionResetError, OSError):
+                self.close_connection = True
                 return
             finally:
                 app._sse_slots.release()
