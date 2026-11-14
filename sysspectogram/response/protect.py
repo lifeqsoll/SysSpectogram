@@ -58,18 +58,11 @@ def _ssh_session_ips(*, ssh_port: int = 22) -> set[str]:
     return ips
 
 
-def _resolver_addrs() -> set[str]:
-    """Nameservers from resolv.conf and resolvectl (non-loopback)."""
+def _nameservers_from_text(text: str) -> set[str]:
     from sysspectogram.net_ip import unwrap_mapped_ip
 
     out: set[str] = set()
-    try:
-        text = __import__("pathlib").Path("/etc/resolv.conf").read_text(
-            encoding="utf-8", errors="replace"
-        )
-    except OSError:
-        text = ""
-    for line in text.splitlines():
+    for line in (text or "").splitlines():
         parts = line.split()
         if len(parts) < 2 or parts[0] != "nameserver":
             continue
@@ -77,9 +70,23 @@ def _resolver_addrs() -> set[str]:
             addr = unwrap_mapped_ip(ip_address(parts[1].split("%", 1)[0]))
         except ValueError:
             continue
-        if addr.is_loopback:
+        if addr.is_loopback or str(addr) in {"127.0.0.53", "127.0.0.1", "::1"}:
             continue
         out.add(str(addr))
+    return out
+
+
+def _resolver_addrs() -> set[str]:
+    """Nameservers from resolv.conf, systemd resolved stub file, and resolvectl."""
+    from pathlib import Path
+
+    out: set[str] = set()
+    for path in (Path("/etc/resolv.conf"), Path("/run/systemd/resolve/resolv.conf")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        out |= _nameservers_from_text(text)
     try:
         from sysspectogram.response.actions import _resolvectl_upstreams
 
@@ -90,35 +97,44 @@ def _resolver_addrs() -> set[str]:
     return out
 
 
-def _gateway_addrs() -> set[str]:
-    """Default gateway(s) from ``ip route``."""
+def _parse_route_gateways(text: str) -> set[str]:
     from sysspectogram.net_ip import unwrap_mapped_ip
 
+    out: set[str] = set()
+    for line in (text or "").splitlines():
+        parts = line.split()
+        # ``default via 203.0.113.1`` and multipath ``nexthop via 2001:db8::1``
+        for i, tok in enumerate(parts):
+            if tok != "via" or i + 1 >= len(parts):
+                continue
+            try:
+                addr = unwrap_mapped_ip(ip_address(parts[i + 1].split("%", 1)[0]))
+            except ValueError:
+                continue
+            out.add(str(addr))
+    return out
+
+
+def _gateway_addrs() -> set[str]:
+    """Default gateway(s) from ``ip route`` and ``ip -6 route``."""
     if not shutil.which("ip"):
         return set()
     out: set[str] = set()
-    try:
-        proc = subprocess.run(
-            ["ip", "-o", "route", "show", "default"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return out
-    for line in (proc.stdout or "").splitlines():
-        parts = line.split()
-        if "via" not in parts:
-            continue
-        idx = parts.index("via")
-        if idx + 1 >= len(parts):
-            continue
+    for argv in (
+        ["ip", "-o", "route", "show", "default"],
+        ["ip", "-6", "-o", "route", "show", "default"],
+    ):
         try:
-            addr = unwrap_mapped_ip(ip_address(parts[idx + 1].split("%", 1)[0]))
-        except ValueError:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
             continue
-        out.add(str(addr))
+        out |= _parse_route_gateways(proc.stdout or "")
     return out
 
 
@@ -134,8 +150,15 @@ def is_protected(
     """Return reason string if ``ip`` must not be auto-banned, else None."""
     from sysspectogram.net_ip import is_lan_like, unwrap_mapped_ip
 
+    token = str(ip).strip()
     try:
-        addr = unwrap_mapped_ip(ip_address(str(ip).strip()))
+        if "/" in token:
+            net = ip_network(token, strict=False)
+            addr = unwrap_mapped_ip(net.network_address)
+            ban_net = net
+        else:
+            addr = unwrap_mapped_ip(ip_address(token))
+            ban_net = None
     except ValueError:
         return "invalid ip"
     if ignoreself:
@@ -152,20 +175,36 @@ def is_protected(
     protect_nets = list(DEFAULT_TELEGRAM_EGRESS_CIDRS) + [str(c) for c in (extra_cidrs or [])]
     for cidr in protect_nets:
         try:
-            if addr in ip_network(str(cidr).strip(), strict=False):
+            net = ip_network(str(cidr).strip(), strict=False)
+            if ban_net is not None and ban_net.overlaps(net):
+                return f"telegram/egress {cidr}"
+            if ban_net is None and addr in net:
                 return f"telegram/egress {cidr}"
         except ValueError:
             continue
-    if str(addr) in _resolver_addrs():
-        return "resolver"
-    if str(addr) in _gateway_addrs():
-        return "default gateway"
+    resolvers = _resolver_addrs()
+    gateways = _gateway_addrs()
+    if ban_net is not None:
+        for host in list(resolvers) + list(gateways):
+            try:
+                if ip_address(host) in ban_net:
+                    return "resolver" if host in resolvers else "default gateway"
+            except ValueError:
+                continue
+    else:
+        if str(addr) in resolvers:
+            return "resolver"
+        if str(addr) in gateways:
+            return "default gateway"
     for cidr in never_ban_cidrs or []:
         try:
-            if addr in ip_network(str(cidr).strip(), strict=False):
+            net = ip_network(str(cidr).strip(), strict=False)
+            if ban_net is not None and ban_net.overlaps(net):
+                return f"never_ban {cidr}"
+            if ban_net is None and addr in net:
                 return f"never_ban {cidr}"
         except ValueError:
             continue
-    if protect_ssh_sessions and str(addr) in _ssh_session_ips():
+    if protect_ssh_sessions and ban_net is None and str(addr) in _ssh_session_ips():
         return "active ssh session"
     return None
