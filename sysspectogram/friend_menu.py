@@ -346,9 +346,9 @@ def _cmd_under_scan() -> None:
         )
     )
     dry = Confirm.ask(_t("Dry-run only?", "Только dry-run?"), default=True)
-    from sysspectogram.response.actions import NftBackend
+    from sysspectogram.response.actions import backend_from_config
 
-    nft = NftBackend(never_ban_cidrs=never)
+    nft = backend_from_config(cfg)
     msg = nft.apply_lockdown(dry_run=dry, allow_cidrs=never)
     console.print(msg)
     if Confirm.ask(

@@ -1446,15 +1446,15 @@ def _cmd_bans(args: argparse.Namespace) -> int:
     import json
 
     from sysspectogram.config import load_config
-    from sysspectogram.response.actions import NftBackend
+    from sysspectogram.response.actions import backend_from_config
     from sysspectogram.response.helper_ban import NoneBanBackend, select_ban_backend
 
     cfg = load_config()
     never = [str(x) for x in ((cfg.get("response") or {}).get("never_ban_cidrs") or [])]
-    nft = NftBackend(never_ban_cidrs=never)
+    nft = backend_from_config(cfg)
     action = str(getattr(args, "bans_action", "") or "")
     if action == "list":
-        backend = select_ban_backend(never_ban_cidrs=never)
+        backend = select_ban_backend(config=cfg, never_ban_cidrs=never)
         if isinstance(backend, NoneBanBackend):
             out = backend.list_bans_result()
             print(

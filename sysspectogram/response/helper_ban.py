@@ -135,15 +135,35 @@ class HelperBanBackend:
         return str(detail)
 
 
-def select_ban_backend(*, never_ban_cidrs: list[str] | None = None):
+def select_ban_backend(
+    *,
+    never_ban_cidrs: list[str] | None = None,
+    config: dict | None = None,
+    allow_private_bans: bool | None = None,
+):
     """Root → NftBackend; else helper socket → HelperBanBackend; else NoneBackend."""
-    from sysspectogram.response.actions import NftBackend
+    from sysspectogram.response.actions import backend_from_config, NftBackend
+
+    if config is not None:
+        if os.geteuid() == 0:
+            return backend_from_config(config)
+        resp = dict(config.get("response") or {})
+        never = list(never_ban_cidrs or [str(x) for x in (resp.get("never_ban_cidrs") or [])])
+        allow = (
+            bool(allow_private_bans)
+            if allow_private_bans is not None
+            else bool(resp.get("allow_private_bans", False))
+        )
+        if helper_available():
+            return HelperBanBackend(never_ban_cidrs=never, allow_private_bans=allow)
+        return NoneBanBackend()
 
     never = list(never_ban_cidrs or [])
+    allow = bool(allow_private_bans) if allow_private_bans is not None else False
     if os.geteuid() == 0:
-        return NftBackend(never_ban_cidrs=never)
+        return NftBackend(never_ban_cidrs=never, allow_private_bans=allow)
     if helper_available():
-        return HelperBanBackend(never_ban_cidrs=never)
+        return HelperBanBackend(never_ban_cidrs=never, allow_private_bans=allow)
     return NoneBanBackend()
 
 

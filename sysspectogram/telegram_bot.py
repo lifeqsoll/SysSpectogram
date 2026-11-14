@@ -153,6 +153,8 @@ class TelegramBot:
         if_refit: bool = False,
         supply_chain: dict[str, Any] | None = None,
         lang: str = "en",
+        allowed_user_ids: set[str] | list[str] | None = None,
+        tg_cfg: dict | None = None,
     ) -> None:
         self.client = client
         self.watcher = watcher
@@ -183,6 +185,10 @@ class TelegramBot:
         self.if_refit = bool(if_refit)
         self.supply_chain = dict(supply_chain or {})
         self.lang = "ru" if str(lang).lower() == "ru" else "en"
+        if allowed_user_ids is not None:
+            self.allowed_user_ids = {str(x).strip() for x in allowed_user_ids if str(x).strip()}
+        else:
+            self.allowed_user_ids = parse_allowed_user_ids(tg_cfg)
         self.last_host_window = None
         self.last_host_columns: list[str] | None = None
         self.last_host_score: float | None = None
@@ -237,7 +243,7 @@ class TelegramBot:
         # In groups/supergroups any member can hit the bot — require user allowlist.
         ctype = (chat_type or "").lower()
         if ctype in ("group", "supergroup"):
-            allowed = parse_allowed_user_ids()
+            allowed = self.allowed_user_ids
             if not allowed:
                 return False
             return str(from_user_id or "") in allowed

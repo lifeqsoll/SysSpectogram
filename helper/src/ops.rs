@@ -734,6 +734,11 @@ fn is_ula(v6: std::net::Ipv6Addr) -> bool {
 
 /// Single-host IP only; reject CIDR, specials, junk (mirrors Python parse_ban_ip).
 pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
+    parse_helper_ban_ip_opt(raw, false)
+}
+
+/// Like ``parse_helper_ban_ip`` but private/ULA/CGNAT allowed when ``allow_private``.
+pub fn parse_helper_ban_ip_opt(raw: &str, allow_private: bool) -> Result<std::net::IpAddr, String> {
     let token = raw.trim();
     if token.is_empty() || token.contains('/') || token.contains('%') {
         return Err(format!("invalid ban ip: {token:?}"));
@@ -761,7 +766,7 @@ pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
         {
             Err(format!("refusing ban of special address: {addr}"))
         }
-        std::net::IpAddr::V4(v4) if v4.is_private() || is_cgnat(v4) => {
+        std::net::IpAddr::V4(v4) if !allow_private && (v4.is_private() || is_cgnat(v4)) => {
             Err(format!("refusing ban of private/ULA/CGNAT address: {addr}"))
         }
         std::net::IpAddr::V6(v6)
@@ -773,11 +778,118 @@ pub fn parse_helper_ban_ip(raw: &str) -> Result<std::net::IpAddr, String> {
         {
             Err(format!("refusing ban of special address: {addr}"))
         }
-        std::net::IpAddr::V6(v6) if is_ula(v6) => {
+        std::net::IpAddr::V6(v6) if !allow_private && is_ula(v6) => {
             Err(format!("refusing ban of private/ULA/CGNAT address: {addr}"))
         }
         _ => Ok(addr),
     }
+}
+
+fn load_allow_private_bans() -> bool {
+    if let Ok(overlay) = read_overlay(Path::new(SETTINGS_FILE)) {
+        if let Some(v) = overlay.get("response.allow_private_bans") {
+            return v.as_bool() == Some(true);
+        }
+    }
+    false
+}
+
+/// Telegram publish ranges (same as Python DEFAULT_TELEGRAM_EGRESS_CIDRS).
+fn telegram_protect_cidrs() -> Vec<&'static str> {
+    vec![
+        "149.154.160.0/20",
+        "91.108.4.0/22",
+        "91.108.8.0/22",
+        "91.108.12.0/22",
+        "91.108.16.0/22",
+        "91.108.20.0/22",
+        "91.108.56.0/22",
+        "91.105.192.0/23",
+        "185.76.151.0/24",
+        "2001:b28:f23d::/48",
+        "2001:b28:f23f::/48",
+        "2001:67c:4e8::/48",
+        "2001:b28:f23c::/48",
+        "2a0a:f280::/32",
+    ]
+}
+
+fn nameservers_from_resolv(text: &str) -> Vec<std::net::IpAddr> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some("nameserver") {
+            continue;
+        }
+        let Some(raw) = parts.next() else { continue };
+        let host = raw.split('%').next().unwrap_or(raw);
+        if let Ok(addr) = host.parse::<std::net::IpAddr>() {
+            if matches!(
+                addr,
+                std::net::IpAddr::V4(v4) if v4.is_loopback() || v4.octets() == [127, 0, 0, 53]
+            ) {
+                continue;
+            }
+            if matches!(addr, std::net::IpAddr::V6(v6) if v6.is_loopback()) {
+                continue;
+            }
+            out.push(addr);
+        }
+    }
+    out
+}
+
+fn helper_resolver_addrs() -> Vec<std::net::IpAddr> {
+    let mut out = Vec::new();
+    for path in ["/etc/resolv.conf", "/run/systemd/resolve/resolv.conf"] {
+        if let Ok(text) = fs::read_to_string(path) {
+            out.extend(nameservers_from_resolv(&text));
+        }
+    }
+    out
+}
+
+fn helper_gateway_addrs() -> Vec<std::net::IpAddr> {
+    let mut out = Vec::new();
+    for args in [
+        ["ip", "-o", "route", "show", "default"].as_slice(),
+        ["ip", "-6", "-o", "route", "show", "default"].as_slice(),
+    ] {
+        let Ok(proc) = Command::new(args[0]).args(&args[1..]).output() else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&proc.stdout);
+        let parts: Vec<&str> = text.split_whitespace().collect();
+        for (i, tok) in parts.iter().enumerate() {
+            if *tok != "via" || i + 1 >= parts.len() {
+                continue;
+            }
+            let host = parts[i + 1].split('%').next().unwrap_or(parts[i + 1]);
+            if let Ok(addr) = host.parse::<std::net::IpAddr>() {
+                out.push(addr);
+            }
+        }
+    }
+    out
+}
+
+fn helper_protected_reason(addr: std::net::IpAddr) -> Option<&'static str> {
+    for cidr in telegram_protect_cidrs() {
+        if let Some((base, bits)) = cidr.split_once('/') {
+            if let (Ok(base_ip), Ok(prefix)) = (base.parse::<std::net::IpAddr>(), bits.parse::<u8>()) {
+                if ip_prefix_contains(base_ip, prefix, addr) {
+                    return Some("telegram/egress");
+                }
+            }
+        }
+    }
+    if helper_resolver_addrs().iter().any(|a| *a == addr) {
+        return Some("resolver");
+    }
+    if helper_gateway_addrs().iter().any(|a| *a == addr) {
+        return Some("default gateway");
+    }
+    None
 }
 
 fn clamp_ttl(raw: Option<u64>) -> Result<u64, String> {
@@ -858,7 +970,7 @@ fn ensure_nft_table() -> Result<(), String> {
             "ipv6_addr",
             ";",
             "flags",
-            "timeout",
+            "interval,timeout",
             ";",
             "}",
         ],
@@ -1077,7 +1189,8 @@ fn ban_add(args: &Value, caller: Caller) -> Result<Value, String> {
         .get("ip")
         .and_then(Value::as_str)
         .ok_or("missing ip")?;
-    let addr = parse_helper_ban_ip(ip_raw)?;
+    let allow_private = load_allow_private_bans();
+    let addr = parse_helper_ban_ip_opt(ip_raw, allow_private)?;
     let ttl = parse_ban_ttl(args)?;
     let reason = args
         .get("reason")
@@ -1092,6 +1205,9 @@ fn ban_add(args: &Value, caller: Caller) -> Result<Value, String> {
     let never = load_never_ban_cidrs();
     if ip_in_never_ban(addr, &never) {
         return Err("never_ban skip".into());
+    }
+    if let Some(why) = helper_protected_reason(addr) {
+        return Err(format!("protected skip ({why})"));
     }
     ensure_nft_table()?;
     let set_name = set_for(addr);
@@ -1384,6 +1500,14 @@ mod tests {
         assert!(parse_helper_ban_ip("172.16.0.1").is_err());
         assert!(parse_helper_ban_ip("100.64.0.1").is_err());
         assert!(parse_helper_ban_ip("fc00::1").is_err());
+        assert!(parse_helper_ban_ip_opt("10.0.0.2", true).is_ok());
+        assert!(parse_helper_ban_ip_opt("fc00::1", true).is_ok());
+        assert!(parse_helper_ban_ip_opt("10.0.0.2", false).is_err());
+        let tg: std::net::IpAddr = "149.154.167.220".parse().unwrap();
+        assert_eq!(helper_protected_reason(tg), Some("telegram/egress"));
+        let ns = nameservers_from_resolv("nameserver 192.0.2.53\nnameserver 127.0.0.53\n");
+        assert!(ns.contains(&"192.0.2.53".parse().unwrap()));
+        assert!(!ns.iter().any(|a| a.to_string() == "127.0.0.53"));
     }
 
     #[test]
