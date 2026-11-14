@@ -15,10 +15,26 @@ from sysspectogram.web.bus import LiveBus
 from sysspectogram.web.server import UNLOCK_RATE_MAX, start_web_server
 
 
-def test_first_from_ip_wins() -> None:
-    line = "Failed password for root from 203.0.113.9 port 22 ssh2 from 192.0.2.11 port 22"
+def test_injected_invalid_user_is_injection_not_fail() -> None:
+    lines = [
+        "Invalid user x from 192.0.2.11 port 22 from 203.0.113.9 port 4242",
+        "Failed password for invalid user x from 149.154.167.220 port 22 from 203.0.113.9 port 4242 ssh2",
+        "Failed password for root from 203.0.113.9 port 22 ssh2 from 192.0.2.11 port 22",
+    ]
+    ev = parse_auth_lines(lines)
+    assert len(ev) == 3
+    assert all(e.kind == "injection" for e in ev)
+    assert all(e.kind != "failed" and e.kind != "invalid" for e in ev)
+    assert "192.0.2.11" in (ev[0].extras.get("ips") or [])
+    assert "203.0.113.9" in (ev[0].extras.get("ips") or [])
+    assert "149.154.167.220" not in {e.ip for e in ev if e.kind in {"failed", "invalid"}}
+
+
+def test_single_sshd_tail_ip_is_real_peer() -> None:
+    line = "Failed password for root from 203.0.113.9 port 4242 ssh2"
     ev = parse_auth_lines([line])
     assert len(ev) == 1
+    assert ev[0].kind == "failed"
     assert ev[0].ip == "203.0.113.9"
 
 
@@ -40,6 +56,7 @@ def test_v6_brute_aggregates_slash64() -> None:
         last = eng.on_auth_fail(f"2001:db8:1::{i:x}", "root")
     assert last is not None
     assert last.rule_id == "bruteforce_ssh"
+    assert last.ip == "2001:db8:1::/64"
     assert eng.on_auth_fail("2001:db8:1::9", "root") is None  # cooldown on the /64
 
 

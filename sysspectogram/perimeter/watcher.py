@@ -308,12 +308,26 @@ class PerimeterWatcher:
         emitted: list[Alert] = []
 
         for ev in self.auth.poll():
-            if ev.kind in {"failed", "invalid"}:
+            if ev.kind == "injection":
+                ips = list((ev.extras or {}).get("ips") or [])
+                a = Alert(
+                    rule_id="auth_log_injection",
+                    severity="high",
+                    message=(
+                        "SSH auth line has multiple from <ip> port markers "
+                        f"(possible invalid-user injection): {ips or ev.ip}"
+                    ),
+                    ip=None,
+                    extras={"ips": ips, "user": ev.user, "raw": ev.raw},
+                )
+                self.emit(a)
+                emitted.append(a)
+            elif ev.kind in {"failed", "invalid"} and ev.ip:
                 a = self.engine.on_auth_fail(ev.ip, ev.user)
                 if a:
                     self.emit(a)
                     emitted.append(a)
-            elif ev.kind in {"accepted", "accepted_unparsed"}:
+            elif ev.kind in {"accepted", "accepted_unparsed"} and ev.ip:
                 a = self.engine.on_auth_accepted(ev.ip, ev.user)
                 if a:
                     self.emit(a)

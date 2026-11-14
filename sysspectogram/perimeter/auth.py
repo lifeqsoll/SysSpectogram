@@ -5,19 +5,18 @@ import os
 import re
 import subprocess
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 # Real sshd auth lines only. Kind must be Failed/Invalid/Accepted — so
-# ``Disconnected from invalid user …`` / ``Connection closed by …`` never match
-# (no separate noise filter: a substring ``Disconnected`` must not hide real fails).
+# ``Disconnected from invalid user …`` / ``Connection closed by …`` never match.
 #
-# Optional classic syslog or RFC3339 prefix + ``sshd`` / ``sshd-session`` tag
-# (journalctl -o cat may strip both). The **first** valid ``from <ip> port N``
-# after kind/user wins (a concatenated tail must not hide the real source).
-# Accepted publickey may append ``ssh2: ED25519 SHA256:…`` or a certificate id.
+# Invalid-user names are attacker-controlled and may embed ``from <ip> port N``.
+# For Failed/Invalid we take the sshd-written tail when it is unique; if the line
+# has more than one ``from <ip> port``, we emit ``injection`` (no fail / no ban).
+# For Accepted (validated user) the first ``from`` after the user wins.
 _AUTH_RE = re.compile(
     r"^(?:"
     r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+"
@@ -34,12 +33,17 @@ _FROM_IP_RE = re.compile(
     r" from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)",
     re.I,
 )
+# sshd writes the peer address at the end: ``from IP port N`` then optional ssh2/preauth.
+_SSHD_TAIL_RE = re.compile(
+    r" from (?P<ip>[0-9A-Fa-f:.]+) port (?P<port>\d+)"
+    r"(?: ssh2)?(?: \[preauth\])?\s*$",
+    re.I,
+)
 _CERT_TAIL_RE = re.compile(
     r"ssh2: \S+ SHA256:\S+(?: ID (?P<cert_id>.+?) \(serial (?P<cert_serial>\d+)\) CA \S+ SHA256:\S+)?",
     re.I,
 )
 
-# Loose Accepted line when the strict cert/fingerprint tail fails (spaces in cert ID, etc.).
 _ACCEPTED_LOOSE_RE = re.compile(
     r"^(?:"
     r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+"
@@ -55,13 +59,14 @@ _ACCEPTED_LOOSE_RE = re.compile(
 
 @dataclass
 class AuthEvent:
-    kind: str  # failed | invalid | accepted
-    ip: str
+    kind: str  # failed | invalid | accepted | injection | accepted_unparsed
+    ip: str | None
     user: str
     raw: str
     ts: float
     cert_id: str | None = None
     cert_serial: str | None = None
+    extras: dict = field(default_factory=dict)
 
 
 def _normalize_auth_ip(raw: str) -> str | None:
@@ -84,12 +89,31 @@ def _normalize_auth_ip(raw: str) -> str | None:
     return str(addr)
 
 
-def _first_from_ip(text: str) -> tuple[str, str] | None:
+def _all_from_ips(text: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for match in _FROM_IP_RE.finditer(text or ""):
         ip = _normalize_auth_ip(match.group("ip"))
-        if ip is not None:
-            return ip, match.group("port")
-    return None
+        if ip is None or ip in seen:
+            continue
+        seen.add(ip)
+        out.append((ip, match.group("port")))
+    return out
+
+
+def _first_from_ip(text: str) -> tuple[str, str] | None:
+    found = _all_from_ips(text)
+    return found[0] if found else None
+
+
+def _sshd_tail_ip(text: str) -> tuple[str, str] | None:
+    match = _SSHD_TAIL_RE.search(text or "")
+    if not match:
+        return None
+    ip = _normalize_auth_ip(match.group("ip"))
+    if ip is None:
+        return None
+    return ip, match.group("port")
 
 
 def _sanitize_cert_id(raw: str | None) -> str | None:
@@ -122,11 +146,33 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
         return None
     m = _AUTH_RE.match(text)
     if m:
-        found = _first_from_ip(m.group("rest") or "")
+        kind = _kind_from_match(m.group("kind"))
+        rest = m.group("rest") or ""
+        all_ips = _all_from_ips(rest)
+        if kind in {"failed", "invalid"}:
+            if len(all_ips) > 1:
+                ips = [ip for ip, _ in all_ips]
+                tail = _sshd_tail_ip(rest)
+                return AuthEvent(
+                    "injection",
+                    tail[0] if tail else None,
+                    m.group("user"),
+                    text,
+                    ts,
+                    extras={"ips": ips, "rule_hint": "auth_log_injection"},
+                )
+            if not all_ips:
+                return None
+            # Prefer the sshd-written end-of-line peer when present.
+            tail = _sshd_tail_ip(rest)
+            ip, _port = tail if tail else all_ips[0]
+            return AuthEvent(kind, ip, m.group("user"), text, ts)
+        # Accepted: first from after user (cert ID may contain forged from).
+        found = _first_from_ip(rest)
         if found is None:
             return None
         ip, _port = found
-        cert_m = _CERT_TAIL_RE.search(m.group("rest") or "")
+        cert_m = _CERT_TAIL_RE.search(rest)
         cert_id = _sanitize_cert_id(cert_m.group("cert_id") if cert_m else None)
         cert_serial = cert_m.group("cert_serial") if cert_m else None
         if cert_id is None and cert_serial and "ID " in text:
@@ -138,7 +184,7 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
                 ts,
             )
         return AuthEvent(
-            _kind_from_match(m.group("kind")),
+            kind,
             ip,
             m.group("user"),
             text,
@@ -146,7 +192,6 @@ def _parse_line(line: str, ts: float | None = None) -> AuthEvent | None:
             cert_id=cert_id,
             cert_serial=cert_serial,
         )
-    # Accepted with unusual cert ID (spaces / quotes) that broke the strict tail.
     if re.search(r"(?i)\bAccepted \S+ for ", text):
         loose = _ACCEPTED_LOOSE_RE.search(text)
         if loose:
@@ -170,6 +215,7 @@ def parse_auth_lines(lines: list[str]) -> list[AuthEvent]:
         if ev is not None:
             out.append(ev)
     return out
+
 
 
 def _tail_file(path: Path, max_bytes: int = 65536) -> list[str]:

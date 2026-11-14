@@ -17,9 +17,11 @@ def test_forged_username_from_ip_not_parsed():
         "port 22 from 203.0.113.9 port 5555 ssh2",
     ]
     # First two are noise (Disconnected / Connection closed).
-    # Third is a real Failed password: the FIRST valid ``from IP port`` wins.
+    # Third embeds a forged from in the username → injection, not a fail on either IP.
     ev = parse_auth_lines(lines)
-    assert [e.ip for e in ev] == ["198.51.100.77"]
+    assert len(ev) == 1
+    assert ev[0].kind == "injection"
+    assert set(ev[0].extras.get("ips") or []) == {"198.51.100.77", "203.0.113.9"}
 
 
 def test_username_inject_without_real_from_at_end_rejected():
