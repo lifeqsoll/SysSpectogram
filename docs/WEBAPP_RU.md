@@ -37,7 +37,7 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --web --dry-r
 Открыть: **http://127.0.0.1:8765/**
 
 - Тема тёмная по умолчанию; в шапке Light/Dark.
-- Метрики требуют **сессию**: введите **WEB LOGIN CODE** с консоли хоста (`state/web.login` или `sysspectogram web login`, пока web запущен) или авторизуйтесь через Mini App `initData`. Одного loopback недостаточно. Остановка web удаляет код.
+- Метрики требуют **сессию**: введите **WEB LOGIN CODE** с консоли хоста (`state/web.login` или `sysspectogram web login`, пока web запущен) или авторизуйтесь через Mini App `initData`. Одного loopback недостаточно. Остановка web удаляет код. За HTTPS-туннелем все клиенты выглядят как `127.0.0.1`, поэтому per-IP лимиты login/unlock не разделяют пользователей — для Mini App задайте `telegram.allowed_user_ids` (одного группового `chat_id` недостаточно).
 - При `guard --telegram` SOAR-кнопки web требуют console unlock (`/unlock`). В шапке: `control LOCKED|unlocked`.
 - Через публичный туннель — открывать из Telegram (`initData`), user id = `TELEGRAM_CHAT_ID`.
 

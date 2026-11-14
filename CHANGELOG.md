@@ -17,10 +17,17 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 
 - Phase 7 ML honesty: leak-free train/val/test (+ gap), lab filters/balance opt-in, `ml.baselines`, gate vs best baseline, `docs/DATASET.md`, `collect_labeled` scaffold.
 - Phase 7.5–7.9: `user_metrics` (FP/day, TTD), plain ML explain, FP suppress after «normal», drift refit controller, ONNX↔torch parity test.
+- `backend_from_config` factory so CLI/friend/helper ban paths share ssh_port / egress / `allow_private_bans`.
+- IPv6 brute aggregation can ban a `/48`–`/128` prefix via `ban6` `flags interval,timeout`.
 
 ### Changed
 
 - `build-dataset` defaults: no lab filters, no balance; `eval_offline` hard-errors on `windows_format=scaled`; `check_ml_ready` requires fuse > best baseline (PR-AUC + recall@FPR1%).
+- Auth Failed/Invalid: sshd end-of-line peer IP when unique; multiple `from <ip> port` → `auth_log_injection` (no ban). Accepted still uses the first `from`.
+- FlowWatcher counts unique SYN_RECV peers; SYN_SENT is `flow_syn_sent_hang` (never ban-capable); reads `/proc/net/tcp6`.
+- Login/unlock rate buckets are separate; login code rotates after repeated fails; correct fresh code bypasses 429 for wrong guesses.
+- Mini App: negative group `chat_id` without `allowed_user_ids` → 403.
+- Helper `ban.add` honors `allow_private_bans` and refuses Telegram/resolver/gateway like Python.
 
 ### Fixed
 
@@ -37,7 +44,10 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Quote nft rule comments so lockdown/quarantine/shield actually apply; check established rule rc.
 - Lockdown/syn-rate-limit use `tcp flags syn / fin,syn,rst,ack` (nft 1.1.x). A failed apply rolls back only the rules that call added.
 - Spoofed SYN_RECV no longer auto-bans Telegram/DNS/gateway/LAN: `ban_ip` refuses those, `flow.auto_ban` defaults off, RFC1918/ULA/CGNAT need `allow_private_bans`.
-- Mini App auth no longer treats `lstrip("-")` of a group chat id as a user id; auth log keeps the first `from IP port`; IPv6 SSH fails can aggregate on `/64`.
+- Mini App auth no longer treats `lstrip("-")` of a group chat id as a user id; IPv6 SSH fails aggregate on `/64` and ban that prefix; auth injection via invalid-user name is detected.
+- IPv6 default gateway is protected; resolv stub falls back to `/run/systemd/resolve/resolv.conf`.
+- SSE sets `close_connection` after logout; auto-ban does not escalate TTL while the IP is still in the set; private auto-ban skip says `refuse private`.
+- Telegram bot respects `telegram.allowed_user_ids` from config (not only env).
 - `home health` does not treat a host with no journal files as an ssh source, including root (`journalctl` without `-q`).
 - A second lockdown inserts a new admin allow before the SYN drop. syn-rate-limit does the same for its allow rules, and replaces the drop when rate/burst change.
 - Kirk isolate keeps IPv6 resolvers from `resolvectl dns` and opens TCP/UDP 853 when the resolver is DNS-over-TLS (`#name`).
