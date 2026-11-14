@@ -13,7 +13,10 @@ def test_flow_proc_backend_empty_ok():
     assert isinstance(alerts, list)
 
 
-@patch("sysspectogram.flow._parse_ss", return_value=[("1.2.3.4", 22, "SYN-SENT")] * 100)
+@patch(
+    "sysspectogram.flow._parse_ss",
+    return_value=[(f"203.0.113.{i}", 22, "SYN-RECV") for i in range(1, 51)],
+)
 @patch("sysspectogram.flow._parse_tcp", return_value=[])
 def test_netview_syn_burst(_tcp, _ss):
     w = FlowWatcher(
@@ -26,7 +29,24 @@ def test_netview_syn_burst(_tcp, _ss):
     alerts = w.poll()
     syn = [a for a in alerts if a["rule_id"] == "flow_syn_burst"]
     assert syn
-    assert any(a.get("ip") == "1.2.3.4" for a in syn)
+
+
+@patch(
+    "sysspectogram.flow._parse_ss",
+    return_value=[("203.0.113.9", i, "SYN-SENT") for i in range(50)],
+)
+@patch("sysspectogram.flow._parse_tcp", return_value=[])
+def test_netview_syn_sent_not_burst(_tcp, _ss):
+    w = FlowWatcher(
+        backend="netview",
+        syn_threshold=10,
+        unique_port_threshold=9999,
+        per_ip_syn_threshold=40,
+        window_sec=60,
+    )
+    alerts = w.poll()
+    assert not any(a["rule_id"] == "flow_syn_burst" for a in alerts)
+    assert any(a["rule_id"] == "flow_syn_sent_hang" for a in alerts)
 
 
 def test_confirm_streak():

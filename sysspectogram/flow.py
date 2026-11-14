@@ -1,4 +1,4 @@
-"""Flow / netview heuristics — /proc/net/tcp plus cheaper ss/conntrack when available."""
+"""Flow / netview heuristics — /proc/net/tcp{,6} plus cheaper ss when available."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-def _parse_tcp(path: Path = Path("/proc/net/tcp")) -> list[tuple[str, int, str]]:
+def _parse_tcp4(path: Path = Path("/proc/net/tcp")) -> list[tuple[str, int, str]]:
     """Return list of (remote_ip, remote_port, state_hex)."""
     out: list[tuple[str, int, str]] = []
     try:
@@ -32,6 +32,44 @@ def _parse_tcp(path: Path = Path("/proc/net/tcp")) -> list[tuple[str, int, str]]
             continue
         out.append((ip, port, state))
     return out
+
+
+def _parse_tcp6(path: Path = Path("/proc/net/tcp6")) -> list[tuple[str, int, str]]:
+    """Parse /proc/net/tcp6 little-endian hextets into compressed IPv6."""
+    out: list[tuple[str, int, str]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()[1:]
+    except OSError:
+        return out
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        remote = parts[2]
+        state = parts[3]
+        try:
+            rip_hex, rport_hex = remote.split(":")
+            if len(rip_hex) != 32:
+                continue
+            groups: list[str] = []
+            for i in range(0, 32, 8):
+                word = rip_hex[i : i + 8]
+                # each 32-bit word is little-endian in /proc
+                le = "".join(word[j : j + 2] for j in (6, 4, 2, 0))
+                groups.append(le[0:4])
+                groups.append(le[4:8])
+            from ipaddress import IPv6Address
+
+            ip = str(IPv6Address(int("".join(groups), 16)))
+            port = int(rport_hex, 16)
+        except ValueError:
+            continue
+        out.append((ip, port, state))
+    return out
+
+
+def _parse_tcp() -> list[tuple[str, int, str]]:
+    return _parse_tcp4() + _parse_tcp6()
 
 
 def _parse_ss() -> list[tuple[str, int, str]]:
@@ -56,41 +94,46 @@ def _parse_ss() -> list[tuple[str, int, str]]:
         state = parts[0].upper()
         peer = parts[4]
         try:
-            if peer.count(":") >= 1:
-                # IPv4 host:port or [ipv6]:port — keep IPv4 simple
-                if peer.startswith("["):
-                    continue
+            if peer.startswith("["):
+                host, _, port_s = peer[1:].partition("]:")
+                port = int(port_s)
+            elif peer.count(":") >= 1:
                 host, _, port_s = peer.rpartition(":")
                 port = int(port_s)
-                if host in ("*", "0.0.0.0", "::"):
-                    continue
-                out.append((host, port, state))
+            else:
+                continue
+            if host in ("*", "0.0.0.0", "::"):
+                continue
+            out.append((host, port, state))
         except ValueError:
             continue
     return out
 
 
-# Map ss state names to /proc-like hex for shared logic
-_SS_SYNISH = {"SYN-SENT", "SYN-RECV", "SYN_SENT", "SYN_RECV"}
+_SS_SYN_RECV = {"SYN-RECV", "SYN_RECV"}
+_SS_SYN_SENT = {"SYN-SENT", "SYN_SENT"}
 
 
 @dataclass
 class FlowWatcher:
-    """Track unique remote ports / SYN activity over a window.
+    """Track unique remote ports / SYN_RECV activity over a window.
 
     backend:
-      - proc: /proc/net/tcp only (lite default)
+      - proc: /proc/net/tcp + tcp6
       - netview: prefer ss -tnH, fall back to /proc
       - both: merge both sources
+
+    SYN_RECV counts unique (ip, port) once per window (not once per poll).
+    SYN_SENT is a separate non-ban alert for outbound hangs.
     """
 
     window_sec: float = 30.0
     syn_threshold: int = 80
     unique_port_threshold: int = 40
-    # Per-source SYN-ish count for host soft-mitigation (ban-capable alerts).
     per_ip_syn_threshold: int = 40
     backend: str = "proc"
-    _events: list[tuple[float, str, int, str]] = field(default_factory=list)
+    # first-seen timestamp per (ip, port, kind) inside the window
+    _seen: dict[tuple[str, int, str], float] = field(default_factory=dict)
 
     def _collect(self) -> list[tuple[str, int, str]]:
         backend = (self.backend or "proc").lower()
@@ -99,78 +142,109 @@ class FlowWatcher:
         if backend == "netview":
             rows = _parse_ss()
             return rows if rows else _parse_tcp()
-        # both
         seen: set[tuple[str, int, str]] = set()
         merged: list[tuple[str, int, str]] = []
         for src in (_parse_ss(), _parse_tcp()):
             for row in src:
-                # normalize state to hex-ish tag
-                ip, port, st = row
-                key = (ip, port, st)
-                if key in seen:
+                if row in seen:
                     continue
-                seen.add(key)
+                seen.add(row)
                 merged.append(row)
         return merged
+
+    @staticmethod
+    def _kind(state: str) -> str | None:
+        st = str(state).upper()
+        if st in {"03"} or st in _SS_SYN_RECV:
+            return "recv"
+        if st in {"02"} or st in _SS_SYN_SENT:
+            return "sent"
+        return None
 
     def poll(self) -> list[dict[str, Any]]:
         now = time.time()
         for ip, port, state in self._collect():
-            self._events.append((now, ip, port, state))
-        self._events = [e for e in self._events if now - e[0] <= self.window_sec]
+            kind = self._kind(state)
+            if kind is None:
+                continue
+            key = (ip, port, kind)
+            self._seen.setdefault(key, now)
+        # drop entries outside the window
+        self._seen = {k: ts for k, ts in self._seen.items() if now - ts <= self.window_sec}
         alerts: list[dict[str, Any]] = []
-        # TCP_SYN_RECV = 03, SYN_SENT = 02 OR ss SYN-* names
-        synish = [
-            e
-            for e in self._events
-            if e[3] in {"02", "03"} or str(e[3]).upper() in _SS_SYNISH
-        ]
-        # Per-IP SYN-ish (ban-capable). Host soft-mitigation — not volumetric anti-DDoS.
-        syn_by_ip: dict[str, int] = {}
-        for _ts, ip, _port, _st in synish:
-            syn_by_ip[ip] = syn_by_ip.get(ip, 0) + 1
+        recv_by_ip: dict[str, set[int]] = {}
+        sent_by_ip: dict[str, set[int]] = {}
+        for (ip, port, kind), _ts in self._seen.items():
+            if kind == "recv":
+                recv_by_ip.setdefault(ip, set()).add(port)
+            else:
+                sent_by_ip.setdefault(ip, set()).add(port)
         per_ip_thr = max(1, int(self.per_ip_syn_threshold))
-        for ip, n in syn_by_ip.items():
+        for ip, ports in recv_by_ip.items():
+            n = len(ports)
             if n >= per_ip_thr:
                 alerts.append(
                     {
                         "rule_id": "flow_syn_burst",
                         "severity": "high",
                         "message": (
-                            f"SYN-ish from {ip}: {n} in {self.window_sec:.0f}s "
+                            f"SYN-RECV from {ip}: {n} unique peers in {self.window_sec:.0f}s "
                             f"(backend={self.backend}; host mitigation, not anti-DDoS)"
                         ),
                         "ip": ip,
                         "count": n,
-                        "extras": {"backend": self.backend, "scope": "per_ip"},
+                        "extras": {"backend": self.backend, "scope": "per_ip", "state": "syn_recv"},
                     }
                 )
-        if len(synish) >= self.syn_threshold:
+        total_recv = sum(len(p) for p in recv_by_ip.values())
+        if total_recv >= self.syn_threshold:
             top_ip = ""
             top_n = 0
-            if syn_by_ip:
-                top_ip, top_n = max(syn_by_ip.items(), key=lambda kv: kv[1])
+            if recv_by_ip:
+                top_ip, ports = max(recv_by_ip.items(), key=lambda kv: len(kv[1]))
+                top_n = len(ports)
             alerts.append(
                 {
                     "rule_id": "flow_syn_burst",
                     "severity": "high",
                     "message": (
-                        f"SYN-ish TCP states={len(synish)} in {self.window_sec:.0f}s "
+                        f"SYN-RECV unique={total_recv} in {self.window_sec:.0f}s "
                         f"(backend={self.backend}; top={top_ip or '-'} n={top_n})"
                     ),
-                    # Prefer top offender so soft/aggressive auto_ban can act.
                     "ip": top_ip or None,
-                    "count": len(synish),
+                    "count": total_recv,
                     "extras": {
                         "backend": self.backend,
                         "scope": "window",
                         "top_ip": top_ip or None,
                         "top_n": top_n,
+                        "state": "syn_recv",
                     },
                 }
             )
+        for ip, ports in sent_by_ip.items():
+            n = len(ports)
+            if n >= per_ip_thr:
+                alerts.append(
+                    {
+                        "rule_id": "flow_syn_sent_hang",
+                        "severity": "medium",
+                        "message": (
+                            f"outbound SYN-SENT to {ip}: {n} unique peers in "
+                            f"{self.window_sec:.0f}s (not ban-capable)"
+                        ),
+                        "ip": None,
+                        "count": n,
+                        "extras": {
+                            "backend": self.backend,
+                            "peer": ip,
+                            "state": "syn_sent",
+                            "ban": False,
+                        },
+                    }
+                )
         by_ip: dict[str, set[int]] = {}
-        for _ts, ip, port, _st in self._events:
+        for (ip, port, _kind), _ts in self._seen.items():
             by_ip.setdefault(ip, set()).add(port)
         for ip, ps in by_ip.items():
             if len(ps) >= self.unique_port_threshold:
@@ -192,6 +266,6 @@ class FlowWatcher:
     def snapshot(self) -> dict[str, Any]:
         return {
             "backend": self.backend,
-            "events": len(self._events),
+            "events": len(self._seen),
             "window_sec": self.window_sec,
         }
