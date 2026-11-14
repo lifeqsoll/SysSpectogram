@@ -65,11 +65,59 @@ def parse_ban_ip(raw: Any, *, allow_private: bool = False) -> str:
     return str(addr)
 
 
+def parse_ban_target(raw: Any, *, allow_private: bool = False) -> str:
+    """Host IP or IPv6 prefix (``2001:db8:1::/64``) for ban sets with interval."""
+    token = str(raw or "").strip()
+    if "/" not in token:
+        return parse_ban_ip(token, allow_private=allow_private)
+    from ipaddress import ip_network
+
+    if any(c in token for c in ";|&`$(){}[]<>\\\"' \t\n\r"):
+        raise ValueError(f"invalid ban target: {token!r}")
+    try:
+        net = ip_network(token, strict=False)
+    except ValueError as exc:
+        raise ValueError(f"invalid ban target: {token!r}") from exc
+    if net.version != 6:
+        raise ValueError(f"IPv4 prefix bans are not supported: {token!r}")
+    if net.prefixlen < 48 or net.prefixlen > 128:
+        raise ValueError(f"IPv6 ban prefix must be /48../128: {token!r}")
+    if not allow_private and is_lan_like(net.network_address):
+        raise ValueError(f"refusing ban of private/ULA/CGNAT address: {net}")
+    return str(net)
+
+
 def nft_saddr_family(ip: str, *, allow_private: bool = False) -> tuple[str, str]:
-    """Return ``(family_token, canonical_ip)`` for nft: ``ip`` or ``ip6``."""
+    """Return ``(family_token, canonical_ip_or_cidr)`` for nft: ``ip`` or ``ip6``."""
+    if "/" in str(ip):
+        canonical = parse_ban_target(ip, allow_private=allow_private)
+        return "ip6", canonical
     canonical = parse_ban_ip(ip, allow_private=allow_private)
     addr = ip_address(canonical)
     return ("ip6" if addr.version == 6 else "ip"), canonical
+
+
+def validate_v6_brute_prefix(raw: object) -> int:
+    """Return 0 (off) or an integer in 48..128. Reject junk that used to crash guard."""
+    if raw is None or raw is False:
+        return 0
+    if isinstance(raw, bool):
+        raise ValueError(f"perimeter.v6_brute_prefix must be 0 or 48..128, got {raw!r}")
+    if isinstance(raw, float):
+        if not raw.is_integer():
+            raise ValueError(f"perimeter.v6_brute_prefix must be 0 or 48..128, got {raw!r}")
+        raw = int(raw)
+    if isinstance(raw, str):
+        if not raw.isascii() or not raw.isdigit():
+            raise ValueError(f"perimeter.v6_brute_prefix must be 0 or 48..128, got {raw!r}")
+        raw = int(raw)
+    if not isinstance(raw, int):
+        raise ValueError(f"perimeter.v6_brute_prefix must be 0 or 48..128, got {raw!r}")
+    if raw == 0:
+        return 0
+    if 48 <= raw <= 128:
+        return raw
+    raise ValueError(f"perimeter.v6_brute_prefix must be 0 or 48..128, got {raw!r}")
 
 
 def nft_cidr_family(cidr: str) -> tuple[str, str]:

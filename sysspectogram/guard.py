@@ -26,6 +26,7 @@ from sysspectogram.notify import notify
 from sysspectogram.notify_telegram import TelegramClient
 from sysspectogram.perimeter.watcher import PerimeterWatcher
 from sysspectogram.preprocess.window import rows_to_matrix
+from sysspectogram.net_ip import validate_v6_brute_prefix
 from sysspectogram.response.actions import NftBackend
 from sysspectogram.response.tokens import TokenStore
 from sysspectogram.telegram_bot import TelegramBot, parse_allowed_user_ids
@@ -501,19 +502,35 @@ def run_guard(
         from ipaddress import ip_network, ip_address
 
         try:
-            from sysspectogram.net_ip import parse_ban_ip
+            from sysspectogram.net_ip import parse_ban_target
 
-            addr = ip_address(parse_ban_ip(alert.ip))
-            for cidr in never_ban:
-                try:
-                    if addr in ip_network(cidr, strict=False):
-                        console.print(f"[yellow]never_ban[/] skip {alert.ip} ({cidr})")
-                        return
-                except ValueError:
-                    continue
-        except ValueError:
-            # Fail-closed: forged / CIDR / junk IPs never reach nft.
-            console.print(f"[yellow]auto_ban skip[/] invalid ip={alert.ip!r}")
+            target = parse_ban_target(
+                alert.ip, allow_private=bool(resp_cfg.get("allow_private_bans", False))
+            )
+            if "/" in target:
+                ban_net = ip_network(target, strict=False)
+                for cidr in never_ban:
+                    try:
+                        if ban_net.overlaps(ip_network(cidr, strict=False)):
+                            console.print(f"[yellow]never_ban[/] skip {alert.ip} ({cidr})")
+                            return
+                    except ValueError:
+                        continue
+            else:
+                addr = ip_address(target)
+                for cidr in never_ban:
+                    try:
+                        if addr in ip_network(cidr, strict=False):
+                            console.print(f"[yellow]never_ban[/] skip {alert.ip} ({cidr})")
+                            return
+                    except ValueError:
+                        continue
+        except ValueError as exc:
+            detail = str(exc)
+            if "private" in detail.lower() or "cgnat" in detail.lower() or "ula" in detail.lower():
+                console.print(f"[yellow]auto_ban skip[/] refuse private {alert.ip!r}")
+            else:
+                console.print(f"[yellow]auto_ban skip[/] invalid ip={alert.ip!r}")
             return
         ttl = auto_ban_ttl
         # OSINT 2.0: scale ban TTL by recon_score when present on extras / recent dossier
@@ -535,22 +552,28 @@ def run_guard(
         if score is not None:
             # 0.0 -> 0.5x ttl, 1.0 -> 3x ttl
             ttl = max(300.0, auto_ban_ttl * (0.5 + 2.5 * min(1.0, max(0.0, score))))
-        # fail2ban-style repeated-offender multiplier (response.ban_increment)
+        # fail2ban-style repeated-offender multiplier — skip while still in the set
+        already_banned = False
         try:
-            from sysspectogram.response.actions import DEFAULT_MAX_BAN_TTL_SEC
-            from sysspectogram.response.ban_increment import next_ttl
-
-            # resp_cfg closed over from run_guard (config["response"])
-            incr_on = bool(resp_cfg.get("ban_increment", True))
-            max_ttl = float(resp_cfg.get("max_ban_ttl_sec", DEFAULT_MAX_BAN_TTL_SEC))
-            ttl = next_ttl(
-                str(alert.ip),
-                base_ttl=ttl,
-                max_ban_ttl_sec=max_ttl,
-                enabled=incr_on,
-            )
+            listed = nft.list_bans() if hasattr(nft, "list_bans") else []
+            already_banned = any(str(getattr(b, "ip", b)) == str(alert.ip) for b in (listed or []))
         except Exception:
-            pass
+            already_banned = False
+        if not already_banned:
+            try:
+                from sysspectogram.response.actions import DEFAULT_MAX_BAN_TTL_SEC
+                from sysspectogram.response.ban_increment import next_ttl
+
+                incr_on = bool(resp_cfg.get("ban_increment", True))
+                max_ttl = float(resp_cfg.get("max_ban_ttl_sec", DEFAULT_MAX_BAN_TTL_SEC))
+                ttl = next_ttl(
+                    str(alert.ip),
+                    base_ttl=ttl,
+                    max_ban_ttl_sec=max_ttl,
+                    enabled=incr_on,
+                )
+            except Exception:
+                pass
         msg = nft.ban_ip(alert.ip, ttl_sec=ttl, dry_run=dry_run_actions)
         from sysspectogram.response.actions import classify_ban_message
 
@@ -574,7 +597,7 @@ def run_guard(
         host_id=host_id,
         fail_threshold=int(per_cfg.get("fail_threshold", 8)),
         fail_window_sec=float(per_cfg.get("fail_window_sec", 60)),
-        v6_brute_prefix=int(per_cfg.get("v6_brute_prefix", 0) or 0),
+        v6_brute_prefix=validate_v6_brute_prefix(per_cfg.get("v6_brute_prefix", 0)),
         scan_unique_ips=int(per_cfg.get("scan_unique_ips", 8)),
         scan_window_sec=float(per_cfg.get("scan_window_sec", 60)),
         denylist_paths=denylist_paths,
@@ -665,6 +688,7 @@ def run_guard(
             if_refit=if_refit_enabled,
             supply_chain=config.get("supply_chain") or {},
             lang=notify_lang,
+            allowed_user_ids=parse_allowed_user_ids(tg_cfg),
         )
         if unlock_gate.enabled:
             try:

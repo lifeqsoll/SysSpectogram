@@ -114,12 +114,16 @@ class RuleEngine:
         while q and now - q[0] > self.fail_window_sec:
             q.popleft()
         if len(q) >= self.fail_threshold and self._cool(f"brute:{key}"):
+            ban_target = key if key != ip else ip
             return Alert(
                 rule_id="bruteforce_ssh",
                 severity="critical",
-                message=f"SSH brute suspected from {ip}: {len(q)} fails / {self.fail_window_sec:.0f}s",
-                ip=ip,
-                extras={"fails": len(q), "user": user},
+                message=(
+                    f"SSH brute suspected from {ban_target}: {len(q)} fails / "
+                    f"{self.fail_window_sec:.0f}s (last={ip})"
+                ),
+                ip=ban_target,
+                extras={"fails": len(q), "user": user, "last_ip": ip, "bucket": key},
             )
         return None
 

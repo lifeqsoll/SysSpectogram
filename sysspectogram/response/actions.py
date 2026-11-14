@@ -162,6 +162,7 @@ def policy_from_config(config: dict | None) -> tuple[int, list[str] | None]:
     An empty list means no TCP/443 egress.
 
     A string (not a list), a bad CIDR, or ``ssh.port: true`` raises ValueError.
+    Also validates ``perimeter.v6_brute_prefix`` (0 or 48..128).
     """
     ssh_port = 22
     egress: list[str] | None = None
@@ -187,7 +188,25 @@ def policy_from_config(config: dict | None) -> tuple[int, list[str] | None]:
             except ValueError as exc:
                 raise ValueError(f"kirk.egress_allow_cidrs has invalid CIDR {item!r}") from exc
             egress.append(canon)
+    per = config.get("perimeter") or {}
+    if isinstance(per, dict) and "v6_brute_prefix" in per:
+        from sysspectogram.net_ip import validate_v6_brute_prefix
+
+        validate_v6_brute_prefix(per.get("v6_brute_prefix"))
     return ssh_port, egress
+
+
+def backend_from_config(config: dict | None) -> "NftBackend":
+    """Build NftBackend with ssh_port / egress / allow_private_bans from ``config``."""
+    cfg = config if isinstance(config, dict) else {}
+    ssh_port, https_egress = policy_from_config(cfg)
+    resp = dict(cfg.get("response") or {})
+    return NftBackend(
+        never_ban_cidrs=[str(x) for x in (resp.get("never_ban_cidrs") or [])],
+        ssh_port=ssh_port,
+        https_egress_cidrs=https_egress,
+        allow_private_bans=bool(resp.get("allow_private_bans", False)),
+    )
 
 
 def _strict_port(port: object) -> int:
@@ -249,7 +268,7 @@ table inet sysspectogram {
   }
   set ban6 {
     type ipv6_addr
-    flags timeout
+    flags interval,timeout
   }
   chain input {
     type filter hook input priority -10; policy accept;
@@ -344,10 +363,20 @@ class NftBackend:
         return _cidr_targets(cidrs)
 
     def is_never_ban(self, ip: str) -> bool:
+        token = str(ip).strip()
         try:
             from sysspectogram.net_ip import unwrap_mapped_ip
 
-            addr = unwrap_mapped_ip(ip_address(str(ip).strip()))
+            if "/" in token:
+                ban_net = ip_network(token, strict=False)
+                for cidr in self.never_ban_cidrs:
+                    try:
+                        if ban_net.overlaps(ip_network(str(cidr).strip(), strict=False)):
+                            return True
+                    except ValueError:
+                        continue
+                return False
+            addr = unwrap_mapped_ip(ip_address(token))
         except ValueError:
             # Fail-closed for never-ban checks: invalid IPs are not "protected",
             # but ban_ip must also reject them before touching nft.
@@ -439,7 +468,7 @@ class NftBackend:
                 "ipv6_addr",
                 ";",
                 "flags",
-                "timeout",
+                "interval,timeout",
                 ";",
                 "}",
             ]
@@ -639,7 +668,8 @@ class NftBackend:
         from sysspectogram.net_ip import nft_saddr_family
 
         try:
-            family, ip = nft_saddr_family(ip)
+            # Always allow private/prefix on unban so operators can clear a set.
+            family, ip = nft_saddr_family(ip, allow_private=True)
         except ValueError as exc:
             return f"refuse unban: {exc}"
         self.bans.pop(ip, None)

@@ -63,6 +63,43 @@ def test_ban_ipv6_set():
 
 
 @skip_no_priv
+def test_ban_ipv6_prefix_64():
+    from sysspectogram.response.actions import NftBackend
+
+    b = NftBackend(never_ban_cidrs=[])
+    msg = b.ban_ip("2001:db8:1::/64", ttl_sec=60)
+    assert msg.startswith("banned"), msg
+    code, out = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban6"])
+    assert code == 0, out
+    assert "2001:db8:1::/64" in out or "2001:db8:1::" in out
+    b.unban_ip("2001:db8:1::/64")
+
+
+@skip_no_priv
+def test_v6_gateway_protected_live(monkeypatch):
+    from sysspectogram.response.actions import NftBackend
+    from sysspectogram.response import protect
+
+    def _ip(argv: list[str]) -> None:
+        subprocess.run(argv, check=False, capture_output=True, text=True)
+
+    # Install a real default v6 route in this netns, then refuse ban.
+    _ip(["ip", "link", "add", "dummy0", "type", "dummy"])
+    _ip(["ip", "link", "set", "dummy0", "up"])
+    _ip(["ip", "-6", "addr", "add", "2001:db8:feed::1/64", "dev", "dummy0"])
+    _ip(["ip", "-6", "route", "add", "default", "via", "2001:db8:feed::fffe", "dev", "dummy0"])
+    monkeypatch.setattr(protect, "_host_addrs", lambda: set())
+    monkeypatch.setattr(protect, "_ssh_session_ips", lambda **k: set())
+    monkeypatch.setattr(protect, "_resolver_addrs", lambda: set())
+    b = NftBackend(never_ban_cidrs=[])
+    msg = b.ban_ip("2001:db8:feed::fffe", ttl_sec=60)
+    assert "protected" in msg or "refuse" in msg, msg
+    code, out = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban6"])
+    if code == 0:
+        assert "2001:db8:feed::fffe" not in out
+
+
+@skip_no_priv
 def test_rebban_updates_element():
     from sysspectogram.response.actions import NftBackend
 
