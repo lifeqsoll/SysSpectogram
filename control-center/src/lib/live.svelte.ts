@@ -1,5 +1,5 @@
-// One subscription to the backend "live" event, shared by every view.
-// Remote hosts poll fleet timeseries latest (gated by section + visibility).
+// values → всегда (алерты / «now» на карточках).
+// history → только вкладка Live (там один график). Charts/Dashboards не трогаем history.
 import { api, type LiveEvent, type Latest } from './api';
 import { isRemoteHost, ui } from './state.svelte';
 
@@ -25,32 +25,38 @@ export const live: LiveState = $state({
 });
 
 const HISTORY_SECONDS = 300;
-const LIVE_SECTIONS = new Set(['home', 'charts', 'live', 'overview', 'alerts', 'incidents', 'fleet']);
-const REMOTE_METRICS = [
-  'host_risk',
-  'host_score',
-  'agent_score',
-  'cpu_percent',
-  'mem_percent',
-  'net_bytes_recv_per_s',
-  'net_bytes_sent_per_s',
-];
+const REMOTE_METRICS = ['host_risk', 'host_score', 'agent_score', 'cpu_percent', 'mem_percent'];
+const REMOTE_POLL_MS = 5000;
 
 let started = false;
 let remoteTimer: ReturnType<typeof setInterval> | undefined;
 let applyLocal = true;
+let remoteInFlight = false;
+let lastRemoteHost = '';
 
-function sectionWantsLive(): boolean {
-  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
-  return LIVE_SECTIONS.has(ui.section);
+function pageVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden';
 }
 
 function applyLatest(at: number, latest: Latest[]): void {
-  if (!sectionWantsLive()) return;
+  if (!pageVisible()) return;
   const values: Record<string, { value: number; ts: number }> = {};
   for (const item of latest) values[item.metric] = { value: item.value, ts: item.ts };
   live.at = at;
   live.values = values;
+  live.connected = true;
+
+  // Only the Live page draws a streaming chart from history.
+  if (ui.section !== 'live') return;
+
+  const prev = live.history[live.history.length - 1];
+  if (
+    prev &&
+    prev.host_risk === (values.host_risk?.value ?? null) &&
+    Math.abs(at - prev.ts) < 2.5
+  ) {
+    return;
+  }
   live.history.push({
     ts: at,
     host_risk: values.host_risk?.value ?? null,
@@ -59,7 +65,6 @@ function applyLatest(at: number, latest: Latest[]): void {
   });
   const cutoff = at - HISTORY_SECONDS;
   while (live.history.length > 0 && live.history[0].ts < cutoff) live.history.shift();
-  live.connected = true;
 }
 
 function apply(e: LiveEvent): void {
@@ -75,23 +80,30 @@ export function clearLiveHistory(): void {
 }
 
 async function pollRemote(): Promise<void> {
-  if (!isRemoteHost() || !sectionWantsLive()) return;
+  if (!isRemoteHost() || !pageVisible() || remoteInFlight) return;
+  remoteInFlight = true;
   try {
     const latest = await api.timeseriesLatest(REMOTE_METRICS);
     const at =
       latest.reduce((m, row) => Math.max(m, row.ts), 0) || Date.now() / 1000;
     applyLatest(at, latest);
   } catch {
-    /* ignore SSH blips */
+    /* ignore */
+  } finally {
+    remoteInFlight = false;
   }
 }
 
 function syncRemotePoller(): void {
-  const want = isRemoteHost();
-  applyLocal = !want;
+  const want = isRemoteHost() && pageVisible();
+  applyLocal = !isRemoteHost();
+  if (ui.activeHostId !== lastRemoteHost) {
+    lastRemoteHost = ui.activeHostId;
+    if (isRemoteHost()) void pollRemote();
+  }
   if (want && !remoteTimer) {
     void pollRemote();
-    remoteTimer = setInterval(() => void pollRemote(), 8000);
+    remoteTimer = setInterval(() => void pollRemote(), REMOTE_POLL_MS);
   } else if (!want && remoteTimer) {
     clearInterval(remoteTimer);
     remoteTimer = undefined;
@@ -105,9 +117,8 @@ export async function startLive(): Promise<void> {
   syncRemotePoller();
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') void pollRemote();
+      if (document.visibilityState === 'visible' && isRemoteHost()) void pollRemote();
     });
   }
-  // React to host / section changes via cheap interval (avoids $effect in non-component).
-  setInterval(() => syncRemotePoller(), 1000);
+  setInterval(() => syncRemotePoller(), 2500);
 }

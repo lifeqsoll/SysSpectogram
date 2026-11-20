@@ -29,13 +29,17 @@
     clearLiveHistory();
   }
 
+  let lastSection = '';
+
   onMount(() => {
     void refresh();
   });
 
   $effect(() => {
-    // Re-read hosts when returning to fleet section after pairing.
-    if (ui.section === 'fleet') void refresh();
+    const s = ui.section;
+    // Refresh host list once when entering Fleet (after pair wizard), not on every tick.
+    if (s === 'fleet' && lastSection !== 'fleet') void refresh();
+    lastSection = s;
   });
 </script>
 

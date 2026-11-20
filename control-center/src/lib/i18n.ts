@@ -26,10 +26,6 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   'nav.about': { en: 'About and Docs', ru: 'О программе и документация' },
   'host.picker': { en: 'Active host', ru: 'Активный хост' },
   'host.local': { en: 'This PC (local)', ru: 'Этот ПК (локально)' },
-  'host.remoteHint': {
-    en: 'Viewing a fleet VPS over SSH. Local protect controls stay on This PC.',
-    ru: 'Смотрите VPS флота по SSH. Локальные кнопки protect — только для этого ПК.',
-  },
   'fleet.hostOpen': { en: 'Open', ru: 'Открыть' },
   'fleet.hostBack': { en: 'Back to fleet', ru: 'К флоту' },
   'fleet.hostTabCharts': { en: 'Charts', ru: 'Графики' },

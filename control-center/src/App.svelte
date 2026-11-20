@@ -5,6 +5,7 @@
     HUB_SECTIONS,
     SIMPLE_SECTIONS,
     applyThemeToDom,
+    isRemoteHost,
     setLang as setLangState,
     ui,
   } from './lib/state.svelte';
@@ -12,15 +13,6 @@
   import { live, startLive } from './lib/live.svelte';
   import { api } from './lib/api';
   import type { Lang } from './lib/settings';
-
-  async function setLang(lang: Lang): Promise<void> {
-    setLangState(lang);
-    try {
-      await api.settingsApply({ 'ui.lang': lang });
-    } catch {
-      /* overlay may be unavailable before helper — UI lang still updates */
-    }
-  }
   import Icon from './lib/Icon.svelte';
   import HostPicker from './lib/HostPicker.svelte';
   import brandMark from './assets/brand-mark.svg?raw';
@@ -43,7 +35,15 @@
   import Install from './views/Install.svelte';
   import Logs from './views/Logs.svelte';
   import About from './views/About.svelte';
-  import { isRemoteHost } from './lib/state.svelte';
+
+  async function setLang(lang: Lang): Promise<void> {
+    setLangState(lang);
+    try {
+      await api.settingsApply({ 'ui.lang': lang });
+    } catch {
+      /* overlay may be unavailable before helper — UI lang still updates */
+    }
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const VIEWS: Record<string, any> = {
@@ -96,6 +96,8 @@
         });
       }
 
+      // Incidents over SSH are expensive — only for local host.
+      if (isRemoteHost()) return;
       const incs = await api.incidentsList(20);
       const crit = incs
         .filter((i) => i.severity === 'critical' || i.severity === 'high')
@@ -133,7 +135,7 @@
       });
     const timer = setInterval(() => {
       void maybeNotifyCritical();
-    }, 15000);
+    }, 60000);
     return () => clearInterval(timer);
   });
 
@@ -189,9 +191,6 @@
       </div>
     </aside>
     <main>
-      {#if isRemoteHost() && (ui.section === 'home' || ui.section === 'install' || ui.section === 'lab')}
-        <div class="notice" style="margin: 12px 16px 0">{t('host.remoteHint')}</div>
-      {/if}
       <View />
     </main>
   </div>

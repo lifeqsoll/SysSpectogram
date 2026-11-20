@@ -29,39 +29,41 @@
     { id: 'gpu_mem_percent', labelKey: 'charts.m.gpuMem', group: 'gpu', unit: 'pct' },
   ];
 
-  const GROUP_ORDER = ['risk', 'system', 'net', 'disk', 'gpu'] as const;
-  const GROUP_LABEL: Record<(typeof GROUP_ORDER)[number], string> = {
-    risk: 'charts.groupRisk',
-    system: 'charts.groupSystem',
-    net: 'charts.groupNet',
-    disk: 'charts.groupDisk',
-    gpu: 'charts.groupGpu',
-  };
+  const REMOTE_METRIC_IDS = new Set([
+    'host_risk',
+    'host_score',
+    'agent_score',
+    'cpu_percent',
+    'mem_percent',
+    'net_bytes_recv_per_s',
+    'net_bytes_sent_per_s',
+  ]);
 
-  /** When embedded in FleetHostDetail, parent already set activeHostId. */
   let { embedded = false }: { embedded?: boolean } = $props();
 
   let available = $state<string[]>([]);
-  let series = $state<Record<string, Point[]>>({});
+  let points = $state<Point[]>([]);
   let error = $state<string | null>(null);
   let loading = $state(false);
   let loadGen = 0;
+  let inFlight = false;
+  let lastMetricsHost = '';
+  let metricId = $state('host_risk');
+  let showLiveStrip = $state(false);
+  let chartReady = $state(false);
 
-  const visible = $derived(
+  const choices = $derived(
     METRICS.filter((m) => {
+      if (isRemoteHost() && !REMOTE_METRIC_IDS.has(m.id)) return false;
       if (available.length === 0) return m.group !== 'gpu';
       if (m.group === 'gpu' && !available.includes(m.id)) return false;
       return available.includes(m.id) || m.group === 'risk' || m.group === 'system';
     }),
   );
 
-  const groups = $derived(
-    GROUP_ORDER.map((g) => ({
-      id: g,
-      label: t(GROUP_LABEL[g]),
-      metrics: visible.filter((m) => m.group === g),
-    })).filter((g) => g.metrics.length > 0),
-  );
+  const active = $derived(choices.find((m) => m.id === metricId) ?? choices[0] ?? METRICS[0]);
+  const chartXs = $derived(points.map((p) => p.ts));
+  const chartYs = $derived(points.map((p) => p.avg));
 
   function fmtMetric(m: MetricDef, v: number | null | undefined): string {
     if (v === null || v === undefined || Number.isNaN(v)) return '—';
@@ -75,34 +77,33 @@
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
   }
 
-  function seriesUnchanged(next: Record<string, Point[]>): boolean {
-    const keys = Object.keys(next);
-    if (keys.length !== Object.keys(series).length) return false;
-    for (const k of keys) {
-      const a = series[k] ?? [];
-      const b = next[k] ?? [];
-      if (a.length !== b.length) return false;
-      if (a.length && b.length && (a[a.length - 1].ts !== b[b.length - 1].ts || a[0].ts !== b[0].ts)) {
-        return false;
-      }
-    }
-    return true;
+  function chartsActive(): boolean {
+    if (embedded) return ui.section === 'fleet';
+    return ui.section === 'charts';
   }
 
-  async function loadAll(r: Range): Promise<void> {
+  async function loadOne(r: Range, mId: string): Promise<void> {
+    if (!chartsActive() || inFlight) return;
     const gen = ++loadGen;
+    inFlight = true;
     loading = true;
     error = null;
+    chartReady = false;
+    points = [];
     try {
-      const ids = (visible.length ? visible : METRICS).map((m) => m.id);
-      const next = await api.timeseriesQueryMany(ids, r);
+      const next = await api.timeseriesQuery(mId, r);
       if (gen !== loadGen) return;
-      if (!seriesUnchanged(next)) series = next;
+      if (mId !== metricId || r !== ui.range) return;
+      points = next;
+      chartReady = next.length > 0;
     } catch (e) {
       if (gen !== loadGen) return;
       error = errorText(e);
+      points = [];
+      chartReady = false;
     } finally {
       if (gen === loadGen) loading = false;
+      inFlight = false;
     }
   }
 
@@ -120,100 +121,107 @@
 
   $effect(() => {
     const r = ui.range;
-    const epoch = ui.hostEpoch;
     const host = ui.activeHostId;
-    void epoch;
-    void host;
-    void refreshMetrics();
+    const mId = metricId;
+    void ui.hostEpoch;
 
-    const onCharts =
-      embedded || ui.section === 'charts' || (ui.section === 'fleet' && embedded);
-    if (!onCharts && !embedded) {
-      return;
+    if (!chartsActive()) return;
+
+    if (host !== lastMetricsHost) {
+      lastMetricsHost = host;
+      void refreshMetrics();
     }
 
-    const visibleDoc =
-      typeof document === 'undefined' || document.visibilityState !== 'hidden';
-    if (!visibleDoc) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
 
-    const period = isRemoteHost() ? (r === '1h' ? 15000 : 60000) : r === '1h' ? 5000 : 60000;
-    void loadAll(r);
+    const period = 5000;
+    void loadOne(r, mId);
     const timer = setInterval(() => {
+      if (!chartsActive()) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      if (!embedded && ui.section !== 'charts' && ui.section !== 'fleet') return;
-      void loadAll(r);
+      void loadOne(r, mId);
     }, period);
     return () => clearInterval(timer);
   });
 
   const liveXs = $derived(live.history.map((h) => h.ts));
-  const anyHistory = $derived(Object.values(series).some((pts) => pts.length > 0));
+  const now = $derived(active ? liveValue(active.id) : null);
 </script>
 
 {#if !embedded}
   <h1>{t('charts.title')}</h1>
   <p class="lead">{t('charts.lead')}</p>
-  {#if isRemoteHost()}
-    <div class="notice" style="margin-bottom: 12px">{t('host.remoteHint')} · <span class="mono">{ui.activeHostId}</span></div>
-  {/if}
 {/if}
 
-<div class="row" style="margin-bottom: 14px">
+<div class="row" style="margin-bottom: 14px; flex-wrap: wrap; gap: 8px">
+  <label class="field" style="margin: 0">
+    <span class="muted">{t('dash.metric')}</span>
+    <select bind:value={metricId}>
+      {#each choices as m (m.id)}
+        <option value={m.id}>{t(m.labelKey)}</option>
+      {/each}
+    </select>
+  </label>
   <div class="segmented">
     {#each RANGES as r (r)}
       <button class:active={ui.range === r} onclick={() => (ui.range = r)}>{r}</button>
     {/each}
   </div>
+  <button type="button" class="ghost" disabled={loading} onclick={() => loadOne(ui.range, metricId)}>
+    {t('common.refresh')}
+  </button>
+  <label class="check muted" style="font-size: 12px">
+    <input type="checkbox" bind:checked={showLiveStrip} />
+    {t('live.window')}
+  </label>
   {#if loading}<span class="muted">{t('common.loading')}</span>{/if}
 </div>
 
 {#if error}<div class="notice error">{error}</div><div style="height: 12px"></div>{/if}
 
-{#if live.history.length > 1}
+{#if showLiveStrip && live.history.length > 1}
   <div class="panel" style="margin-bottom: 16px">
     <h2>{t('live.window')}</h2>
-    <Chart
-      xs={liveXs}
-      yRange={[0, 1]}
-      series={[
-        { label: t('charts.m.hostRisk'), color: '#3b82f6', values: live.history.map((h) => h.host_risk ?? 0) },
-        { label: t('charts.m.hostScore'), color: '#8fa3c4', values: live.history.map((h) => h.host_score ?? 0), dash: [3, 3] },
-        { label: t('charts.m.agentScore'), color: '#f0b35a', values: live.history.map((h) => h.agent_score ?? 0) },
-      ]}
-    />
+    {#key `live-${ui.activeHostId}`}
+      <Chart
+        xs={liveXs}
+        yRange={[0, 1]}
+        legend={true}
+        series={[
+          { label: t('charts.m.hostRisk'), color: '#3b82f6', values: live.history.map((h) => h.host_risk ?? 0) },
+          { label: t('charts.m.hostScore'), color: '#8fa3c4', values: live.history.map((h) => h.host_score ?? 0), dash: [3, 3] },
+          { label: t('charts.m.agentScore'), color: '#f0b35a', values: live.history.map((h) => h.agent_score ?? 0) },
+        ]}
+      />
+    {/key}
   </div>
-{:else if !anyHistory}
+{:else if !chartReady && !loading}
   <div class="notice warn" style="margin-bottom: 16px">{t('charts.emptyHint')}</div>
 {/if}
 
-{#each groups as g (g.id)}
-  <h2 class="charts-group">{g.label}</h2>
-  <div class="grid-2" style="margin-bottom: 18px">
-    {#each g.metrics as m (m.id)}
-      {@const pts = series[m.id] ?? []}
-      {@const now = liveValue(m.id)}
-      <div class="panel chart-card">
-        <div class="row" style="margin-bottom: 6px">
-          <h2 style="margin: 0">{t(m.labelKey)}</h2>
-          <span class="spacer"></span>
-          {#if now !== null}
-            <span class="mono chart-now">{fmtMetric(m, now)} <span class="muted">{t('charts.now')}</span></span>
-          {/if}
-        </div>
-        {#if pts.length === 0}
-          <p class="muted" style="margin: 8px 0 0">{t('dash.empty')}</p>
-        {:else}
-          <Chart
-            xs={pts.map((p) => p.ts)}
-            series={[{ label: t(m.labelKey), color: '#3b82f6', values: pts.map((p) => p.avg) }]}
-            height={180}
-          />
-          <div class="row muted" style="margin-top: 8px; font-size: 12px">
-            <span>{t('dash.avg')} {fmtMetric(m, pts.reduce((s, p) => s + p.avg, 0) / pts.length)}</span>
-            <span>{t('dash.max')} {fmtMetric(m, Math.max(...pts.map((p) => p.max)))}</span>
-          </div>
-        {/if}
+{#if active}
+  <div class="panel chart-card">
+    <div class="row" style="margin-bottom: 6px">
+      <h2 style="margin: 0">{t(active.labelKey)}</h2>
+      <span class="spacer"></span>
+      {#if now !== null}
+        <span class="mono chart-now">{fmtMetric(active, now)} <span class="muted">{t('charts.now')}</span></span>
+      {/if}
+    </div>
+    {#if chartReady}
+      {#key `${active.id}:${ui.range}:${ui.hostEpoch}`}
+        <Chart
+          xs={chartXs}
+          series={[{ label: t(active.labelKey), color: '#3b82f6', values: chartYs }]}
+          height={280}
+        />
+      {/key}
+      <div class="row muted" style="margin-top: 8px; font-size: 12px">
+        <span>{t('dash.avg')} {fmtMetric(active, points.reduce((s, p) => s + p.avg, 0) / points.length)}</span>
+        <span>{t('dash.max')} {fmtMetric(active, Math.max(...points.map((p) => p.max)))}</span>
       </div>
-    {/each}
+    {:else}
+      <p class="muted" style="margin: 8px 0 0">{loading ? t('common.loading') : t('dash.empty')}</p>
+    {/if}
   </div>
-{/each}
+{/if}

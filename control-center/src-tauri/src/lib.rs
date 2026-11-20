@@ -942,12 +942,13 @@ fn home_mute_rule(rule_id: String, hours: Option<f64>) -> Result<Value, String> 
     ])
 }
 
-/// Background loop: pushes the latest sample of each live metric to the UI every 2 s.
+/// Background loop: pushes the latest sample of each live metric to the UI.
+/// 5s cadence — 2s was enough to keep WebKitWebProcess pegged redrawing charts.
 /// Ignores stale SQLite rows (retention leaves old samples that would paint a flat fake line).
 fn live_loop(app: AppHandle) {
     const FRESH_SEC: f64 = 90.0;
     loop {
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(Duration::from_secs(5));
         let now = now_secs();
         if let Ok(latest) = timeseries::latest(&paths::timeseries_db(), LIVE_METRICS) {
             let fresh: Vec<_> = latest

@@ -51,16 +51,19 @@
 <div class="panel">
   <h2>{t('live.window')}</h2>
   {#if live.history.length > 1}
-    <Chart
-      {xs}
-      series={[
-        { label: 'host_risk', color: '#4fb3a5', values: live.history.map((h) => h.host_risk) },
-        { label: 'host_score', color: '#8593a0', values: live.history.map((h) => h.host_score), dash: [3, 3] },
-        { label: 'agent_score', color: '#d6a24a', values: live.history.map((h) => h.agent_score) },
-      ]}
-      height={260}
-      yRange={[0, 1]}
-    />
+    {#key `live-page-${live.history[0]?.ts ?? 0}`}
+      <Chart
+        {xs}
+        legend={true}
+        series={[
+          { label: 'host_risk', color: '#4fb3a5', values: live.history.map((h) => h.host_risk) },
+          { label: 'host_score', color: '#8593a0', values: live.history.map((h) => h.host_score), dash: [3, 3] },
+          { label: 'agent_score', color: '#d6a24a', values: live.history.map((h) => h.agent_score) },
+        ]}
+        height={260}
+        yRange={[0, 1]}
+      />
+    {/key}
   {:else}
     <p class="muted">{t('live.waiting')}</p>
   {/if}

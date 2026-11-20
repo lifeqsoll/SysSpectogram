@@ -420,7 +420,8 @@ def _remote_ts_sqlite(
             print(json.dumps({"ok": True, "metrics": [], "latest": [], "series": {}}))
             raise SystemExit(0)
         ranges = {"1h":3600,"6h":21600,"12h":43200,"24h":86400,"7d":604800,"30d":2592000}
-        tables = {"1h":"raw","6h":"r10s","12h":"r10s","24h":"r1m","7d":"r1m","30d":"r5m"}
+        # Prefer rollups over raw for hub SSH (1h raw is huge).
+        tables = {"1h":"r10s","6h":"r10s","12h":"r10s","24h":"r1m","7d":"r1m","30d":"r5m"}
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         op = cfg["op"]
         if op == "metrics":
@@ -448,22 +449,32 @@ def _remote_ts_sqlite(
             start = int(time.time() - secs)
             series = {}
             for name in cfg["metrics"]:
-                if table == "raw":
+                rows = []
+                use = table
+                if use != "raw":
+                    try:
+                        rows = conn.execute(
+                            f"SELECT ts, avg, min, max, n FROM {use} "
+                            "WHERE metric=? AND ts>=? ORDER BY ts",
+                            (name, start),
+                        ).fetchall()
+                    except Exception:
+                        rows = []
+                if not rows:
                     rows = conn.execute(
                         "SELECT ts, value, value, value, 1 FROM raw "
                         "WHERE metric=? AND ts>=? ORDER BY ts",
                         (name, start),
                     ).fetchall()
-                else:
-                    rows = conn.execute(
-                        f"SELECT ts, avg, min, max, n FROM {table} "
-                        "WHERE metric=? AND ts>=? ORDER BY ts",
-                        (name, start),
-                    ).fetchall()
-                series[name] = [
+                pts = [
                     {"ts": float(r[0]), "avg": r[1], "min": r[2], "max": r[3], "n": int(r[4])}
                     for r in rows
                 ]
+                max_pts = 240
+                if len(pts) > max_pts:
+                    step = max(1, len(pts) // max_pts)
+                    pts = pts[::step][:max_pts]
+                series[name] = pts
             print(json.dumps({"ok": True, "series": series}))
         else:
             print(json.dumps({"ok": False, "error": f"bad op {op}"}))

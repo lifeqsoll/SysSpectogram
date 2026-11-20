@@ -3,7 +3,7 @@
   import { api, errorText, RANGES, type Point, type Range } from '../lib/api';
   import { t } from '../lib/i18n';
   import { fmtNum, fmtTime } from '../lib/format';
-  import { ui } from '../lib/state.svelte';
+  import { isRemoteHost, ui } from '../lib/state.svelte';
   import Chart from '../lib/Chart.svelte';
 
   const METRICS = [
@@ -26,17 +26,35 @@
   let points = $state<Point[]>([]);
   let error = $state<string | null>(null);
   let loading = $state(false);
+  let inFlight = false;
+  let loadGen = 0;
+  /** Chart only mounts after the selected metric’s series is ready. */
+  let chartReady = $state(false);
 
   async function load(m: string, r: Range): Promise<void> {
+    if (ui.section !== 'dashboards') return;
+    if (inFlight) return;
+    const gen = ++loadGen;
+    inFlight = true;
     loading = true;
     error = null;
+    chartReady = false;
+    points = [];
     try {
-      points = await api.timeseriesQuery(m, r);
+      const next = await api.timeseriesQuery(m, r);
+      if (gen !== loadGen) return;
+      // Ignore stale responses if the user already picked another metric.
+      if (m !== metric || r !== ui.range) return;
+      points = next;
+      chartReady = next.length > 1;
     } catch (e) {
+      if (gen !== loadGen) return;
       error = errorText(e);
       points = [];
+      chartReady = false;
     } finally {
-      loading = false;
+      if (gen === loadGen) loading = false;
+      inFlight = false;
     }
   }
 
@@ -48,17 +66,19 @@
     }
   });
 
-  // Re-query on metric/range change; poll only while this section is visible.
+  // Load only while this page is open; on metric change destroy old chart first ({#key}).
   $effect(() => {
     const m = metric;
     const r = ui.range;
     void ui.hostEpoch;
     if (ui.section !== 'dashboards') return;
-    const period = r === '1h' ? 5000 : 60000;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
     void load(m, r);
+    const period = 5000;
     const timer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       if (ui.section !== 'dashboards') return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void load(m, r);
     }, period);
     return () => clearInterval(timer);
@@ -66,7 +86,12 @@
 
   const summary = $derived.by(() => {
     if (points.length === 0) return null;
-    const avg = points.reduce((s, p) => s + p.avg * p.n, 0) / Math.max(1, points.reduce((s, p) => s + p.n, 0));
+    const avg =
+      points.reduce((s, p) => s + p.avg * p.n, 0) /
+      Math.max(
+        1,
+        points.reduce((s, p) => s + p.n, 0),
+      );
     return {
       avg,
       min: Math.min(...points.map((p) => p.min)),
@@ -76,6 +101,10 @@
   });
 
   const choices = $derived(METRICS.filter((m) => available.length === 0 || available.includes(m)));
+  const chartXs = $derived(points.map((p) => p.ts));
+  const avgYs = $derived(points.map((p) => p.avg));
+  const minYs = $derived(points.map((p) => p.min));
+  const maxYs = $derived(points.map((p) => p.max));
 </script>
 
 <h1>{t('dash.title')}</h1>
@@ -100,6 +129,7 @@
   </div>
   <div class="spacer"></div>
   <button class="btn" onclick={() => load(metric, ui.range)} disabled={loading}>{t('common.refresh')}</button>
+  {#if loading}<span class="muted">{t('common.loading')}</span>{/if}
 </div>
 
 {#if error}
@@ -108,18 +138,21 @@
 {/if}
 
 <div class="panel">
-  {#if points.length > 1}
-    <Chart
-      xs={points.map((p) => p.ts)}
-      series={[
-        { label: t('dash.avg'), color: '#4fb3a5', values: points.map((p) => p.avg) },
-        { label: t('dash.min'), color: '#8593a0', values: points.map((p) => p.min), dash: [3, 3] },
-        { label: t('dash.max'), color: '#d6a24a', values: points.map((p) => p.max), dash: [3, 3] },
-      ]}
-      height={340}
-    />
+  {#if chartReady}
+    {#key `${metric}:${ui.range}:${ui.hostEpoch}`}
+      <Chart
+        xs={chartXs}
+        legend={true}
+        series={[
+          { label: t('dash.avg'), color: '#4fb3a5', values: avgYs },
+          { label: t('dash.min'), color: '#8593a0', values: minYs, dash: [3, 3] },
+          { label: t('dash.max'), color: '#d6a24a', values: maxYs, dash: [3, 3] },
+        ]}
+        height={340}
+      />
+    {/key}
   {:else}
-    <p class="muted">{t('dash.empty')}</p>
+    <p class="muted">{loading ? t('common.loading') : t('dash.empty')}</p>
   {/if}
 </div>
 

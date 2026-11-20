@@ -15,26 +15,44 @@
     series,
     height = 220,
     yRange,
+    legend = false,
   }: {
     xs: number[];
     series: ChartSeries[];
     height?: number;
     yRange?: [number, number];
+    legend?: boolean;
   } = $props();
 
   let container: HTMLDivElement | undefined = $state();
   let plot: uPlot | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  let lastSig = '';
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 
   const AXIS = '#6b7c94';
   const GRID = 'rgba(148, 178, 230, 0.06)';
+
+  function signature(): string {
+    const n = xs.length;
+    const head = n ? xs[0] : 0;
+    const tail = n ? xs[n - 1] : 0;
+    const tails = series
+      .map((s) => {
+        const v = s.values;
+        const last = v.length ? v[v.length - 1] : null;
+        return `${s.label}:${v.length}:${last}`;
+      })
+      .join('|');
+    return `${n}:${head}:${tail}:${series.length}:${tails}:${height}:${legend}`;
+  }
 
   function options(width: number): uPlot.Options {
     return {
       width,
       height,
-      legend: { show: true },
-      cursor: { drag: { x: false, y: false } },
+      legend: { show: legend },
+      cursor: { show: false, drag: { x: false, y: false } },
       scales: {
         x: { time: true },
         y: yRange ? { range: () => yRange } : { auto: true },
@@ -62,26 +80,40 @@
 
   $effect(() => {
     if (!container) return;
-    const width = Math.max(320, container.clientWidth);
+    // Touch deps so effect re-runs when data changes.
+    const sig = signature();
+    void xs;
+    void series;
+    void height;
+    void legend;
+    if (sig === lastSig && plot) return;
+    lastSig = sig;
+
+    const width = Math.max(320, container.clientWidth || 320);
     if (!plot) {
       plot = new uPlot(options(width), data(), container);
       resizeObserver = new ResizeObserver(() => {
-        if (plot && container) plot.setSize({ width: Math.max(320, container.clientWidth), height });
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          if (plot && container) {
+            plot.setSize({ width: Math.max(320, container.clientWidth || 320), height });
+          }
+        }, 200);
       });
       resizeObserver.observe(container);
+      return;
+    }
+    const current = plot.series.length - 1;
+    if (current !== series.length) {
+      plot.destroy();
+      plot = new uPlot(options(width), data(), container);
     } else {
-      // Series count or labels changed: rebuild the plot. Otherwise just push data.
-      const current = plot.series.length - 1;
-      if (current !== series.length) {
-        plot.destroy();
-        plot = new uPlot(options(width), data(), container);
-      } else {
-        plot.setData(data());
-      }
+      plot.setData(data());
     }
   });
 
   onDestroy(() => {
+    if (resizeTimer) clearTimeout(resizeTimer);
     resizeObserver?.disconnect();
     plot?.destroy();
     plot = null;
