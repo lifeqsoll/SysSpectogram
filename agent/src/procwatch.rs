@@ -167,11 +167,11 @@ impl ProcWatcher {
     }
 
     fn refresh_trusted(&mut self) {
-        self.trusted_cache = collect_trusted_tree(&[
-            self.guard_pidfile.as_path(),
+        self.trusted_cache = collect_trusted_tree(
             self.agent_pidfile.as_path(),
             self.watchdog_pidfile.as_path(),
-        ]);
+            self.guard_pidfile.as_path(),
+        );
         self.trusted_refresh = Instant::now();
     }
 

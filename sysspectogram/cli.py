@@ -211,6 +211,7 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
 
 def _cmd_watch_perimeter(args: argparse.Namespace) -> int:
     from sysspectogram.perimeter.watcher import PerimeterWatcher
+    from sysspectogram.response.actions import backend_from_config
 
     cfg = load_config(args.config)
     per = cfg.get("perimeter", {})
@@ -235,7 +236,7 @@ def _cmd_watch_perimeter(args: argparse.Namespace) -> int:
         passive_dns_url=recon.get("passive_dns_url"),
         poll_sec=float(args.poll or per.get("poll_sec", 2.0)),
         alert_new_egress=bool(per.get("alert_new_egress", False)),
-        nft=NftBackend(),
+        nft=backend_from_config(cfg),
         auto_ban_rules=(
             set((per.get("auto_ban") or {}).get("rules") or [])
             if (per.get("auto_ban") or {}).get("enabled")
@@ -1667,10 +1668,26 @@ def _cmd_home_seed_never_ban(args: argparse.Namespace) -> int:
 
     from sysspectogram.admin_ip import seed_never_ban
 
+    raw_ip = getattr(args, "ip", None)
+    if raw_ip is not None and not str(raw_ip).strip():
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "empty --ip: SSH_CONNECTION is empty here; "
+                        "pass your admin IP explicitly"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
+
     out = seed_never_ban(
         write=not bool(getattr(args, "dry_run", False)),
         force=bool(getattr(args, "force", False)),
-        ip=getattr(args, "ip", None) or None,
+        ip=str(raw_ip).strip() if raw_ip is not None else None,
     )
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0 if out.get("ok") else 1

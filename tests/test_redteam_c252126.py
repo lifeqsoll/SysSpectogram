@@ -204,7 +204,7 @@ def test_login_correct_after_lockout() -> None:
         resp = conn.getresponse()
         assert resp.status == 429
         conn.close()
-        # Fresh rotated code still wins despite 429 for wrong guesses.
+        # The original code still wins despite 429 for wrong guesses.
         code = login.pending_code
         assert code
         body = json.dumps({"code": code}).encode()
@@ -225,14 +225,54 @@ def test_login_correct_after_lockout() -> None:
         httpd.server_close()
 
 
-def test_login_rotates_after_fails() -> None:
+def test_login_does_not_rotate_on_fails() -> None:
     login = WebLoginCode(persist_path=None, ttl_sec=300)
     old = login.pending_code
+    assert old
     for _ in range(5):
+        assert login.matches("WRONGWRONG") is False
         assert login.try_consume("WRONGWRONG") is False
-    new = login.pending_code
-    assert new and new != old
-    assert login.try_consume(new) is True
+    assert login.pending_code == old
+    assert login.matches(old) is True
+    assert login.try_consume(old) is True
+
+
+def test_login_admin_code_survives_attack() -> None:
+    login = WebLoginCode(persist_path=None, ttl_sec=300)
+    admin = login.pending_code
+    assert admin
+    httpd = start_web_server(
+        LiveBus(), host="127.0.0.1", port=0, login=login, token_path=False
+    )
+    port = httpd.server_address[1]
+
+    def post(code: str):
+        body = json.dumps({"code": code}).encode()
+        conn = HTTPConnection("127.0.0.1", port, timeout=3)
+        conn.putrequest("POST", "/api/login", skip_host=True)
+        conn.putheader("Host", "127.0.0.1")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", str(len(body)))
+        conn.putheader("X-SS-CSRF", "1")
+        conn.endheaders()
+        conn.send(body)
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode())
+        conn.close()
+        return resp.status, data
+
+    try:
+        for _ in range(UNLOCK_RATE_MAX):
+            post("WRONGWRONG")
+        status, _data = post("WRONGWRONG")
+        assert status == 429
+        assert login.pending_code == admin
+        status, data = post(admin)
+        assert status == 200, data
+        assert data.get("ok") is True
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_login_unlock_buckets_separate() -> None:

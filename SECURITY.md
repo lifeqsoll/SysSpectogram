@@ -4,6 +4,10 @@ SysSpectogram is a **self-hosted** Linux host guard. This document is the operat
 
 For the deeper model (assets, adversaries, residual risk) see [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). For signing and manifests see [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).
 
+## Audit fixes (1.4.1)
+
+Hardening from the `686a05f` audit: HMAC-signed agent stop markers (do not trust signal `si_pid` alone), verified pidfile identity, eBPF sender `comm`/`ppid`, quieter setuid/openat, and protect/prefix/flow/login hardening. See `CHANGELOG.md` `[1.4.1]`.
+
 ## Supported versions
 
 | Version | Supported |
@@ -91,8 +95,8 @@ Defaults are intentionally cautious.
 - `kirk_isolate` deadline is on disk (`state/kirk_isolate.json` 0600); expired tables are cleared on backend start; failed SSH-allow install rolls the table back.
 - Helper: concurrent connection handlers (ban.* not blocked by silent peers); pkcheck bounded; ban IP rules match Python (no IPv4-mapped / broadcast / `240/4`, no RFC1918/ULA/CGNAT unless overlay `response.allow_private_bans`; `ban.add` also refuses Telegram CIDRs, resolvers from resolv.conf / `/run/systemd/resolve/resolv.conf`, and v4+v6 default gateways).
 - SYN_RECV counts unique `(ip, port)` once per window (not once per poll); `SYN_SENT` is a separate non-ban `flow_syn_sent_hang` alert. `flow_syn_burst` is alert-only unless `flow.auto_ban: true`. `ban_ip` refuses Telegram publish ranges, resolvers, IPv4 **and** IPv6 default gateways, and private/ULA/CGNAT (unless `allow_private_bans`). IPv6 brute aggregation bans the `/N` prefix (`ban6` interval), not a single `/128`.
-- Auth log: Failed/Invalid with more than one `from <ip> port` → `auth_log_injection` only (no fail/ban). A single sshd tail `from <ip> port …$` is the peer. Accepted uses the first `from` after the user.
-- Mini App `/api/auth/telegram` matches user id to `TELEGRAM_ALLOWED_USER_IDS` / `telegram.allowed_user_ids` and chat id exactly (no `lstrip("-")`). A negative group `chat_id` without `allowed_user_ids` is refused (chat alone never grants a session). Unlock and login have **separate** per-IP buckets; after five wrong guesses login/unlock codes rotate; a correct fresh code still works. Behind an HTTPS tunnel every client looks like `127.0.0.1`, so per-IP rate limits do not isolate users. `/api/logout` drops the session; SSE re-checks it and closes the connection.
+- Auth log: Failed/Invalid with more than one `from <ip> port` → `auth_log_injection`. Only the sshd tail peer is counted as a fail (embedded `from` addresses are not). One injection alert per peer per 10 minutes (`suppressed` counts the rest); about 10 injection alerts per minute host-wide, then the overflow is digested. A single sshd tail `from <ip> port …$` is the peer. Accepted uses the first `from` after the user.
+- Mini App `/api/auth/telegram` matches user id to `TELEGRAM_ALLOWED_USER_IDS` / `telegram.allowed_user_ids` and chat id exactly (no `lstrip("-")`). A negative group `chat_id` without `allowed_user_ids` is refused (chat alone never grants a session). Unlock and login have **separate** per-IP buckets. Wrong guesses do not rotate the login or unlock code, so a flood cannot invalidate the code the operator already has; a correct code still works during rate limiting. Codes still rotate on expiry and after a successful login or unlock. Behind an HTTPS tunnel every client looks like `127.0.0.1`, so per-IP rate limits do not isolate users. `/api/logout` drops the session; SSE re-checks it and closes the connection.
 - Resolvers: `/etc/resolv.conf` plus fallback `/run/systemd/resolve/resolv.conf` when the stub is `127.0.0.53` and `resolvectl` is unavailable. Local forwarders (dnsmasq/unbound) that are not listed there are not auto-protected — put them in `never_ban_cidrs`.
 
 **Same-UID ceiling for unlock (I-03):** the unlock gate protects a stolen Telegram bot token / Mini App session — **not** malware running as the same Unix user as the guard. That process can already read `state/unlock.code` (mode 0600, owner-only) or the `.env` bot token. Persisted `state/control.unlocked` (only when unlock TTL is 0) accepts the exact marker `1` and refuses symlinks / arbitrary content; it is still same-UID writable by design. Treat same-UID compromise as full control of the guard process.

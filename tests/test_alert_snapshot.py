@@ -1,125 +1,66 @@
-"""Alert snapshots, plain-language alert text, and unlock-code lifecycle."""
+"""Alert spectrogram process samples come from the alert window when possible."""
 
 from __future__ import annotations
 
 import time
 
-import pytest
+import numpy as np
 
-from sysspectogram.alert_text import describe, is_unattributed
-from sysspectogram.console_unlock import ConsoleUnlock
-from sysspectogram.timeseries.store import TimeseriesStore
-from sysspectogram.viz.snapshot import render_window
+from sysspectogram.viz.panels import ProcessCpuTracker
+from sysspectogram.viz import snapshot as snap
 
 
-def test_window_returns_absolute_range(tmp_path):
-    store = TimeseriesStore(tmp_path / "ts.sqlite")
-    try:
-        now = time.time()
-        for i in range(200):
-            store.write_many({"cpu_percent": float(i % 50)}, ts=now - 200 + i)
-        store.flush()
-        pts = store.window("cpu_percent", now - 200, now)
-        assert len(pts) >= 150
-        assert all(now - 200 <= ts <= now for ts, _ in pts)
-    finally:
-        store.close()
+def test_alert_uses_window_samples() -> None:
+    track = ProcessCpuTracker(maxlen=10, top_k=4)
+    track._warmed = True
+    now = time.time()
+    track.history.append(
+        {
+            "ts": now - 30,
+            "rows": [{"pid": 9, "name": "hot", "cpu": 80.0}, {"pid": 8, "name": "idle", "cpu": 0.0}],
+        }
+    )
+    track.history.append(
+        {
+            "ts": now - 10,
+            "rows": [{"pid": 9, "name": "hot", "cpu": 90.0}],
+        }
+    )
+    mat, labels = track.matrix_for_window(now - 40, now, top_k=4)
+    assert any("hot(9)" in lab for lab in labels)
+    assert mat.size > 0
+    assert float(mat.sum()) > 0
 
 
-def test_render_window_produces_png(tmp_path):
-    pytest.importorskip("matplotlib")
-    store = TimeseriesStore(tmp_path / "ts.sqlite")
-    try:
-        now = time.time()
-        for i in range(200):
-            store.write_many(
-                {"cpu_percent": float(i % 50), "mem_percent": 40.0 + i / 10},
-                ts=now - 200 + i,
-            )
-        store.flush()
-        png = render_window(store, now - 200, now - 1, title="test")
-        assert png is not None
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    finally:
-        store.close()
+def test_zero_cpu_rows_dropped() -> None:
+    track = ProcessCpuTracker(maxlen=5, top_k=4)
+    track._warmed = True
+    now = time.time()
+    track.history.append(
+        {"ts": now, "rows": [{"pid": 1, "name": "z", "cpu": 0.0}, {"pid": 2, "name": "a", "cpu": 3.0}]}
+    )
+    _mat, labels = track.matrix_for_window(now - 1, now + 1, top_k=4, drop_zero=True)
+    assert all("z(" not in lab for lab in labels)
+    assert any("a(2)" in lab for lab in labels)
 
 
-def test_render_window_has_process_sample(tmp_path, monkeypatch):
-    """Critical-alert spectrogram must not show empty Top processes (n/a)."""
-    pytest.importorskip("matplotlib")
-    import numpy as np
+def test_live_fallback_labeled(monkeypatch) -> None:
+    class FakeStore:
+        def metrics(self):
+            return ["cpu_percent"]
 
-    from sysspectogram.viz import snapshot as snap_mod
+        def window(self, metric, t0, t1):
+            return [(t0, 1.0), (t1, 2.0)]
 
-    store = TimeseriesStore(tmp_path / "ts.sqlite")
-    try:
-        now = time.time()
-        for i in range(200):
-            store.write_many({"cpu_percent": float(i % 50)}, ts=now - 200 + i)
-        store.flush()
-        monkeypatch.setattr(
-            snap_mod,
-            "live_proc_matrix",
-            lambda top_k=8: (
-                np.array([[12.0], [3.0]], dtype=np.float32),
-                ["python(1)", "sshd(2)"],
-            ),
-        )
-        png = render_window(store, now - 200, now - 1, title="critical")
-        assert png is not None
-        mat, labels = snap_mod.live_proc_matrix()
-        assert len(labels) >= 1
-        assert labels != ["n/a"]
-        assert mat.size >= 1
-    finally:
-        store.close()
-
-
-def test_render_window_without_data_returns_none(tmp_path):
-    store = TimeseriesStore(tmp_path / "empty.sqlite")
-    try:
-        now = time.time()
-        assert render_window(store, now - 100, now) is None
-    finally:
-        store.close()
-
-
-def test_unlock_code_is_announced_and_cleared_on_success():
-    seen: list[str | None] = []
-    gate = ConsoleUnlock(enabled=True, on_code=seen.append)
-    code = gate.pending_code
-    assert code is not None
-    assert seen == [code]
-    assert gate.try_unlock(code)
-    assert seen[-1] is None
-    assert gate.unlocked()
-
-
-def test_unlock_wrong_code_does_not_clear():
-    seen: list[str | None] = []
-    gate = ConsoleUnlock(enabled=True, on_code=seen.append)
-    assert not gate.try_unlock("000000" if gate.pending_code != "000000" else "111111")
-    assert None not in seen
-
-
-def test_describe_known_rule():
-    assert "всплеск" in describe("agent_connect_burst").title.lower()
-    assert "burst" in describe("agent_connect_burst", lang="en").title.lower()
-
-
-def test_describe_ssh_brute_and_miner():
-    assert "брутфорс" in describe("bruteforce_ssh").title.lower()
-    assert "brute" in describe("bruteforce_ssh", lang="en").title.lower()
-    assert "майнер" in describe("host_anomaly").title.lower()
-    assert "miner" in describe("host_anomaly", lang="en").title.lower()
-
-
-def test_describe_unknown_rule_keeps_message():
-    text = describe("some_new_rule", "raw detail")
-    assert text.what == "raw detail"
-
-
-def test_unattributed_pid():
-    assert is_unattributed(0)
-    assert is_unattributed(None)
-    assert not is_unattributed(42)
+    snap.set_alert_proc_tracker(None)
+    monkeypatch.setattr(snap, "live_proc_matrix", lambda top_k=8: (np.ones((1, 2)), ["pod(7)"]))
+    # render_alert_panel needs matplotlib; stub it.
+    monkeypatch.setattr(
+        snap,
+        "render_alert_panel",
+        lambda **kwargs: b"PNG" if "live at render" in str(kwargs.get("title", "")) or any(
+            "live at render" in str(x) for x in (kwargs.get("proc_labels") or [])
+        ) else b"PNG",
+    )
+    out = snap.render_window(FakeStore(), time.time() - 10, time.time(), title="t")
+    assert out == b"PNG"

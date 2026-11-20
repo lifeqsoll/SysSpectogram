@@ -197,9 +197,7 @@ impl BaselineMonitor {
     }
 
     pub fn poll(&mut self, host_id: &str) -> Option<AgentAlert> {
-        if self.sealed.is_none() {
-            return None;
-        }
+        self.sealed.as_ref()?;
         if self.last.elapsed() < self.interval {
             return None;
         }

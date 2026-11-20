@@ -11,6 +11,8 @@ ExecStart=/usr/local/sbin/sysspectogram-agent --mode ebpf --phoenix \
   --socket /run/sysspectogram/agent.sock \
   --pidfile /run/sysspectogram/agent.pid \
   --hmac-secret /opt/sysspectogram/state/agent_hmac.secret \
+  --guard-pidfile /opt/sysspectogram/state/guard.pid \
+  --watchdog-pidfile /run/sysspectogram/watchdog.pid \
   --host-id %H
 ExecStop=/bin/kill -s TERM $MAINPID
 Restart=always

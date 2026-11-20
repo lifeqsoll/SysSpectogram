@@ -51,6 +51,8 @@ bash friend-day0.sh "$TAG"
 
 Never-ban your **admin SSH source IP** (`response.never_ban_cidrs`) **before** `protect enable` and **before** soft/full/isolate bans. On the VPS, `${SSH_CONNECTION%% *}` (or `${SSH_CLIENT%% *}`) is usually your laptop’s public IP — not bare `seed-never-ban` without `--ip` (that detects VPS egress).
 
+If `echo "${SSH_CONNECTION%% *}"` is empty (after `sudo -i`, in tmux, or a web console), look up the laptop IP on the laptop itself (`curl -4 ifconfig.me`) and pass it explicitly: `--ip 203.0.113.10`. An empty `--ip ""` is refused (exit 2).
+
 On **Windows**, check the laptop IP from PowerShell: `curl.exe -4 ifconfig.me`.
 
 ```bash

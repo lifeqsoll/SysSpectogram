@@ -3,6 +3,8 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
 
 #define PATH_LEN 128
 #define KIND_EXECVE 1
@@ -16,8 +18,17 @@ struct probe_event {
     __u8 _pad[3];
     __u32 pid;
     __u32 uid;
+    __u32 ppid;
+    char comm[16];
     char path[PATH_LEN];
 };
+
+/* Minimal CO-RE task_struct for real_parent->tgid. */
+struct task_struct___ss {
+    struct task_struct___ss *real_parent;
+    __u32 tgid;
+} __attribute__((preserve_access_index));
+
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
@@ -27,9 +38,16 @@ struct {
 
 static __always_inline void fill_meta(struct probe_event *e, __u8 kind)
 {
+    struct task_struct___ss *task;
+    struct task_struct___ss *parent;
+
     e->kind = kind;
     e->pid = bpf_get_current_pid_tgid() >> 32;
     e->uid = (__u32)bpf_get_current_uid_gid();
+    bpf_get_current_comm(&e->comm, sizeof(e->comm));
+    task = (struct task_struct___ss *)bpf_get_current_task();
+    parent = BPF_CORE_READ(task, real_parent);
+    e->ppid = parent ? BPF_CORE_READ(parent, tgid) : 0;
 }
 
 /* User pointer → path (execve/openat/delete_module name). */
@@ -64,11 +82,32 @@ int sysspectogram_execve(void *ctx)
 }
 
 /* openat: common(8) + nr + dfd → filename @ 24 */
+static __always_inline int path_prefix_noise(const char *path)
+{
+    /* Filter high-churn desktop sockets in-kernel before they flood the buffer. */
+    char p[24] = {};
+    if (!path)
+        return 0;
+    bpf_probe_read_user_str(p, sizeof(p), path);
+    if (p[0] == '/' && p[1] == 't' && p[2] == 'm' && p[3] == 'p' && p[4] == '/'
+        && p[5] == '.' && p[6] == 'X' && p[7] == '1' && p[8] == '1')
+        return 1;
+    if (p[0] == '/' && p[1] == 't' && p[2] == 'm' && p[3] == 'p' && p[4] == '/'
+        && p[5] == '.' && p[6] == 'I' && p[7] == 'C' && p[8] == 'E')
+        return 1;
+    if (p[0] == '/' && p[1] == 'r' && p[2] == 'u' && p[3] == 'n' && p[4] == '/'
+        && p[5] == 'u' && p[6] == 's' && p[7] == 'e' && p[8] == 'r' && p[9] == '/')
+        return 1;
+    return 0;
+}
+
 SEC("tracepoint/syscalls/sys_enter_openat")
 int sysspectogram_openat(void *ctx)
 {
     const char *filename = NULL;
     bpf_probe_read_kernel(&filename, sizeof(filename), (char *)ctx + 24);
+    if (path_prefix_noise(filename))
+        return 0;
     return emit_user_path(ctx, KIND_OPENAT, filename);
 }
 

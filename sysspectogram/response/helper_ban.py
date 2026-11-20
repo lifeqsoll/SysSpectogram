@@ -69,10 +69,10 @@ class HelperBanBackend:
             return {"ok": False, "message": f"bad helper json: {exc}"}
 
     def ban_ip(self, ip: str, ttl_sec: float | None = 3600.0, dry_run: bool = False) -> str:
-        from sysspectogram.net_ip import parse_ban_ip
+        from sysspectogram.net_ip import parse_ban_target
 
         try:
-            ip = parse_ban_ip(ip, allow_private=self.allow_private_bans)
+            ip = parse_ban_target(ip, allow_private=self.allow_private_bans)
         except ValueError as exc:
             return f"refuse ban: {exc}"
         if self.is_never_ban(ip):
@@ -98,10 +98,10 @@ class HelperBanBackend:
         return f"banned {ip} ttl={data.get('ttl_sec', ttl)} backend=helper"
 
     def unban_ip(self, ip: str, dry_run: bool = False) -> str:
-        from sysspectogram.net_ip import parse_ban_ip
+        from sysspectogram.net_ip import parse_ban_target
 
         try:
-            ip = parse_ban_ip(ip, allow_private=True)
+            ip = parse_ban_target(ip, allow_private=True)
         except ValueError as exc:
             return f"refuse unban: {exc}"
         if dry_run:

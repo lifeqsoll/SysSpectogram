@@ -191,50 +191,47 @@ mod imp {
                 .iter()
                 .map(|_| BytesMut::with_capacity(4096))
                 .collect();
-            let mut trusted = crate::trust::collect_trusted_tree(&[
-                guard_pf.as_path(),
+            let mut trusted = crate::trust::collect_trusted_tree(
                 agent_pf.as_path(),
                 watch_pf.as_path(),
-            ]);
+                guard_pf.as_path(),
+            );
             let mut last_trust_refresh = std::time::Instant::now();
             while !stop_t.load(Ordering::Relaxed) {
                 if last_trust_refresh.elapsed() >= Duration::from_secs(2) {
-                    trusted = crate::trust::collect_trusted_tree(&[
-                        guard_pf.as_path(),
-                        agent_pf.as_path(),
-                        watch_pf.as_path(),
-                    ]);
+                    trusted = crate::trust::collect_trusted_tree(
+                agent_pf.as_path(),
+                watch_pf.as_path(),
+                guard_pf.as_path(),
+            );
                     last_trust_refresh = std::time::Instant::now();
                 }
                 for (i, buf) in buffers.iter_mut().enumerate() {
                     let page = &mut pages[i];
                     page.clear();
                     page.resize(4096, 0);
-                    match buf.read_events(std::slice::from_mut(page)) {
-                        Ok(ev) => {
-                            // Desktop (Chromium/Cursor) floods openat — log sparsely.
-                            if ev.lost > 0 {
-                                static LOST_LOG: std::sync::atomic::AtomicU64 =
-                                    std::sync::atomic::AtomicU64::new(0);
-                                let n = LOST_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                if n < 5 || n % 64 == 0 {
-                                    eprintln!(
-                                        "[sysspectogram-agent] eBPF lost {} events on cpu buffer (log #{})",
-                                        ev.lost, n
-                                    );
-                                }
+                    if let Ok(ev) = buf.read_events(std::slice::from_mut(page)) {
+                        // Desktop (Chromium/Cursor) floods openat — log sparsely.
+                        if ev.lost > 0 {
+                            static LOST_LOG: std::sync::atomic::AtomicU64 =
+                                std::sync::atomic::AtomicU64::new(0);
+                            let n = LOST_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if n < 5 || n.is_multiple_of(64) {
+                                eprintln!(
+                                    "[sysspectogram-agent] eBPF lost {} events on cpu buffer (log #{})",
+                                    ev.lost, n
+                                );
                             }
-                            parse_and_send(
-                                page,
-                                ev.read,
-                                &host,
-                                &tx,
-                                &trusted,
-                                &guard_pf,
-                                &watch_pf,
-                            );
                         }
-                        Err(_) => {}
+                        parse_and_send(
+                            page,
+                            ev.read,
+                            &host,
+                            &tx,
+                            &trusted,
+                            &guard_pf,
+                            &watch_pf,
+                        );
                     }
                 }
                 thread::sleep(Duration::from_millis(25));
@@ -289,18 +286,26 @@ mod imp {
                 .position(|&c| c == 0)
                 .unwrap_or(ev.path.len().saturating_sub(4));
             let label = String::from_utf8_lossy(&ev.path[4..4 + label_end]).into_owned();
+            let exe_path = std::fs::read_link(format!("/proc/{}/exe", ev.pid))
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned());
+            let exe_fallback = crate::trust::read_comm(ev.pid).unwrap_or_else(|| "?".into());
+            let sev = setuid_severity(exe_path.as_deref().unwrap_or(exe_fallback.as_str()));
             let mut a = AgentAlert::new(
                 "agent_ebpf_setuid_root",
-                "high",
+                sev,
                 format!(
-                    "setuid→0 via {} from uid={} pid={} (eBPF assist; ProcWatcher still authoritative)",
+                    "setuid→0 via {} from uid={} pid={} exe={} (eBPF assist; ProcWatcher still authoritative)",
                     if label.is_empty() { "setuid" } else { &label },
                     ev.uid,
-                    ev.pid
+                    ev.pid,
+                    exe_path.as_deref().unwrap_or(&exe_fallback),
                 ),
                 host,
             );
             a.pid = Some(ev.pid);
+            a.comm = Some(comm_from_event(ev));
+            a.ppid = Some(ev.ppid);
             return Some(a);
         }
         if ev.kind == KIND_KILL {
@@ -356,35 +361,80 @@ mod imp {
         // Pids are read at event time. The trusted set is already the expanded tree.
         let targets = crate::trust::KillTargets {
             self_pid: std::process::id(),
-            watchdog_pid: crate::trust::read_pidfile(watch_pf),
-            guard_pid: crate::trust::read_pidfile(guard_pf),
+            watchdog_pid: crate::trust::read_trusted_root(
+                watch_pf,
+                crate::trust::PidfileRole::SelfBinary,
+            )
+            .map(|r| r.pid),
+            guard_pid: crate::trust::read_trusted_root(
+                guard_pf,
+                crate::trust::PidfileRole::Guard,
+            )
+            .map(|r| r.pid),
         };
         let mut a = crate::trust::classify_kill(ev.pid, tpid, sig, &targets, trusted, host)?;
         let sig_name = crate::trust::signal_name(sig);
-        let sender_ppid = crate::trust::read_ppid(ev.pid);
-        let sender_comm = crate::trust::read_comm(ev.pid);
-        if sender_ppid.is_some() || sender_comm.is_some() {
-            let sender_ppid = sender_ppid.unwrap_or(0);
-            let sender_comm = sender_comm.unwrap_or_else(|| "?".into());
-            let parent_comm = if sender_ppid > 1 {
-                crate::trust::read_comm(sender_ppid).unwrap_or_else(|| "?".into())
+        let sender_comm = {
+            let from_ev = comm_from_event(ev);
+            if from_ev != "?" {
+                from_ev
             } else {
-                "?".into()
-            };
-            a.ppid = Some(sender_ppid);
-            a.comm = Some(sender_comm.clone());
-            a.message = format!(
-                "kill/signal toward agent pid={tpid} {sig_name}({sig}) from uid={} \
-                 sender_pid={} sender_comm={sender_comm} parent_pid={sender_ppid} \
-                 parent_comm={parent_comm}",
-                ev.uid, ev.pid
-            );
-            if let Some(serde_json::Value::Object(map)) = a.extras.as_mut() {
-                map.insert("parent_pid".into(), serde_json::json!(sender_ppid));
-                map.insert("parent_comm".into(), serde_json::json!(parent_comm));
+                crate::trust::read_comm(ev.pid).unwrap_or_else(|| "?".into())
             }
+        };
+        let sender_ppid = if ev.ppid > 0 {
+            ev.ppid
+        } else {
+            crate::trust::read_ppid(ev.pid).unwrap_or(0)
+        };
+        let parent_comm = if sender_ppid > 1 {
+            crate::trust::read_comm(sender_ppid).unwrap_or_else(|| "?".into())
+        } else {
+            "?".into()
+        };
+        a.ppid = Some(sender_ppid);
+        a.comm = Some(sender_comm.clone());
+        a.message = format!(
+            "kill/signal toward agent pid={tpid} {sig_name}({sig}) from uid={}              sender_pid={} sender_comm={sender_comm} parent_pid={sender_ppid}              parent_comm={parent_comm}",
+            ev.uid, ev.pid
+        );
+        if let Some(serde_json::Value::Object(map)) = a.extras.as_mut() {
+            map.insert("parent_pid".into(), serde_json::json!(sender_ppid));
+            map.insert("parent_comm".into(), serde_json::json!(parent_comm));
         }
         Some(a)
+    }
+
+    fn comm_from_event(ev: &ProbeEvent) -> String {
+        let end = ev
+            .comm
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(ev.comm.len());
+        let s = String::from_utf8_lossy(&ev.comm[..end]).trim().to_string();
+        if s.is_empty() {
+            "?".into()
+        } else {
+            s
+        }
+    }
+
+    fn setuid_severity(exe: &str) -> &'static str {
+        const KNOWN: &[&str] = &[
+            "/usr/bin/sudo",
+            "/usr/bin/su",
+            "/usr/bin/pkexec",
+            "/usr/lib/polkit-1/polkit-agent-helper-1",
+            "/usr/sbin/sshd",
+            "/usr/sbin/cron",
+            "/usr/bin/crond",
+        ];
+        let stripped = exe.strip_suffix(" (deleted)").unwrap_or(exe);
+        if KNOWN.contains(&stripped) || stripped.starts_with("/usr/lib/systemd/") {
+            "low"
+        } else {
+            "high"
+        }
     }
 
     /// Drop routine opens (Cursor AppImage under /tmp/.mount_*, libc in shm, …).
@@ -395,6 +445,9 @@ mod imp {
             || path.starts_with("/sys/")
             || path.starts_with("/tmp/.mount_")
             || path.contains("/.mount_")
+            || path.starts_with("/tmp/.X11-unix")
+            || path.starts_with("/tmp/.ICE-unix")
+            || path.starts_with("/run/user/")
         {
             return false;
         }
@@ -475,6 +528,54 @@ mod imp {
                 base.starts_with('.') && base.len() > 1
             }
     }
+    #[cfg(test)]
+    mod ebpf_classify_tests {
+        use super::*;
+        use sysspectogram_common::ProbeEvent;
+
+        #[test]
+        fn setuid_from_sudo_is_low() {
+            assert_eq!(setuid_severity("/usr/bin/sudo"), "low");
+            assert_eq!(setuid_severity("/usr/bin/su"), "low");
+        }
+
+        #[test]
+        fn setuid_from_unknown_is_high() {
+            assert_eq!(setuid_severity("/tmp/evil"), "high");
+        }
+
+        #[test]
+        fn openat_x11_socket_filtered() {
+            assert!(!path_interesting_openat("/tmp/.X11-unix/X0"));
+            assert!(!path_interesting_openat("/run/user/1000/bus"));
+        }
+
+        #[test]
+        fn kill_alert_uses_event_comm() {
+            let mut ev = ProbeEvent::zeroed();
+            ev.kind = KIND_KILL;
+            ev.pid = 4242;
+            ev.uid = 0;
+            ev.ppid = 7;
+            let c = b"bash\0";
+            ev.comm[..c.len()].copy_from_slice(c);
+            ev.path[0..4].copy_from_slice(&std::process::id().to_ne_bytes());
+            ev.path[4..8].copy_from_slice(&9u32.to_ne_bytes());
+            let trusted = std::collections::HashSet::new();
+            let a = kill_event_to_alert(
+                &ev,
+                "host",
+                &trusted,
+                std::path::Path::new("/no/guard"),
+                std::path::Path::new("/no/watch"),
+            )
+            .expect("alert");
+            assert_eq!(a.comm.as_deref(), Some("bash"));
+            assert_eq!(a.ppid, Some(7));
+            assert!(a.message.contains("sender_comm=bash"));
+        }
+    }
+
 }
 
 #[cfg(feature = "ebpf")]

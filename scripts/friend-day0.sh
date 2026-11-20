@@ -2,7 +2,7 @@
 # Headless day-0: wheel + venv + menu (no git clone).
 #
 # Download friend-day0.sh + friend-day0.sh.minisign from the GitHub Release for your tag,
-# then: minisign -Vm friend-day0.sh -P '…' && bash friend-day0.sh v1.4.0
+# then: minisign -Vm friend-day0.sh -P '…' && bash friend-day0.sh v1.4.1
 # Minisign trusted comment must match: sysspectogram <TAG> friend-day0.sh
 # Requires: curl, python3-venv, sha256sum, minisign (signatures are mandatory).
 #
@@ -17,7 +17,7 @@ for arg in "$@"; do
     --no-menu) NO_MENU=1 ;;
     -h|--help)
       echo "Usage: friend-day0.sh [TAG] [--no-menu]"
-      echo "  TAG        release tag (default v1.4.0)"
+      echo "  TAG        release tag (default v1.4.1)"
       echo "  --no-menu  install only; do not exec interactive menu (also default when stdin is not a TTY)"
       exit 0
       ;;
@@ -30,7 +30,7 @@ for arg in "$@"; do
       ;;
   esac
 done
-TAG="${TAG:-v1.4.0}"
+TAG="${TAG:-v1.4.1}"
 [[ "${TAG}" == v* ]] || TAG="v${TAG}"
 REPO="${SYSSPECTOGRAM_GITHUB_REPO:-lifeqsoll/SysSpectogram}"
 HOME_DIR="${SYSSPECTOGRAM_HOME:-${HOME}/.local/share/sysspectogram}"
@@ -51,7 +51,30 @@ mkdir -p "${HOME_DIR}/state/bootstrap-cache"
 export SYSSPECTOGRAM_HOME="${HOME_DIR}"
 
 echo "==> release ${TAG} (${REPO})"
-JSON="$(curl -fsSL -H "User-Agent: ${UA}" -H "Accept: application/vnd.github+json" "${API}")"
+CURL_HDR=(-H "User-Agent: ${UA}" -H "Accept: application/vnd.github+json")
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  CURL_HDR+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+fi
+VER="${TAG#v}"
+BASE="https://github.com/${REPO}/releases/download/${TAG}"
+use_direct_urls() {
+  echo "!! GitHub API unavailable (often the unauthenticated 60 req/hour limit)." >&2
+  echo "!! Retry in 10–60 minutes, or set GITHUB_TOKEN=... (read-only public releases)." >&2
+  echo "!! Falling back to direct asset URLs for ${TAG}." >&2
+  WHEEL_NAME="sysspectogram-${VER}-py3-none-any.whl"
+  URLS=(
+    "${BASE}/${WHEEL_NAME}"
+    "${WHEEL_NAME}"
+    "${BASE}/SHA256SUMS"
+    "${BASE}/sysspectogram-agent-x86_64-linux-musl"
+    "${BASE}/sysspectogram-agent-x86_64-linux-musl.sha256"
+    "${BASE}/${WHEEL_NAME}.minisig"
+    "${BASE}/sysspectogram-agent-x86_64-linux-musl.minisig"
+  )
+}
+if ! JSON="$(curl -fsSL "${CURL_HDR[@]}" "${API}")"; then
+  use_direct_urls
+else
 mapfile -t URLS < <(REL_JSON="${JSON}" python3 -c '
 import json, os, sys
 rel = json.loads(os.environ["REL_JSON"])
@@ -78,6 +101,7 @@ print(assets[f"{agent}.sha256"])
 print(assets[wsig])
 print(assets[asig])
 ')
+fi
 
 WHEEL_URL="${URLS[0]}"
 WHEEL_NAME="${URLS[1]}"

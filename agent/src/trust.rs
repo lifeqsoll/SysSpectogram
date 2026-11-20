@@ -5,11 +5,29 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::types::AgentAlert;
 
-/// Read a single PID from a pidfile (first whitespace-separated token).
+/// Role expected of the process named by a pidfile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidfileRole {
+    /// Agent or phoenix watchdog: exe must match this binary.
+    SelfBinary,
+    /// Python ``-m sysspectogram … guard|protect`` owned by the pidfile owner.
+    Guard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedRoot {
+    pub pid: u32,
+    pub starttime: u64,
+    pub exe: String,
+    pub uid: u32,
+}
+
+/// Raw live pid from a pidfile (no identity check). Prefer [`read_trusted_root`].
 pub fn read_pidfile(path: &Path) -> Option<u32> {
     let t = fs::read_to_string(path).ok()?;
     let tok = t.split_whitespace().next()?;
@@ -23,21 +41,70 @@ pub fn read_pidfile(path: &Path) -> Option<u32> {
     Some(pid)
 }
 
-/// Collect PIDs from pidfiles plus every live descendant (ppid chain).
-pub fn collect_trusted_tree(pidfiles: &[&Path]) -> HashSet<u32> {
-    let mut roots = HashSet::new();
-    for p in pidfiles {
-        if let Some(pid) = read_pidfile(p) {
-            roots.insert(pid);
+/// Read a pidfile and accept the PID only when identity matches ``role``.
+pub fn read_trusted_root(path: &Path, role: PidfileRole) -> Option<TrustedRoot> {
+    let pid = read_pidfile(path)?;
+    let starttime = read_starttime(pid)?;
+    let exe = read_exe(pid).unwrap_or_default();
+    let uid = read_uid(pid)?;
+    let file_uid = fs::metadata(path).ok()?.uid();
+    // Non-root pidfile may only name a process with the same uid.
+    if file_uid != 0 && uid != file_uid {
+        return None;
+    }
+    match role {
+        PidfileRole::SelfBinary => {
+            if !exe_matches_self(&exe) {
+                return None;
+            }
+        }
+        PidfileRole::Guard => {
+            if !looks_like_guard(pid, &exe) {
+                return None;
+            }
+        }
+    }
+    Some(TrustedRoot {
+        pid,
+        starttime,
+        exe,
+        uid,
+    })
+}
+
+/// Collect verified roots plus descendants.
+///
+/// Descendants of a non-root root that themselves run as uid 0 are not trusted
+/// (stops an unprivileged guard pidfile from laundering root children).
+pub fn collect_trusted_tree(
+    agent_pidfile: &Path,
+    watchdog_pidfile: &Path,
+    guard_pidfile: &Path,
+) -> HashSet<u32> {
+    let mut roots: Vec<TrustedRoot> = Vec::new();
+    if let Some(r) = read_trusted_root(agent_pidfile, PidfileRole::SelfBinary) {
+        roots.push(r);
+    }
+    if let Some(r) = read_trusted_root(watchdog_pidfile, PidfileRole::SelfBinary) {
+        roots.push(r);
+    }
+    if let Some(r) = read_trusted_root(guard_pidfile, PidfileRole::Guard) {
+        roots.push(r);
+    }
+    let mut trusted = HashSet::new();
+    let mut nonroot_roots = HashSet::new();
+    for r in &roots {
+        trusted.insert(r.pid);
+        if r.uid != 0 {
+            nonroot_roots.insert(r.pid);
         }
     }
     // Always treat our own process as trusted (self-signals / twin).
-    roots.insert(std::process::id());
-    expand_descendants(roots)
+    trusted.insert(std::process::id());
+    expand_descendants(trusted, &nonroot_roots)
 }
 
-fn expand_descendants(mut trusted: HashSet<u32>) -> HashSet<u32> {
-    // Build ppid → children map once, then BFS from roots.
+fn expand_descendants(mut trusted: HashSet<u32>, nonroot_roots: &HashSet<u32>) -> HashSet<u32> {
     let mut children: std::collections::HashMap<u32, Vec<u32>> =
         std::collections::HashMap::new();
     let Ok(rd) = fs::read_dir("/proc") else {
@@ -53,10 +120,17 @@ fn expand_descendants(mut trusted: HashSet<u32>) -> HashSet<u32> {
             children.entry(ppid).or_default().push(pid);
         }
     }
+    let mut under_nonroot = nonroot_roots.clone();
     let mut stack: Vec<u32> = trusted.iter().copied().collect();
     while let Some(pid) = stack.pop() {
         if let Some(kids) = children.get(&pid) {
             for &c in kids {
+                if under_nonroot.contains(&pid) {
+                    if read_uid(c) == Some(0) {
+                        continue;
+                    }
+                    under_nonroot.insert(c);
+                }
                 if trusted.insert(c) {
                     stack.push(c);
                 }
@@ -64,6 +138,69 @@ fn expand_descendants(mut trusted: HashSet<u32>) -> HashSet<u32> {
         }
     }
     trusted
+}
+
+fn exe_matches_self(exe: &str) -> bool {
+    let Ok(self_exe) = std::env::current_exe() else {
+        return false;
+    };
+    let self_s = fs::canonicalize(&self_exe)
+        .unwrap_or(self_exe)
+        .to_string_lossy()
+        .into_owned();
+    // Exact path only (plus "(deleted)" after replace-in-place). Basename soft
+    // match would trust a foreign binary that reused our install name.
+    let stripped = exe.strip_suffix(" (deleted)").unwrap_or(exe);
+    stripped == self_s || exe == self_s
+}
+
+fn looks_like_guard(pid: u32, exe: &str) -> bool {
+    let base = Path::new(exe).file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let pythonish = base.starts_with("python");
+    if !pythonish && !exe.contains("sysspectogram") {
+        // Accept a sealed native guard binary path if ever shipped.
+        if !(exe.contains("/sysspectogram") && exe.contains("guard")) {
+            return false;
+        }
+    }
+    let cmdline = read_cmdline(pid);
+    let lower = cmdline.to_lowercase();
+    let has_mod = lower.contains("sysspectogram");
+    let has_role = lower.contains("guard") || lower.contains("protect");
+    has_mod && has_role
+}
+
+fn read_starttime(pid: u32) -> Option<u64> {
+    let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (_, rest) = text.rsplit_once(')')?;
+    rest.split_whitespace().nth(19)?.parse().ok()
+}
+
+fn read_exe(pid: u32) -> Option<String> {
+    let link = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    if let Ok(canon) = fs::canonicalize(&link) {
+        Some(canon.to_string_lossy().into_owned())
+    } else {
+        Some(link.to_string_lossy().into_owned())
+    }
+}
+
+fn read_uid(pid: u32) -> Option<u32> {
+    let text = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            return rest.split_whitespace().next()?.parse().ok();
+        }
+    }
+    None
+}
+
+fn read_cmdline(pid: u32) -> String {
+    let Ok(raw) = fs::read(format!("/proc/{pid}/cmdline")) else {
+        return String::new();
+    };
+    let s = String::from_utf8_lossy(&raw);
+    s.replace('\0', " ").trim().chars().take(400).collect()
 }
 
 pub fn read_ppid(pid: u32) -> Option<u32> {
@@ -323,8 +460,49 @@ mod tests {
     #[test]
     fn trusted_tree_includes_self() {
         let tmp = PathBuf::from("/tmp");
-        let tree = collect_trusted_tree(&[&tmp.join("no-such-pidfile")]);
+        let missing = tmp.join("no-such-pidfile");
+        let tree = collect_trusted_tree(&missing, &missing, &missing);
         assert!(tree.contains(&std::process::id()));
+    }
+
+    #[test]
+    fn pidfile_with_foreign_pid_not_trusted() {
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let dir = std::env::temp_dir().join(format!("ssx-trust-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let pf = dir.join("guard.pid");
+        fs::write(&pf, format!("{pid}\n")).unwrap();
+        assert!(
+            read_trusted_root(&pf, PidfileRole::Guard).is_none(),
+            "sleep must not become a trusted guard"
+        );
+        assert!(
+            read_trusted_root(&pf, PidfileRole::SelfBinary).is_none(),
+            "sleep must not become a trusted agent"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn self_exe_trusted() {
+        let dir = std::env::temp_dir().join(format!("ssx-trust-self-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let pf = dir.join("agent.pid");
+        fs::write(&pf, format!("{}\n", std::process::id())).unwrap();
+        let root = read_trusted_root(&pf, PidfileRole::SelfBinary).expect("self must match");
+        assert_eq!(root.pid, std::process::id());
+        assert!(root.starttime > 0);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -12,6 +12,16 @@ import numpy as np
 
 from sysspectogram.viz.panels import ProcessCpuTracker, render_alert_panel
 
+# Guard (or tests) may install a long-lived tracker so alert PNGs use the
+# alert window instead of a live sample at render time.
+_ALERT_PROC_TRACKER: ProcessCpuTracker | None = None
+
+
+def set_alert_proc_tracker(tracker: ProcessCpuTracker | None) -> None:
+    global _ALERT_PROC_TRACKER
+    _ALERT_PROC_TRACKER = tracker
+
+
 SNAPSHOT_METRICS: tuple[str, ...] = (
     "cpu_percent",
     "mem_percent",
@@ -79,14 +89,22 @@ def render_window(
     if not columns:
         return None
     window = np.stack(columns, axis=1)  # time x features, as render_alert_panel expects
+    live_fallback = False
     if proc_matrix is None or proc_labels is None:
-        proc_matrix, proc_labels = live_proc_matrix(top_k=8)
+        tracker = _ALERT_PROC_TRACKER
+        if tracker is not None:
+            proc_matrix, proc_labels = tracker.matrix_for_window(float(t0), float(t1), top_k=8)
+        if proc_matrix is None or proc_labels is None or proc_matrix.size == 0 or not proc_labels:
+            proc_matrix, proc_labels = live_proc_matrix(top_k=8)
+            live_fallback = True
+            if proc_labels:
+                proc_labels = [f"{lab} [live at render]" for lab in proc_labels]
     return render_alert_panel(
         metric_window=window,
         metric_columns=names,
         proc_matrix=proc_matrix,
         proc_labels=proc_labels,
-        title=title,
+        title=title if not live_fallback else f"{title} (live at render, no history)",
         score=score,
     )
 

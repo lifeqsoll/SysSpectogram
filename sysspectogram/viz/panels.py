@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -49,25 +50,50 @@ class ProcessCpuTracker:
                 continue
         rows.sort(key=lambda r: r["cpu"], reverse=True)
         snap = rows[: max(self.top_k * 3, 20)]
-        self.history.append(snap)
+        self.history.append({"ts": time.time(), "rows": snap})
         return snap[: self.top_k]
 
+    def _snaps(self) -> list[tuple[float, list[dict[str, Any]]]]:
+        out: list[tuple[float, list[dict[str, Any]]]] = []
+        for item in self.history:
+            if isinstance(item, dict) and "rows" in item:
+                out.append((float(item.get("ts") or 0.0), list(item["rows"])))
+            elif isinstance(item, list):
+                out.append((0.0, item))
+        return out
+
     def matrix(self, top_k: int | None = None) -> tuple[np.ndarray, list[str]]:
+        return self.matrix_for_window(None, None, top_k=top_k)
+
+    def matrix_for_window(
+        self,
+        t0: float | None,
+        t1: float | None,
+        *,
+        top_k: int | None = None,
+        drop_zero: bool = True,
+    ) -> tuple[np.ndarray, list[str]]:
         k = top_k or self.top_k
-        if not self.history:
-            return np.zeros((k, 1), dtype=np.float32), [f"p{i}" for i in range(k)]
-        # Pick stable top labels by peak CPU across history
+        snaps = self._snaps()
+        if t0 is not None and t1 is not None:
+            snaps = [(ts, rows) for ts, rows in snaps if t0 <= ts <= t1]
+        if not snaps:
+            return np.zeros((0, 0), dtype=np.float32), []
         peak: dict[tuple[int, str], float] = {}
-        for snap in self.history:
-            for r in snap:
+        for _ts, rows in snaps:
+            for r in rows:
                 key = (int(r["pid"]), str(r["name"]))
                 peak[key] = max(peak.get(key, 0.0), float(r["cpu"]))
+        if drop_zero and any(v > 0 for v in peak.values()):
+            peak = {k: v for k, v in peak.items() if v > 0}
         keys = sorted(peak.keys(), key=lambda x: peak[x], reverse=True)[:k]
+        if not keys:
+            return np.zeros((0, 0), dtype=np.float32), []
         labels = [f"{name}({pid})"[:22] for pid, name in keys]
         idx = {keys[i]: i for i in range(len(keys))}
-        mat = np.zeros((len(keys), len(self.history)), dtype=np.float32)
-        for t, snap in enumerate(self.history):
-            for r in snap:
+        mat = np.zeros((len(keys), len(snaps)), dtype=np.float32)
+        for t, (_ts, rows) in enumerate(snaps):
+            for r in rows:
                 key = (int(r["pid"]), str(r["name"]))
                 if key in idx:
                     mat[idx[key], t] = float(r["cpu"])

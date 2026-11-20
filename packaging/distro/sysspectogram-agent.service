@@ -9,6 +9,8 @@ ExecStart=/usr/bin/sysspectogram-agent --mode userspace --phoenix \
   --socket /run/sysspectogram/agent.sock \
   --pidfile /run/sysspectogram/agent.pid \
   --hmac-secret /var/lib/sysspectogram/state/agent_hmac.secret \
+  --guard-pidfile /var/lib/sysspectogram/state/guard.pid \
+  --watchdog-pidfile /run/sysspectogram/watchdog.pid \
   --host-id %H
 RuntimeDirectory=sysspectogram
 StateDirectory=sysspectogram

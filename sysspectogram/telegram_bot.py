@@ -155,10 +155,16 @@ class TelegramBot:
         lang: str = "en",
         allowed_user_ids: set[str] | list[str] | None = None,
         tg_cfg: dict | None = None,
+        config: dict | None = None,
     ) -> None:
         self.client = client
         self.watcher = watcher
-        self.nft = nft or NftBackend()
+        if nft is not None:
+            self.nft = nft
+        else:
+            from sysspectogram.response.actions import backend_from_config
+
+            self.nft = backend_from_config(config) if config is not None else NftBackend()
         self.tokens = tokens or TokenStore()
         self.host_id = host_id or (watcher.host_id if watcher else socket.gethostname())
         self.dry_run = dry_run

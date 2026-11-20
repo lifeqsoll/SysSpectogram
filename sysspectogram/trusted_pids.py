@@ -19,6 +19,61 @@ def read_pidfile(path: Path) -> int | None:
         return None
 
 
+def _read_uid(pid: int) -> int | None:
+    try:
+        text = Path(f"/proc/{int(pid)}/status").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("Uid:"):
+            try:
+                return int(line.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def _read_cmdline(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+    except OSError:
+        return ""
+    return raw.replace(b"\0", b" ").decode("utf-8", errors="replace").strip()[:400]
+
+
+def looks_like_guard(pid: int) -> bool:
+    """True when the process looks like ``python -m sysspectogram … guard|protect``."""
+    exe = resolve_exe(pid)
+    exe_s = str(exe) if exe is not None else ""
+    base = Path(exe_s).name if exe_s else ""
+    cmdline = _read_cmdline(pid).lower()
+    has_mod = "sysspectogram" in cmdline
+    has_role = "guard" in cmdline or "protect" in cmdline
+    if has_mod and has_role:
+        return True
+    return "sysspectogram" in exe_s and "guard" in exe_s and bool(base)
+
+
+def read_guard_pidfile(path: Path) -> int | None:
+    """Accept guard.pid only when cmdline/uid match the file owner."""
+    path = Path(path)
+    pid = read_pidfile(path)
+    if pid is None:
+        return None
+    try:
+        file_uid = path.stat().st_uid
+    except OSError:
+        return None
+    uid = _read_uid(pid)
+    if uid is None:
+        return None
+    if file_uid != 0 and uid != file_uid:
+        return None
+    if not looks_like_guard(pid):
+        return None
+    return pid
+
+
 def resolve_exe(pid: int) -> Path | None:
     try:
         return Path(f"/proc/{int(pid)}/exe").resolve()
@@ -142,10 +197,21 @@ def collect_trusted_pids(
     (guard probes, agent helpers) — never matched by forged ``comm``.
     """
     out: set[int] = set(extra or ())
-    for p in (agent_pidfile, watchdog_pidfile, guard_pidfile):
+    for p, kind in (
+        (agent_pidfile, "agent"),
+        (watchdog_pidfile, "watchdog"),
+        (guard_pidfile, "guard"),
+    ):
         if p is None:
             continue
-        pid = read_pidfile(Path(p))
+        path = Path(p)
+        if kind == "guard":
+            pid = read_guard_pidfile(path)
+        else:
+            pid = read_pidfile(path)
+            if pid is not None and allowed_exe_paths:
+                # seal check applied below for the whole set
+                pass
         if pid is not None:
             out.add(pid)
     if child_of is not None and child_of > 1:

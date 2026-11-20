@@ -112,3 +112,36 @@ def test_telegram_kill_text_includes_signal_and_parent():
     blob = sent[0]
     assert "SIGKILL" in blob
     assert "bash" in blob or "parent" in blob.lower()
+
+
+def test_guard_pidfile_requires_guard_cmdline(tmp_path: Path, monkeypatch):
+    from sysspectogram import trusted_pids as tp
+
+    sleep_pid = os.spawnlp(os.P_NOWAIT, "sleep", "sleep", "30")
+    try:
+        pf = tmp_path / "guard.pid"
+        pf.write_text(f"{sleep_pid}\n", encoding="utf-8")
+        assert tp.read_guard_pidfile(pf) is None
+        assert sleep_pid not in tp.collect_trusted_pids(
+            agent_pidfile=tmp_path / "missing-agent.pid",
+            guard_pidfile=pf,
+        )
+    finally:
+        try:
+            os.kill(sleep_pid, 9)
+        except OSError:
+            pass
+        try:
+            os.waitpid(sleep_pid, 0)
+        except OSError:
+            pass
+
+
+def test_guard_pidfile_accepts_self_when_cmdline_matches(tmp_path: Path, monkeypatch):
+    from sysspectogram import trusted_pids as tp
+
+    pf = tmp_path / "guard.pid"
+    pf.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    monkeypatch.setattr(tp, "_read_cmdline", lambda _pid: "python -m sysspectogram.guard")
+    monkeypatch.setattr(tp, "resolve_exe", lambda _pid: Path("/usr/bin/python3"))
+    assert tp.read_guard_pidfile(pf) == os.getpid()

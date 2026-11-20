@@ -427,19 +427,21 @@ def _make_handler(app: WebAppState):
                 code = str(payload.get("code") or "")
                 if not code.strip():
                     return self._json(401, {"ok": False, "error": "auth required"})
+                # Correct code always wins and does not rotate on wrong guesses.
+                # Rate-limit only failed attempts. Login bucket is separate from unlock.
+                if app.login.matches(code):
+                    if app.login.try_consume(code):
+                        sess = app.issue_session()
+                        cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
+                        if app.public_url and str(app.public_url).startswith("https"):
+                            cookie += "; Secure"
+                        return self._json(
+                            200,
+                            {"ok": True, "session": True, "control_unlocked": False},
+                            extra={"Set-Cookie": cookie},
+                        )
+                    return self._json(401, {"ok": False, "error": "bad login code"})
                 ip = self._client_ip()
-                # Correct fresh code always wins (after WebLoginCode rotates on fails);
-                # rate-limit wrong guesses only. Login bucket is separate from unlock.
-                if app.login.try_consume(code):
-                    sess = app.issue_session()
-                    cookie = f"ss_session={sess}; Path=/; HttpOnly; SameSite=Lax"
-                    if app.public_url and str(app.public_url).startswith("https"):
-                        cookie += "; Secure"
-                    return self._json(
-                        200,
-                        {"ok": True, "session": True, "control_unlocked": False},
-                        extra={"Set-Cookie": cookie},
-                    )
                 allowed, backoff, _n = app._login_rate_status(ip)
                 if not allowed:
                     retry = str(max(1, int(backoff + 0.999)))

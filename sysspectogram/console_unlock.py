@@ -151,17 +151,10 @@ class ConsoleUnlock:
             return False
         now = time.time()
         self._fails = [t for t in self._fails if now - t < 300.0]
-        if len(self._fails) >= 8:
-            return False
         got = self.normalize(code)
-        # compare_digest needs equal length
-        if len(got) != len(self._code):
-            self._fails.append(now)
-            if len(self._fails) >= 5:
-                self.begin()
-            return False
-        ok = secrets.compare_digest(got, self._code)
-        if ok:
+        # compare_digest needs equal length. A match always wins; wrong guesses
+        # do not rotate the code the operator already has.
+        if len(got) == len(self._code) and secrets.compare_digest(got, self._code):
             self._unlocked = True
             if self.ttl_sec > 0:
                 self._deadline = time.time() + self.ttl_sec
@@ -173,9 +166,9 @@ class ConsoleUnlock:
             self._fails = []
             self._notify(None)  # code consumed
             return True
+        if len(self._fails) >= 8:
+            return False
         self._fails.append(now)
-        if len(self._fails) >= 5:
-            self.begin()
         return False
 
     def lock(self) -> str:

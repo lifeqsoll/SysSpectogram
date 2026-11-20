@@ -163,10 +163,72 @@ def test_pid_under_trusted_self():
 
 
 def test_cron_child_is_medium_tmp_is_critical():
-    assert root_severity("/usr/bin/backup.sh", "cron") == "medium"
-    assert root_severity("/usr/bin/backup.sh", "systemd") == "medium"
-    assert root_severity("/tmp/evil", "cron") == "critical"
+    assert (
+        root_severity(
+            "/usr/bin/backup.sh",
+            "cron",
+            parent_exe="/usr/sbin/cron",
+        )
+        == "medium"
+    )
+    assert root_severity("/usr/bin/backup.sh", "systemd") == "critical"
+    assert (
+        root_severity(
+            "/tmp/evil",
+            "cron",
+            parent_exe="/usr/sbin/cron",
+        )
+        == "critical"
+    )
     assert root_severity("/usr/bin/evil", "bash") == "critical"
+
+
+def test_root_severity_cases_json():
+    path = Path(__file__).resolve().parent / "data" / "root_severity_cases.json"
+    cases = json.loads(path.read_text(encoding="utf-8"))
+    for row in cases:
+        got = root_severity(
+            row["exe"],
+            row.get("parent_comm", ""),
+            parent_exe=row.get("parent_exe", ""),
+            cgroup=row.get("cgroup", ""),
+        )
+        assert got == row["want"], row
+
+
+def test_dedup_distinct_cmdline(monkeypatch):
+    st = RootWatchState()
+    st.baseline_until = 1.0
+    st.baseline = set()
+    seq = {"n": 0}
+
+    class Fake:
+        def __init__(self, pid: int, cmdline: str):
+            self.pid = pid
+            self.comm = "evilbin"
+            self.exe = "/opt/evilbin"
+            self.cmdline = cmdline
+            self.euid = 0
+            self.ruid = 0
+            self.severity = "critical"
+            self.parent_comm = "bash"
+
+    def fake_list():
+        seq["n"] += 1
+        return {880001 + seq["n"]}
+
+    def fake_describe(pid: int):
+        cmd = "evil --one" if pid == 880002 else "evil --two"
+        return Fake(pid, cmd)
+
+    monkeypatch.setattr("sysspectogram.root_watch.list_root_pids_cheap", fake_list)
+    monkeypatch.setattr("sysspectogram.root_watch.describe_root_pid", fake_describe)
+    monkeypatch.setattr("sysspectogram.root_watch.pid_under_trusted", lambda *a, **k: False)
+
+    first = poll_new_root(st, learn_sec=0.0)
+    second = poll_new_root(st, learn_sec=0.0)
+    assert len(first) == 1
+    assert len(second) == 1
 
 
 def test_dedup_same_comm_exe(monkeypatch):
@@ -203,6 +265,37 @@ def test_dedup_same_comm_exe(monkeypatch):
     assert first[0].severity == "critical"
     second = poll_new_root(st, learn_sec=0.0)
     assert second == []  # dedup within window
+
+
+def test_dedup_never_suppresses_deny_path(monkeypatch):
+    st = RootWatchState()
+    st.baseline_until = 1.0
+    st.baseline = set()
+    seq = {"n": 0}
+
+    class Fake:
+        def __init__(self, pid: int):
+            self.pid = pid
+            self.comm = "evil"
+            self.exe = "/tmp/evil"
+            self.cmdline = "evil"
+            self.euid = 0
+            self.ruid = 0
+            self.severity = "critical"
+            self.parent_comm = "bash"
+
+    def fake_list():
+        seq["n"] += 1
+        return {870000 + seq["n"]}
+
+    monkeypatch.setattr("sysspectogram.root_watch.list_root_pids_cheap", fake_list)
+    monkeypatch.setattr(
+        "sysspectogram.root_watch.describe_root_pid", lambda pid: Fake(pid)
+    )
+    monkeypatch.setattr("sysspectogram.root_watch.pid_under_trusted", lambda *a, **k: False)
+
+    assert len(poll_new_root(st, learn_sec=0.0)) == 1
+    assert len(poll_new_root(st, learn_sec=0.0)) == 1
 
 
 def test_soft_allow_builtin_exe_after_canonicalize():

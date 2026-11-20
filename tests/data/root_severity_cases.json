@@ -1,0 +1,30 @@
+[
+  {
+    "exe": "/usr/bin/backup.sh",
+    "parent_comm": "cron",
+    "parent_exe": "/usr/sbin/cron",
+    "cgroup": "",
+    "want": "medium"
+  },
+  {
+    "exe": "/usr/bin/backup.sh",
+    "parent_comm": "systemd",
+    "parent_exe": "",
+    "cgroup": "",
+    "want": "critical"
+  },
+  {
+    "exe": "/tmp/evil",
+    "parent_comm": "cron",
+    "parent_exe": "/usr/sbin/cron",
+    "cgroup": "",
+    "want": "critical"
+  },
+  {
+    "exe": "/usr/bin/evil",
+    "parent_comm": "bash",
+    "parent_exe": "",
+    "cgroup": "",
+    "want": "critical"
+  }
+]

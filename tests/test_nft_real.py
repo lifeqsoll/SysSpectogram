@@ -79,24 +79,31 @@ def test_ban_ipv6_prefix_64():
 def test_v6_gateway_protected_live(monkeypatch):
     from sysspectogram.response.actions import NftBackend
     from sysspectogram.response import protect
+    import pytest
 
-    def _ip(argv: list[str]) -> None:
-        subprocess.run(argv, check=False, capture_output=True, text=True)
+    def _ip(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(argv, check=False, capture_output=True, text=True)
 
-    # Install a real default v6 route in this netns, then refuse ban.
-    _ip(["ip", "link", "add", "dummy0", "type", "dummy"])
-    _ip(["ip", "link", "set", "dummy0", "up"])
-    _ip(["ip", "-6", "addr", "add", "2001:db8:feed::1/64", "dev", "dummy0"])
-    _ip(["ip", "-6", "route", "add", "default", "via", "2001:db8:feed::fffe", "dev", "dummy0"])
+    # veth works without the dummy kernel module.
+    r = _ip(["ip", "link", "add", "v0", "type", "veth", "peer", "name", "v1"])
+    if r.returncode != 0:
+        pytest.skip("veth unavailable")
+    _ip(["ip", "link", "set", "v0", "up"])
+    _ip(["ip", "link", "set", "v1", "up"])
+    _ip(["ip", "-6", "addr", "add", "2001:db8:feed::1/64", "dev", "v0", "nodad"])
+    _ip(["ip", "-6", "route", "add", "default", "via", "2001:db8:feed::fffe", "dev", "v0"])
+    out = _ip(["ip", "-6", "-o", "route", "show", "default"]).stdout
+    if "2001:db8:feed::fffe" not in out:
+        pytest.skip("could not install v6 default route")
     monkeypatch.setattr(protect, "_host_addrs", lambda: set())
     monkeypatch.setattr(protect, "_ssh_session_ips", lambda **k: set())
     monkeypatch.setattr(protect, "_resolver_addrs", lambda: set())
     b = NftBackend(never_ban_cidrs=[])
     msg = b.ban_ip("2001:db8:feed::fffe", ttl_sec=60)
     assert "protected" in msg or "refuse" in msg, msg
-    code, out = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban6"])
+    code, listed = _nft(["nft", "list", "set", "inet", "sysspectogram", "ban6"])
     if code == 0:
-        assert "2001:db8:feed::fffe" not in out
+        assert "2001:db8:feed::fffe" not in listed
 
 
 @skip_no_priv
@@ -154,6 +161,38 @@ def test_ensure_table_idempotent():
     assert code == 0
 
 
+def test_migrate_ban6_adds_interval(monkeypatch):
+    from sysspectogram.response.actions import NftBackend
+
+    stdin_scripts: list[str] = []
+
+    def fake_run(cmd: list[str]) -> tuple[int, str]:
+        if cmd[:5] == ["nft", "list", "set", "inet", "sysspectogram"]:
+            return (
+                0,
+                "set ban6 { type ipv6_addr; flags timeout; elements = { "
+                "2001:db8::7 timeout 90s } }",
+            )
+        if cmd[:4] == ["nft", "-j", "list", "set"]:
+            return (
+                0,
+                '[{"nftables":[{"set":{"elem":[{"elem":{"val":"2001:db8::7","timeout":90}}]}}]}]',
+            )
+        return 0, ""
+
+    b = NftBackend(never_ban_cidrs=[])
+    monkeypatch.setattr(b, "_run", fake_run)
+    monkeypatch.setattr(
+        "sysspectogram.response.actions.shutil.which", lambda n: "/usr/sbin/nft" if n == "nft" else None
+    )
+    monkeypatch.setattr(b, "_nft_stdin", lambda text: stdin_scripts.append(text) or (0, ""))
+    b._migrate_ban6()
+    assert stdin_scripts
+    script = stdin_scripts[0]
+    assert "interval,timeout" in script
+    assert "2001:db8::7" in script
+
+
 def test_ban_argv_uses_add_element_not_bare_comment(monkeypatch):
     """Unit: no unquoted comment with colon; prefer add element / -f -."""
     from sysspectogram.response.actions import NftBackend
@@ -177,3 +216,10 @@ def test_ban_argv_uses_add_element_not_bare_comment(monkeypatch):
         len(c) > 1 and c[-2] == "comment" and c[-1].startswith("sysspectogram:") for c in seen
     )
     assert "element" in flat or any(c[:2] == ["nft", "-f"] for c in seen)
+
+
+def test_gateway_parses_via_inet6():
+    from sysspectogram.response.protect import _parse_route_gateways
+
+    text = "default nexthop via inet6 2001:db8::1 dev v0 weight 1"
+    assert "2001:db8::1" in _parse_route_gateways(text)

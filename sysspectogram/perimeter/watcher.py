@@ -19,6 +19,10 @@ from sysspectogram.perimeter.rules import Alert, Denylist, RuleEngine
 
 console = Console()
 
+_INJECTION_PEER_COOLDOWN_SEC = 600.0
+_INJECTION_HOST_WINDOW_SEC = 60.0
+_INJECTION_HOST_CAP = 10
+
 
 @dataclass
 class WatcherState:
@@ -136,6 +140,10 @@ class PerimeterWatcher:
         self.suspicious_domains = {d.lower() for d in (suspicious_domains or set())}
         self._recon_last: dict[str, float] = {}
         self._lockdown_seen: dict[str, float] = {}
+        self._inj_peer_last: dict[str, float] = {}
+        self._inj_peer_suppressed: dict[str, int] = {}
+        self._inj_host_ts: deque[float] = deque()
+        self._inj_host_overflow = 0
 
         denylist = Denylist(denylist_paths or [])
         self.engine = RuleEngine(
@@ -304,25 +312,96 @@ class PerimeterWatcher:
         self.persist()
         return detail
 
-    def tick(self) -> list[Alert]:
-        emitted: list[Alert] = []
+    def _injection_alerts(self, events: list[Any]) -> list[Alert]:
+        """One injection alert per tail peer per 10 minutes; count fails on that tail only.
 
-        for ev in self.auth.poll():
-            if ev.kind == "injection":
-                ips = list((ev.extras or {}).get("ips") or [])
-                a = Alert(
+        Extra lines from the same peer fold into ``extras['suppressed']``.
+        More than ~10 injection alerts a minute are digested into the host overflow
+        counter and ride out on the next alert that still fits the cap.
+        """
+        grouped: dict[str, list[Any]] = {}
+        order: list[str] = []
+        brute: list[Alert] = []
+        for ev in events:
+            tail = str(ev.ip or "")
+            if tail:
+                hit = self.engine.on_auth_fail(tail, ev.user or "")
+                if hit:
+                    brute.append(hit)
+            if tail not in grouped:
+                order.append(tail)
+                grouped[tail] = []
+            grouped[tail].append(ev)
+
+        now = time.time()
+        self._inj_host_ts = deque(
+            ts for ts in self._inj_host_ts if now - ts < _INJECTION_HOST_WINDOW_SEC
+        )
+        candidates: list[tuple[str, list[Any]]] = []
+        for tail in order:
+            group = grouped[tail]
+            last = self._inj_peer_last.get(tail)
+            if last is not None and now - last < _INJECTION_PEER_COOLDOWN_SEC:
+                self._inj_peer_suppressed[tail] = (
+                    self._inj_peer_suppressed.get(tail, 0) + len(group)
+                )
+                continue
+            candidates.append((tail, group))
+
+        slots = _INJECTION_HOST_CAP - len(self._inj_host_ts)
+        if slots < 0:
+            slots = 0
+        if len(candidates) > slots:
+            for tail, group in candidates[slots:]:
+                self._inj_peer_suppressed[tail] = (
+                    self._inj_peer_suppressed.get(tail, 0) + len(group)
+                )
+                self._inj_host_overflow += len(group)
+            candidates = candidates[:slots]
+
+        out: list[Alert] = []
+        for tail, group in candidates:
+            ev = group[-1]
+            ips = list((ev.extras or {}).get("ips") or [])
+            suppressed = self._inj_peer_suppressed.pop(tail, 0) + max(0, len(group) - 1)
+            extras: dict[str, Any] = {
+                "ips": ips,
+                "user": ev.user,
+                "raw": ev.raw,
+                "suppressed": suppressed,
+            }
+            if self._inj_host_overflow:
+                extras["host_suppressed"] = self._inj_host_overflow
+                extras["digest"] = True
+                self._inj_host_overflow = 0
+            out.append(
+                Alert(
                     rule_id="auth_log_injection",
                     severity="high",
                     message=(
                         "SSH auth line has multiple from <ip> port markers "
-                        f"(possible invalid-user injection): {ips or ev.ip}"
+                        f"(possible invalid-user injection): {ips or tail or '-'}"
                     ),
-                    ip=None,
-                    extras={"ips": ips, "user": ev.user, "raw": ev.raw},
+                    ip=tail or None,
+                    extras=extras,
                 )
-                self.emit(a)
-                emitted.append(a)
-            elif ev.kind in {"failed", "invalid"} and ev.ip:
+            )
+            self._inj_peer_last[tail] = now
+            self._inj_host_ts.append(now)
+        return out + brute
+
+    def tick(self) -> list[Alert]:
+        emitted: list[Alert] = []
+
+        auth_events = list(self.auth.poll())
+        injections = [ev for ev in auth_events if ev.kind == "injection"]
+        for alert in self._injection_alerts(injections):
+            self.emit(alert)
+            emitted.append(alert)
+        for ev in auth_events:
+            if ev.kind == "injection":
+                continue
+            if ev.kind in {"failed", "invalid"} and ev.ip:
                 a = self.engine.on_auth_fail(ev.ip, ev.user)
                 if a:
                     self.emit(a)

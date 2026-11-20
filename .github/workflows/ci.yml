@@ -114,6 +114,24 @@ jobs:
           cargo test -q --no-default-features
           cargo build --release -q --no-default-features
 
+
+  agent-ebpf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: install clang/libbpf headers
+        run: sudo apt-get update -qq && sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev
+      - name: build + test (eBPF object)
+        working-directory: agent
+        env:
+          C_INCLUDE_PATH: /usr/include/x86_64-linux-gnu
+        run: |
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+
   rust-locks:
     runs-on: ubuntu-latest
     steps:

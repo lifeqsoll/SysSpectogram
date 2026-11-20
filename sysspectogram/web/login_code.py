@@ -34,7 +34,6 @@ class WebLoginCode:
         self.persist_path = Path(persist_path) if persist_path else None
         self._code: str | None = None
         self._deadline = 0.0
-        self._fails: list[float] = []
         self._timer: threading.Timer | None = None
         self._lock = threading.Lock()
         self.begin()
@@ -50,7 +49,6 @@ class WebLoginCode:
     def _begin_locked(self) -> str:
         self._code = self._gen()
         self._deadline = time.time() + self.ttl_sec if self.ttl_sec > 0 else 0.0
-        self._fails = []
         self._persist_locked()
         self._arm_locked()
         return self._code
@@ -129,20 +127,24 @@ class WebLoginCode:
     def normalize(code: str) -> str:
         return str(code).strip().upper().replace(" ", "").replace("-", "")
 
+    def matches(self, code: str) -> bool:
+        """Constant-time check. Does not rotate, consume, or record a failure."""
+        with self._lock:
+            if self._expired_locked() or not self._code:
+                return False
+            got = self.normalize(code)
+            if len(got) != len(self._code):
+                return False
+            return secrets.compare_digest(got, self._code)
+
     def try_consume(self, code: str) -> bool:
+        """Consume a matching code. Wrong guesses leave the current code in place."""
         with self._lock:
             if self._expired_locked() or not self._code:
                 self._begin_locked()
                 return False
-            now = time.time()
-            self._fails = [t for t in self._fails if now - t < 300.0]
             got = self.normalize(code)
             if len(got) != len(self._code) or not secrets.compare_digest(got, self._code):
-                self._fails.append(now)
-                # Rotate like ConsoleUnlock after repeated fails — never permanently
-                # refuse a freshly printed correct code.
-                if len(self._fails) >= 5:
-                    self._begin_locked()
                 return False
             self._begin_locked()
             return True

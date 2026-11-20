@@ -72,6 +72,21 @@ def _parse_tcp() -> list[tuple[str, int, str]]:
     return _parse_tcp4() + _parse_tcp6()
 
 
+def _normalize_flow_ip(ip: str) -> str:
+    """Collapse ``::ffff:x.x.x.x`` to the inner IPv4 address."""
+    from ipaddress import ip_address
+
+    from sysspectogram.net_ip import unwrap_mapped_ip
+
+    token = str(ip).strip().split("%", 1)[0]
+    if token.startswith("[") and token.endswith("]"):
+        token = token[1:-1]
+    try:
+        return str(unwrap_mapped_ip(ip_address(token)))
+    except ValueError:
+        return str(ip)
+
+
 def _parse_ss() -> list[tuple[str, int, str]]:
     """Parse `ss -tnH` → (remote_ip, remote_port, state_name). Empty if ss missing."""
     if not shutil.which("ss"):
@@ -167,6 +182,7 @@ class FlowWatcher:
             kind = self._kind(state)
             if kind is None:
                 continue
+            ip = _normalize_flow_ip(ip)
             key = (ip, port, kind)
             self._seen.setdefault(key, now)
         # drop entries outside the window
@@ -243,8 +259,11 @@ class FlowWatcher:
                         },
                     }
                 )
+        # Inbound SYN_RECV only: unique remote ports after ::ffff unwrap (_parse_tcp has no local dest port).
         by_ip: dict[str, set[int]] = {}
-        for (ip, port, _kind), _ts in self._seen.items():
+        for (ip, port, kind), _ts in self._seen.items():
+            if kind != "recv":
+                continue
             by_ip.setdefault(ip, set()).add(port)
         for ip, ps in by_ip.items():
             if len(ps) >= self.unique_port_threshold:

@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from sysspectogram.perimeter.auth import parse_auth_lines
+from sysspectogram.perimeter.watcher import PerimeterWatcher
+
+
+def _injection_line(tail: str, embedded: str = "198.51.100.77") -> str:
+    return (
+        f"Failed password for invalid user x from {embedded} port 22 "
+        f"from {tail} port 5555 ssh2"
+    )
+
+
+def _tick(watcher: PerimeterWatcher, lines: list[str]):
+    watcher.auth.poll = lambda: parse_auth_lines(lines)
+    with patch("sysspectogram.perimeter.watcher.snapshot_connections", return_value=[]):
+        return watcher.tick()
 
 
 def test_forged_username_from_ip_not_parsed():
@@ -67,3 +83,52 @@ def test_rfc3339_and_sshd_session_failed():
     assert len(ev) == 1
     assert ev[0].ip == "203.0.113.77"
     assert ev[0].kind == "failed"
+
+
+def test_injection_flood_one_alert_per_ip(tmp_path) -> None:
+    watcher = PerimeterWatcher(state_path=tmp_path / "perimeter.json", fail_threshold=1000)
+    line = _injection_line("203.0.113.9")
+    alerts = _tick(watcher, [line] * 25)
+    inj = [a for a in alerts if a.rule_id == "auth_log_injection"]
+    assert len(inj) == 1
+    assert inj[0].ip == "203.0.113.9"
+    assert inj[0].extras.get("suppressed") == 24
+    again = _tick(watcher, [line] * 5)
+    assert not any(a.rule_id == "auth_log_injection" for a in again)
+
+
+def test_injection_counts_fail_on_tail_ip(tmp_path) -> None:
+    watcher = PerimeterWatcher(
+        state_path=tmp_path / "perimeter.json",
+        fail_threshold=3,
+        fail_window_sec=60,
+    )
+    alerts = _tick(watcher, [_injection_line("203.0.113.9")] * 3)
+    brute = [a for a in alerts if a.rule_id == "bruteforce_ssh"]
+    assert brute
+    assert brute[0].ip == "203.0.113.9"
+    assert len(watcher.engine._fails.get("203.0.113.9", [])) == 3
+
+
+def test_injection_host_cap_suppresses_rest(tmp_path) -> None:
+    watcher = PerimeterWatcher(state_path=tmp_path / "perimeter.json", fail_threshold=1000)
+    lines = [_injection_line(f"203.0.113.{i}") for i in range(1, 16)]
+    alerts = _tick(watcher, lines)
+    inj = [a for a in alerts if a.rule_id == "auth_log_injection"]
+    assert len(inj) == 10
+    assert sum(int(a.extras.get("host_suppressed") or 0) for a in inj) == 5
+    assert any(a.extras.get("digest") for a in inj)
+
+
+def test_injection_never_fails_embedded_ip(tmp_path) -> None:
+    watcher = PerimeterWatcher(
+        state_path=tmp_path / "perimeter.json",
+        fail_threshold=2,
+        fail_window_sec=60,
+    )
+    alerts = _tick(watcher, [_injection_line("203.0.113.9", "198.51.100.77")] * 5)
+    assert not any(
+        a.rule_id == "bruteforce_ssh" and a.ip == "198.51.100.77" for a in alerts
+    )
+    assert len(watcher.engine._fails.get("198.51.100.77", [])) == 0
+    assert len(watcher.engine._fails.get("203.0.113.9", [])) == 5

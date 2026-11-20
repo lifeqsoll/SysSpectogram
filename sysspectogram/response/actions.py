@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -531,6 +532,94 @@ class NftBackend:
         code_t, _ = self._run(["nft", "list", "table", "inet", "sysspectogram"])
         if code_t != 0:
             self._nft_stdin(_NFT_TABLE_SCRIPT)
+        self._migrate_ban6()
+
+    def _migrate_ban6(self) -> None:
+        """Upgrade legacy ban6 (timeout-only) to interval,timeout with elements intact."""
+        if not shutil.which("nft"):
+            return
+        code, out = self._run(["nft", "list", "set", "inet", "sysspectogram", "ban6"])
+        if code != 0 or not (out or "").strip():
+            return
+        if "interval" in out:
+            return
+        elems = self._parse_ban6_elements_json()
+        if elems is None:
+            elems = self._parse_ban6_elements_text(out)
+        lines = [
+            "delete set inet sysspectogram ban6",
+            "add set inet sysspectogram ban6 { type ipv6_addr; flags interval,timeout; }",
+        ]
+        if elems:
+            rendered = ", ".join(f"{ip} timeout {ttl}s" for ip, ttl in elems)
+            lines.append(f"add element inet sysspectogram ban6 {{ {rendered} }}")
+        self._nft_stdin("\n".join(lines) + "\n")
+
+    @staticmethod
+    def _parse_ban6_elements_json() -> list[tuple[str, int]] | None:
+        if not shutil.which("nft"):
+            return None
+        try:
+            proc = subprocess.run(
+                ["nft", "-j", "list", "set", "inet", "sysspectogram", "ban6"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if proc.returncode != 0:
+            return None
+        try:
+            data = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return None
+        now = time.time()
+        seen: set[str] = set()
+        out: list[tuple[str, int]] = []
+
+        def walk(node: object) -> None:
+            if isinstance(node, dict):
+                if isinstance(node.get("elem"), dict):
+                    inner = node["elem"]
+                    val = inner.get("val")
+                    if isinstance(val, str) and val not in seen:
+                        ttl = 0
+                        if isinstance(inner.get("expires"), (int, float)):
+                            ttl = max(1, int(float(inner["expires"]) - now))
+                        elif isinstance(inner.get("timeout"), (int, float)):
+                            ttl = max(1, int(inner["timeout"]))
+                        if ttl > 0:
+                            seen.add(val)
+                            out.append((val, ttl))
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(data)
+        return out
+
+    @staticmethod
+    def _parse_ban6_elements_text(text: str) -> list[tuple[str, int]]:
+        elems: list[tuple[str, int]] = []
+        for match in re.finditer(
+            r"([\da-fA-F:.]+(?:/\d{1,3})?)\s+timeout\s+(\d+)([smhd]?)",
+            text or "",
+        ):
+            ip = match.group(1)
+            ttl = int(match.group(2))
+            unit = match.group(3) or "s"
+            if unit == "m":
+                ttl *= 60
+            elif unit == "h":
+                ttl *= 3600
+            elif unit == "d":
+                ttl *= 86400
+            elems.append((ip, max(1, ttl)))
+        return elems
 
     # Back-compat alias used by lockdown/quarantine helpers.
     def _ensure_chain(self) -> None:
@@ -560,6 +649,7 @@ class NftBackend:
                 never_ban_cidrs=self.never_ban_cidrs,
                 allow_private_bans=self.allow_private_bans,
                 extra_cidrs=extra,
+                ssh_port=self.ssh_port,
             )
             if reason:
                 return f"protected skip {ip} ({reason})"

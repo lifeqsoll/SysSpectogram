@@ -1,16 +1,29 @@
-# eBPF setup (Arch) — Aya loader + clang BPF probes
+# eBPF setup — Aya loader + clang BPF probes
 
-Probes: `sys_enter_execve`, `sys_enter_openat`  
-Build: **system `clang -target bpf`** (avoids rustc/bpf-linker LLVM mismatch on Arch).  
-Load/attach: **Aya** in `sysspectogram-agent`.
+Probes include `sys_enter_execve`, `sys_enter_openat`, `sys_enter_kill`, setuid helpers, and module load/unload.
+Build: **system `clang -target bpf`**. Load/attach: **Aya** in `sysspectogram-agent`.
 
-## Already done on this machine
+Needs **BTF** (`ls /sys/kernel/btf/vmlinux`) and **real root** (tracefs is typically `0700`).
 
-- `clang` / `llvm` / `libbpf`
-- BTF: `/sys/kernel/btf/vmlinux`
-- Agent builds BPF object into `OUT_DIR/sysspectogram-ebpf`
+## Arch
 
-## Build
+```bash
+sudo pacman -S --needed base-devel rustup clang llvm libbpf
+rustup default stable
+cd agent && cargo build --release
+```
+
+## Debian 13 / Ubuntu 24.04
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential clang llvm libbpf-dev linux-libc-dev
+# Without this, probes.c fails with 'asm/types.h not found'
+export C_INCLUDE_PATH=/usr/include/$(uname -m)-linux-gnu
+cd agent && cargo build --release
+```
+
+## Build notes
 
 ```bash
 cd agent
@@ -20,33 +33,38 @@ cargo build --release
 
 Skip BPF compile (userspace-only): `SYSSPECTOGRAM_SKIP_EBPF=1 cargo build --release --no-default-features`
 
+**Release musl agent** (GitHub assets) is built `--no-default-features` → **no eBPF**. Kill witness and eBPF setuid/openat alerts need a source build with the default `ebpf` feature. Packaged units that pass `--mode ebpf` require that binary; otherwise the agent falls back to userspace.
+
 ## Run (needs **real root**, not only setcap)
 
-On Arch, `/sys/kernel/tracing` is typically `0700 root`. Aya must `readdir` it to attach.
-`setcap cap_bpf,...` is **not enough** → you get `tracefs not found` / not readable.
+`/sys/kernel/tracing` is typically `0700 root`. Aya must `readdir` it to attach.
+`setcap cap_bpf,...` is **not enough** → `tracefs not found` / not readable.
 
 ```bash
-# correct
 sudo -E ./agent/target/release/sysspectogram-agent \
   --mode ebpf \
   --socket "$XDG_RUNTIME_DIR/sysspectogram-agent.sock" \
   --metrics-ms 1000
 ```
 
+## Common errors
+
+| Symptom | Fix |
+|---|---|
+| `asm/types.h not found` | Set `C_INCLUDE_PATH=/usr/include/$(uname -m)-linux-gnu` (Debian/Ubuntu) |
+| `tracefs not readable` / not found | Run as root; do not rely on setcap alone |
+| `BTF missing` | Install a kernel with BTF / ensure `/sys/kernel/btf/vmlinux` exists |
+
 ## Guard
 
 ```yaml
-# configs/default.yaml or full load profile
 agent:
   mode: ebpf
 ```
 
 ```bash
-# guard still auto_starts agent; run guard as root OR pre-start agent with caps
-sudo -E .venv/bin/python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
+sudo -E .venv/bin/python -m sysspectogram guard --telegram --dry-run
 ```
-
-Alerts: `agent_ebpf_execve`, `agent_ebpf_openat` (plus existing userspace rules).
 
 ## Profile packs (GitHub Release)
 
@@ -57,14 +75,4 @@ python -m sysspectogram profiles pack \
   --host artifacts/real_v3 \
   --out dist/profile-generic-linux-v1.tar.gz \
   --agent-if artifacts/agent_iforest.ssf.npz
-# upload dist/*.tar.gz + *.sha256 to GitHub Release v0.4.0
-```
-
-Pull example after publish:
-
-```bash
-python -m sysspectogram profiles pull \
-  --url https://github.com/<org>/SysSpectogram/releases/download/v0.4.0/profile-generic-linux-v1.tar.gz \
-  --out /tmp/p.tar.gz \
-  --sha256 "$(cut -d' ' -f1 dist/profile-generic-linux-v1.tar.gz.sha256)"
 ```

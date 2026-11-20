@@ -785,6 +785,220 @@ pub fn parse_helper_ban_ip_opt(raw: &str, allow_private: bool) -> Result<std::ne
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum HelperBanTarget {
+    Host(std::net::IpAddr),
+    V6Prefix(String),
+}
+
+pub fn parse_helper_ban_target(raw: &str) -> Result<HelperBanTarget, String> {
+    parse_helper_ban_target_opt(raw, false)
+}
+
+pub fn parse_helper_ban_target_opt(raw: &str, allow_private: bool) -> Result<HelperBanTarget, String> {
+    let token = raw.trim();
+    if token.is_empty() {
+        return Err(format!("invalid ban target: {token:?}"));
+    }
+    if !token.contains('/') {
+        return Ok(HelperBanTarget::Host(parse_helper_ban_ip_opt(
+            token,
+            allow_private,
+        )?));
+    }
+    parse_helper_v6_prefix(token, allow_private).map(HelperBanTarget::V6Prefix)
+}
+
+fn parse_helper_v6_prefix(token: &str, allow_private: bool) -> Result<String, String> {
+    if token.bytes().any(|b| {
+        matches!(
+            b,
+            b';' | b'|' | b'&' | b'`' | b'$' | b'(' | b')' | b'{' | b'}' | b'[' | b']'
+                | b'<' | b'>' | b'\\' | b'"' | b'\'' | b' ' | b'\t' | b'\n' | b'\r'
+        )
+    }) {
+        return Err(format!("invalid ban target: {token:?}"));
+    }
+    let (addr_s, bits_s) = token
+        .split_once('/')
+        .ok_or_else(|| format!("invalid ban target: {token:?}"))?;
+    let addr: std::net::Ipv6Addr = addr_s
+        .parse()
+        .map_err(|_| format!("invalid ban target: {token:?}"))?;
+    if addr.is_unspecified()
+        || addr.is_loopback()
+        || addr.is_multicast()
+        || addr.is_unicast_link_local()
+        || addr.to_ipv4_mapped().is_some()
+    {
+        return Err(format!("refusing ban of special address: {addr}"));
+    }
+    let prefix: u8 = bits_s
+        .parse()
+        .map_err(|_| format!("invalid ban target: {token:?}"))?;
+    if prefix < 48 || prefix > 128 {
+        return Err(format!("IPv6 ban prefix must be /48../128: {token:?}"));
+    }
+    if !allow_private && is_ula(addr) {
+        return Err(format!("refusing ban of private/ULA/CGNAT address: {addr}"));
+    }
+    Ok(canonical_ipv6_prefix(addr, prefix))
+}
+
+fn canonical_ipv6_prefix(addr: std::net::Ipv6Addr, prefix: u8) -> String {
+    let raw = u128::from_be_bytes(addr.octets());
+    let mask = if prefix == 0 {
+        0u128
+    } else {
+        u128::MAX << (128 - u32::from(prefix))
+    };
+    let net = raw & mask;
+    let masked = std::net::Ipv6Addr::from(net.to_be_bytes());
+    format!("{masked}/{prefix}")
+}
+
+fn ipv6_prefix_bits(addr: std::net::Ipv6Addr, prefix: u8) -> u128 {
+    let raw = u128::from_be_bytes(addr.octets());
+    if prefix == 0 {
+        return 0;
+    }
+    let mask = u128::MAX << (128 - u32::from(prefix));
+    raw & mask
+}
+
+fn ipv6_prefixes_overlap(a: &str, b: &str) -> bool {
+    let (a_addr, a_len) = match parse_v6_prefix_pair(a) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let (b_addr, b_len) = match parse_v6_prefix_pair(b) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let min = a_len.min(b_len);
+    ipv6_prefix_bits(a_addr, min) == ipv6_prefix_bits(b_addr, min)
+}
+
+fn parse_v6_prefix_pair(token: &str) -> Result<(std::net::Ipv6Addr, u8), String> {
+    let (addr_s, bits_s) = token
+        .split_once('/')
+        .ok_or_else(|| format!("bad prefix {token}"))?;
+    let addr: std::net::Ipv6Addr = addr_s
+        .parse()
+        .map_err(|_| format!("bad prefix {token}"))?;
+    let bits: u8 = bits_s
+        .parse()
+        .map_err(|_| format!("bad prefix {token}"))?;
+    Ok((addr, bits))
+}
+
+fn target_nft_key(target: &HelperBanTarget) -> String {
+    match target {
+        HelperBanTarget::Host(addr) => addr.to_string(),
+        HelperBanTarget::V6Prefix(cidr) => cidr.clone(),
+    }
+}
+
+fn set_for_target(target: &HelperBanTarget) -> &'static str {
+    match target {
+        HelperBanTarget::Host(addr) => set_for(*addr),
+        HelperBanTarget::V6Prefix(_) => "ban6",
+    }
+}
+
+fn ip_in_never_ban_target(target: &HelperBanTarget, cidrs: &[String]) -> bool {
+    match target {
+        HelperBanTarget::Host(addr) => ip_in_never_ban(*addr, cidrs),
+        HelperBanTarget::V6Prefix(cidr) => cidrs.iter().any(|item| ipv6_prefixes_overlap(cidr, item)),
+    }
+}
+
+fn helper_host_addrs() -> Vec<std::net::IpAddr> {
+    let mut out = Vec::new();
+    let Ok(proc) = Command::new("ip").args(["-j", "addr", "show", "up"]).output() else {
+        return out;
+    };
+    let Ok(v) = serde_json::from_slice::<Value>(&proc.stdout) else {
+        return out;
+    };
+    let Some(arr) = v.as_array() else {
+        return out;
+    };
+    for iface in arr {
+        let Some(addrs) = iface.get("addr_info").and_then(|a| a.as_array()) else {
+            continue;
+        };
+        for ai in addrs {
+            if let Some(local) = ai.get("local").and_then(|x| x.as_str()) {
+                if let Ok(addr) = local.parse::<std::net::IpAddr>() {
+                    out.push(addr);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn host_overlaps_target(target: &HelperBanTarget) -> bool {
+    match target {
+        HelperBanTarget::Host(addr) => host_owns_address(*addr),
+        HelperBanTarget::V6Prefix(cidr) => {
+            let Ok((net_addr, bits)) = parse_v6_prefix_pair(cidr) else {
+                return false;
+            };
+            helper_host_addrs().iter().any(|host| {
+                let std::net::IpAddr::V6(v6) = host else {
+                    return false;
+                };
+                ip_prefix_contains(
+                    std::net::IpAddr::V6(net_addr),
+                    bits,
+                    std::net::IpAddr::V6(*v6),
+                )
+            })
+        }
+    }
+}
+
+fn helper_protected_reason_target(target: &HelperBanTarget) -> Option<&'static str> {
+    match target {
+        HelperBanTarget::Host(addr) => helper_protected_reason(*addr),
+        HelperBanTarget::V6Prefix(cidr) => {
+            for item in telegram_protect_cidrs() {
+                if ipv6_prefixes_overlap(cidr, item) {
+                    return Some("telegram/egress");
+                }
+            }
+            for addr in helper_resolver_addrs() {
+                if let std::net::IpAddr::V6(v6) = addr {
+                    if cidr_covers_host(cidr, v6) {
+                        return Some("resolver");
+                    }
+                }
+            }
+            for addr in helper_gateway_addrs() {
+                if let std::net::IpAddr::V6(v6) = addr {
+                    if cidr_covers_host(cidr, v6) {
+                        return Some("default gateway");
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+fn cidr_covers_host(cidr: &str, host: std::net::Ipv6Addr) -> bool {
+    let Ok((net_addr, bits)) = parse_v6_prefix_pair(cidr) else {
+        return false;
+    };
+    ip_prefix_contains(
+        std::net::IpAddr::V6(net_addr),
+        bits,
+        std::net::IpAddr::V6(host),
+    )
+}
+
 fn load_allow_private_bans() -> bool {
     if let Ok(overlay) = read_overlay(Path::new(SETTINGS_FILE)) {
         if let Some(v) = overlay.get("response.allow_private_bans") {
@@ -1190,7 +1404,7 @@ fn ban_add(args: &Value, caller: Caller) -> Result<Value, String> {
         .and_then(Value::as_str)
         .ok_or("missing ip")?;
     let allow_private = load_allow_private_bans();
-    let addr = parse_helper_ban_ip_opt(ip_raw, allow_private)?;
+    let target = parse_helper_ban_target_opt(ip_raw, allow_private)?;
     let ttl = parse_ban_ttl(args)?;
     let reason = args
         .get("reason")
@@ -1199,23 +1413,23 @@ fn ban_add(args: &Value, caller: Caller) -> Result<Value, String> {
         .chars()
         .take(64)
         .collect::<String>();
-    if host_owns_address(addr) {
+    if host_overlaps_target(&target) {
         return Err("refusing ban of host own address".into());
     }
     let never = load_never_ban_cidrs();
-    if ip_in_never_ban(addr, &never) {
+    if ip_in_never_ban_target(&target, &never) {
         return Err("never_ban skip".into());
     }
-    if let Some(why) = helper_protected_reason(addr) {
+    if let Some(why) = helper_protected_reason_target(&target) {
         return Err(format!("protected skip ({why})"));
     }
     ensure_nft_table()?;
-    let set_name = set_for(addr);
+    let set_name = set_for_target(&target);
     let n = count_set_elements(set_name)?;
     if n >= MAX_BAN_ELEMENTS {
         return Err(format!("ban set full ({MAX_BAN_ELEMENTS})"));
     }
-    let ip_s = addr.to_string();
+    let ip_s = target_nft_key(&target);
     let ttl_s = format!("{ttl}s");
     let nft = nft_bin();
     // delete+add for refresh timeout
@@ -1260,9 +1474,9 @@ fn ban_del(args: &Value, caller: Caller) -> Result<Value, String> {
         .get("ip")
         .and_then(Value::as_str)
         .ok_or("missing ip")?;
-    let addr = parse_helper_ban_ip(ip_raw)?;
-    let ip_s = addr.to_string();
-    let set_name = set_for(addr);
+    let target = parse_helper_ban_target(ip_raw)?;
+    let ip_s = target_nft_key(&target);
+    let set_name = set_for_target(&target);
     let nft = nft_bin();
     match run(
         nft,
@@ -1515,6 +1729,22 @@ mod tests {
         assert!(collect_ban_ips(&[(false, ""), (false, "error")]).is_err());
         let ips = collect_ban_ips(&[(true, "elements = { 203.0.113.9 }"), (false, "")]).unwrap();
         assert_eq!(ips, vec!["203.0.113.9".to_string()]);
+    }
+
+    #[test]
+    fn helper_ban_target_prefix_rules() {
+        assert!(parse_helper_ban_target("2001:db8:1::/64").is_ok());
+        assert!(parse_helper_ban_target("2001:db8::1").is_ok());
+        assert!(parse_helper_ban_target("203.0.113.0/24").is_err());
+        assert!(parse_helper_ban_target("2001:db8::/32").is_err());
+        assert!(parse_helper_ban_target("2001:db8::1/47").is_err());
+        let tg = HelperBanTarget::V6Prefix("2001:b28:f23d::/48".into());
+        assert_eq!(
+            helper_protected_reason_target(&tg),
+            Some("telegram/egress")
+        );
+        let nb = HelperBanTarget::V6Prefix("2001:db8:1::/64".into());
+        assert!(ip_in_never_ban_target(&nb, &["2001:db8::/32".into()]));
     }
 
     #[test]

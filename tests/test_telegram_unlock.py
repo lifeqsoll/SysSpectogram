@@ -79,7 +79,7 @@ def test_console_unlock_flow():
     assert bot._unlock_code and bot._unlock_code != code
 
 
-def test_unlock_bruteforce_rotates_code():
+def test_unlock_bruteforce_does_not_rotate_code():
     client = MagicMock()
     client.configured = True
     client.chat_id = "111"
@@ -93,5 +93,6 @@ def test_unlock_bruteforce_rotates_code():
     first = bot._unlock_code
     for _ in range(5):
         assert bot.try_unlock("AAAAAAAAAA") is False
-    assert bot._unlock_code != first
+    assert bot._unlock_code == first
     assert not bot.session_unlocked()
+    assert bot.try_unlock(first) is True

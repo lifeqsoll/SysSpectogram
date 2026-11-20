@@ -154,6 +154,13 @@ def _running_agent_pid(pidfile: Path) -> int | None:
     return pid if "sysspectogram-agent" in cmdline else None
 
 
+def _root_watch_python_should_poll(agent_on: bool, agent_pid: int | None) -> bool:
+    """True when the Python poller must run this cycle (agent missing or disabled)."""
+    if not agent_on:
+        return True
+    return agent_pid is None
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -670,6 +677,7 @@ def run_guard(
             tokens=tokens,
             host_id=host_id,
             dry_run=dry_run_actions,
+            config=config,
             recon_dir=_resolve(recon_cfg.get("dir", "reports/recon")),
             report_path=_resolve(per_cfg.get("jsonl_out", "reports/perimeter.jsonl")),
             model_dir=artifacts_dir,
@@ -993,8 +1001,16 @@ def run_guard(
             )
         except Exception as exc:
             console.print(f"[yellow]host baseline / drift-refit unavailable[/] {exc}")
-        proc_track = ProcessCpuTracker(maxlen=infer.window_size, top_k=8)
+        # ~120s of process CPU for alert spectrograms (lite: shorter ring).
+        _lite = str((config.get("load_profile") or "")).lower() == "lite"
+        proc_track = ProcessCpuTracker(maxlen=24 if _lite else 120, top_k=8)
         proc_track.warm()
+        try:
+            from sysspectogram.viz.snapshot import set_alert_proc_tracker
+
+            set_alert_proc_tracker(proc_track)
+        except Exception:
+            pass
         console.print(
             f"[bold]guard host-ml[/] window={infer.window_size} thr={infer.threshold:.3f}"
         )
@@ -2215,6 +2231,15 @@ def run_guard(
                 jpath = agent_cfg.get("jsonl")
                 if jpath:
                     cmd.extend(["--jsonl", str(_resolve(jpath))])
+                # Always pass absolute guard/watchdog pidfiles (not only when root_watch is on).
+                cmd.extend(
+                    [
+                        "--guard-pidfile",
+                        str(_resolve("state/guard.pid")),
+                        "--watchdog-pidfile",
+                        str(_resolve("state/watchdog.pid")),
+                    ]
+                )
                 if bool(agent_cfg.get("root_watch", True)):
                     cmd.append("--root-watch")
                     cmd.extend(
@@ -2231,12 +2256,6 @@ def run_guard(
                         s = str(item).strip()
                         if s:
                             cmd.extend(["--root-allow", s])
-                    cmd.extend(
-                        [
-                            "--guard-pidfile",
-                            str(_resolve("state/guard.pid")),
-                        ]
-                    )
                 else:
                     cmd.append("--no-root-watch")
                 wd_cfg = dict(config.get("watchdog") or {})
@@ -2444,74 +2463,110 @@ def run_guard(
             threads.append(threading.Thread(target=session_loop, name="sessions", daemon=True))
 
         root_cfg = config.get("root_watch") or {}
-        agent_on = bool((config.get("agent") or {}).get("enabled"))
-        # Prefer Rust agent root_watch; Python poller only without agent.
-        if bool(root_cfg.get("enabled", False)) and not agent_on:
+        agent_cfg_rw = config.get("agent") or {}
+        agent_on = bool(agent_cfg_rw.get("enabled"))
+        root_wanted = bool(root_cfg.get("enabled", False)) or (
+            agent_on and bool(agent_cfg_rw.get("root_watch", True))
+        )
+        # Always run the Python poller when root-watch is configured. Skip each
+        # cycle while the agent is alive; fall back when it is missing/crashed.
+        if root_wanted:
             from sysspectogram.root_watch import RootWatchState, poll_new_root
             from sysspectogram.perimeter.rules import Alert as PAlert
 
             root_state = RootWatchState()
             allow_comms = set(str(x) for x in (root_cfg.get("allow_comms") or [])) or None
+            agent_pidfile = _resolve(agent_cfg_rw.get("pidfile") or "state/agent.pid")
+            fallback_announced = {"on": False}
+            poll_sec = float(root_cfg.get("poll_sec", 10 if agent_on else 60))
 
             def root_loop():
                 t0 = time.monotonic()
                 while not stop.is_set():
                     try:
-                        from sysspectogram.trusted_pids import collect_trusted_pids
-
-                        trusted = collect_trusted_pids(
-                            agent_pidfile=_resolve(
-                                (config.get("agent") or {}).get("pidfile") or "state/agent.pid"
-                            ),
-                            watchdog_pidfile=_resolve("state/watchdog.pid"),
-                            guard_pidfile=_resolve("state/guard.pid"),
-                            child_of=os.getpid(),
-                            include_descendants=True,
-                        )
-                        news = poll_new_root(
-                            root_state,
-                            learn_sec=float(root_cfg.get("learn_sec", 300)),
-                            allow_comms=allow_comms,
-                            trusted_pids=trusted,
-                        )
-                        for p in news:
-                            a = PAlert(
-                                rule_id="unexpected_root_process",
-                                severity=getattr(p, "severity", None) or "critical",
-                                message=(
-                                    f"New root process pid={p.pid} comm={p.comm} "
-                                    f"exe={p.exe or '?'} parent={getattr(p, 'parent_comm', '')}"
-                                ),
-                                extras={
-                                    "pid": p.pid,
-                                    "comm": p.comm,
-                                    "path": p.exe,
-                                    "cmdline": p.cmdline,
-                                    "parent_comm": getattr(p, "parent_comm", ""),
-                                },
-                            )
-                            watcher.emit(a)
-                            bot = bot_holder["bot"]
-                            if bot is not None:
+                        agent_pid = _running_agent_pid(agent_pidfile) if agent_on else None
+                        if not _root_watch_python_should_poll(agent_on, agent_pid):
+                            if fallback_announced["on"]:
+                                console.print(
+                                    f"[cyan]root watch[/] agent (pid {agent_pid})"
+                                )
+                                fallback_announced["on"] = False
+                        else:
+                            if not fallback_announced["on"]:
+                                console.print(
+                                    "[cyan]root watch[/] python fallback "
+                                    "(agent missing)"
+                                )
+                                fallback_announced["on"] = True
                                 try:
-                                    bot.send_root_alert(p)
+                                    a = PAlert(
+                                        rule_id="root_watch_fallback_active",
+                                        severity="medium",
+                                        message=(
+                                            "Python root-watch fallback active "
+                                            "(agent not alive)"
+                                        ),
+                                    )
+                                    watcher.emit(a)
                                 except Exception:
                                     pass
+                            from sysspectogram.trusted_pids import collect_trusted_pids
+
+                            trusted = collect_trusted_pids(
+                                agent_pidfile=agent_pidfile,
+                                watchdog_pidfile=_resolve("state/watchdog.pid"),
+                                guard_pidfile=_resolve("state/guard.pid"),
+                                child_of=os.getpid(),
+                                include_descendants=True,
+                            )
+                            news = poll_new_root(
+                                root_state,
+                                learn_sec=float(root_cfg.get("learn_sec", 300)),
+                                allow_comms=allow_comms,
+                                trusted_pids=trusted,
+                            )
+                            for p in news:
+                                a = PAlert(
+                                    rule_id="unexpected_root_process",
+                                    severity=getattr(p, "severity", None) or "critical",
+                                    message=(
+                                        f"New root process pid={p.pid} comm={p.comm} "
+                                        f"exe={p.exe or '?'} parent={getattr(p, 'parent_comm', '')}"
+                                    ),
+                                    extras={
+                                        "pid": p.pid,
+                                        "comm": p.comm,
+                                        "path": p.exe,
+                                        "cmdline": p.cmdline,
+                                        "parent_comm": getattr(p, "parent_comm", ""),
+                                    },
+                                )
+                                watcher.emit(a)
+                                bot = bot_holder["bot"]
+                                if bot is not None:
+                                    try:
+                                        bot.send_root_alert(p)
+                                    except Exception:
+                                        pass
                     except Exception as exc:
                         console.print(f"[yellow]root watch[/] {exc}")
                     if duration_sec is not None and time.monotonic() - t0 >= duration_sec:
                         break
-                    wait_stop(stop, float(root_cfg.get("poll_sec", 60)))
+                    wait_stop(stop, poll_sec)
 
             threads.append(threading.Thread(target=root_loop, name="root-watch", daemon=True))
-            console.print(
-                f"[cyan]root watch[/] python fallback learn={float(root_cfg.get('learn_sec', 300)):.0f}s "
-                f"poll={float(root_cfg.get('poll_sec', 60)):.0f}s"
-            )
-        elif agent_on and bool((config.get("agent") or {}).get("root_watch", True)):
-            console.print(
-                f"[cyan]root watch[/] via agent learn={int((config.get('agent') or {}).get('root_learn_sec', 300))}s"
-            )
+            if agent_on and bool(agent_cfg_rw.get("root_watch", True)):
+                console.print(
+                    f"[cyan]root watch[/] agent preferred "
+                    f"learn={int(agent_cfg_rw.get('root_learn_sec', 300))}s; "
+                    f"python fallback poll={poll_sec:.0f}s when agent down"
+                )
+            else:
+                console.print(
+                    f"[cyan]root watch[/] python fallback "
+                    f"learn={float(root_cfg.get('learn_sec', 300)):.0f}s "
+                    f"poll={poll_sec:.0f}s"
+                )
 
     for t in threads:
         t.start()

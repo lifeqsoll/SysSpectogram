@@ -31,6 +31,7 @@ pub fn pid_alive(pid: u32) -> bool {
 }
 
 /// Spawn watchdog child that respawns agent if it dies unexpectedly.
+#[allow(clippy::too_many_arguments)] // CLI surface mirrors systemd ExecStart flags
 pub fn spawn_watchdog(
     exe: &Path,
     agent_args: &[String],
@@ -39,6 +40,7 @@ pub fn spawn_watchdog(
     jsonl: Option<&Path>,
     host_id: &str,
     clean_marker: &Path,
+    hmac_secret: &Path,
 ) -> io::Result<Child> {
     let mut cmd = Command::new(exe);
     cmd.arg("--role")
@@ -52,7 +54,9 @@ pub fn spawn_watchdog(
         .arg("--host-id")
         .arg(host_id)
         .arg("--clean-marker")
-        .arg(clean_marker);
+        .arg(clean_marker)
+        .arg("--hmac-secret")
+        .arg(hmac_secret);
     if let Some(path) = jsonl {
         cmd.arg("--jsonl").arg(path);
     }
@@ -65,11 +69,31 @@ pub fn spawn_watchdog(
         .spawn()
 }
 
-/// Owner-only marker written on a trusted clean shutdown.
+/// Legacy unsigned body (`clean`). Not a phoenix retirement signal.
 ///
 /// Refuses a symlink at the final path. Writes a temp file in the same
 /// directory (mode `0o600`, `O_NOFOLLOW`) and renames it into place.
+/// Kept for unit tests that prove unsigned markers never retire the watchdog.
+#[allow(dead_code)]
 pub fn write_clean_marker(path: &Path) -> io::Result<()> {
+    write_owner_only(path, "clean\n")
+}
+
+/// HMAC-signed stop marker. Two lines, owner-only, same write rules as
+/// [`write_clean_marker`]. The MAC covers the canonical line only.
+pub fn write_signed_stop_marker(path: &Path, secret: &str, agent_pid: u32) -> io::Result<()> {
+    if secret.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "hmac secret missing",
+        ));
+    }
+    let canon = format!("v1|stop|{}|{agent_pid}", unix_secs());
+    let mac = crate::auth::sign_hex(secret.trim(), &canon);
+    write_owner_only(path, &format!("{canon}\nhmac={mac}\n"))
+}
+
+fn write_owner_only(path: &Path, body: &str) -> io::Result<()> {
     if let Ok(meta) = fs::symlink_metadata(path) {
         if meta.file_type().is_symlink() {
             return Err(io::Error::new(
@@ -99,7 +123,7 @@ pub fn write_clean_marker(path: &Path) -> io::Result<()> {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW);
         let mut f = opts.open(&tmp)?;
-        writeln!(f, "clean")?;
+        f.write_all(body.as_bytes())?;
         f.sync_all()?;
     }
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
@@ -115,11 +139,67 @@ pub fn write_clean_marker(path: &Path) -> io::Result<()> {
 /// Root (euid 0) requires owner uid 0. Any other euid requires the owner to
 /// be that euid, so unit tests can run without root.
 pub fn clean_marker_trusted(path: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let meta = match fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(_) => return false,
+    match fs::symlink_metadata(path) {
+        Ok(meta) => owner_only_meta(&meta),
+        Err(_) => false,
+    }
+}
+
+/// Clean shutdown is true only when a verified HMAC stop marker is already present.
+///
+/// `si_pid`, `si_code` (including `SI_QUEUE` / `SI_USER` / `SI_KERNEL`), and
+/// trusted-tree membership are ignored. A forged `si_pid=1` is not a clean stop.
+pub fn decide_clean_shutdown(
+    signal: i32,
+    si_pid: u32,
+    si_code: i32,
+    trusted: bool,
+    signature_present: bool,
+) -> bool {
+    let _ = (signal, si_pid, si_code, trusted);
+    signature_present
+}
+
+const STOP_MARKER_MAX_AGE_SEC: i64 = 120;
+const STOP_MARKER_MAX_FUTURE_SEC: i64 = 30;
+const STOP_MARKER_MAX_BYTES: u64 = 512;
+
+/// Owner-only file mode plus a fresh HMAC stop marker for `expected_agent_pid`.
+///
+/// Missing secret, unsigned `clean`, wide mode, symlink, bad MAC, skew, or a
+/// pid mismatch are all unclean.
+pub fn clean_marker_hmac_ok(path: &Path, secret: Option<&str>, expected_agent_pid: u32) -> bool {
+    stop_marker_valid(path, secret, expected_agent_pid)
+}
+
+/// True when `path` is an owner-only HMAC stop marker for `expected_agent_pid`.
+pub fn stop_marker_valid(path: &Path, secret: Option<&str>, expected_agent_pid: u32) -> bool {
+    let Some(secret) = secret.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
     };
+    if expected_agent_pid == 0 {
+        return false;
+    }
+    let Some((meta, text)) = read_marker_nofollow(path) else {
+        return false;
+    };
+    if !owner_only_meta(&meta) {
+        return false;
+    }
+    let Some((canon, mac_hex)) = split_stop_marker(&text) else {
+        return false;
+    };
+    if !crate::auth::verify_hex(secret, canon, mac_hex) {
+        return false;
+    }
+    let Some((ts, pid)) = parse_stop_canon(canon) else {
+        return false;
+    };
+    pid == expected_agent_pid && ts_in_window(ts, unix_secs())
+}
+
+fn owner_only_meta(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
     if meta.file_type().is_symlink() || !meta.is_file() {
         return false;
     }
@@ -134,7 +214,77 @@ pub fn clean_marker_trusted(path: &Path) -> bool {
     }
 }
 
-/// Watchdog main loop: trusted clean marker exits; anything else respawns.
+fn read_marker_nofollow(path: &Path) -> Option<(fs::Metadata, String)> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return None;
+        }
+        if meta.len() > STOP_MARKER_MAX_BYTES {
+            return None;
+        }
+    }
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let f = opts.open(path).ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file() || meta.len() > STOP_MARKER_MAX_BYTES {
+        return None;
+    }
+    let mut buf = Vec::new();
+    f.take(STOP_MARKER_MAX_BYTES).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8(buf).ok()?;
+    Some((meta, text))
+}
+
+fn split_stop_marker(text: &str) -> Option<(&str, &str)> {
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    let (canon, hmac_line) = text.split_once('\n')?;
+    if canon.is_empty() || hmac_line.is_empty() || hmac_line.contains('\n') {
+        return None;
+    }
+    let mac = hmac_line.strip_prefix("hmac=")?;
+    if mac.len() != 64 {
+        return None;
+    }
+    Some((canon, mac))
+}
+
+fn parse_stop_canon(canon: &str) -> Option<(i64, u32)> {
+    let mut parts = canon.split('|');
+    let ver = parts.next()?;
+    let kind = parts.next()?;
+    let ts = parts.next()?;
+    let pid = parts.next()?;
+    if parts.next().is_some() || ver != "v1" || kind != "stop" {
+        return None;
+    }
+    if !canonical_uint(ts) || !canonical_uint(pid) {
+        return None;
+    }
+    Some((ts.parse().ok()?, pid.parse().ok()?))
+}
+
+fn canonical_uint(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s.len() == 1 || !s.starts_with('0'))
+}
+
+fn ts_in_window(ts: i64, now: i64) -> bool {
+    ts >= now.saturating_sub(STOP_MARKER_MAX_AGE_SEC)
+        && ts <= now.saturating_add(STOP_MARKER_MAX_FUTURE_SEC)
+}
+
+fn unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+/// Watchdog main loop: HMAC stop marker exits; anything else respawns.
+#[allow(clippy::too_many_arguments)] // mirrors spawn_watchdog / CLI flags
 pub fn run_watchdog_loop(
     watch_pidfile: &Path,
     clean_marker: &Path,
@@ -143,6 +293,7 @@ pub fn run_watchdog_loop(
     running: &std::sync::atomic::AtomicBool,
     jsonl: Option<&Path>,
     host_id: &str,
+    hmac_secret: Option<&str>,
 ) {
     use std::sync::atomic::Ordering;
     let mut last_respawn = Instant::now()
@@ -173,13 +324,14 @@ pub fn run_watchdog_loop(
         };
 
         if !alive {
-            if clean_marker_trusted(clean_marker) {
+            let expected_pid = read_pidfile(watch_pidfile).unwrap_or(0);
+            if clean_marker_hmac_ok(clean_marker, hmac_secret, expected_pid) {
                 let _ = fs::remove_file(clean_marker);
-                eprintln!("[sysspectogram-watch] CLEAN_SHUTDOWN seen — exit");
+                eprintln!("[sysspectogram-watch] signed CLEAN_SHUTDOWN seen — exit");
                 break;
             }
-            // A marker that fails the owner/mode check is deleted and treated
-            // as an unclean death (respawn, do not leave the loop).
+            // Unsigned, forged, wide-mode, or symlink markers are deleted and
+            // treated as an unclean death (respawn, do not leave the loop).
             if fs::symlink_metadata(clean_marker).is_ok() {
                 let _ = fs::remove_file(clean_marker);
             }
@@ -234,6 +386,7 @@ fn append_respawn_alert(jsonl: Option<&Path>, host_id: &str, status: Option<&Exi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
     fn euid() -> u32 {
@@ -315,6 +468,115 @@ mod tests {
         let link = dir.join("linked");
         std::os::unix::fs::symlink(&marker, &link).unwrap();
         assert!(write_clean_marker(&link).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn marker_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ssx-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_body(path: &Path, body: &str, mode: u32) {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true).mode(mode);
+        let mut f = opts.open(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn signed_body(secret: &str, ts: i64, pid: u32) -> String {
+        let canon = format!("v1|stop|{ts}|{pid}");
+        let mac = crate::auth::sign_hex(secret, &canon);
+        format!("{canon}\nhmac={mac}\n")
+    }
+
+    #[test]
+    fn forged_si_queue_from_pid_one_is_not_clean_without_signature() {
+        // Linux SI_USER=0, SI_QUEUE=-1, SI_KERNEL=0x80. si_pid=1 and a trusted
+        // tree must not authorize CLEAN_SHUTDOWN.
+        assert!(!decide_clean_shutdown(libc::SIGTERM, 1, -1, true, false));
+        assert!(!decide_clean_shutdown(libc::SIGTERM, 1, 0, true, false));
+        assert!(!decide_clean_shutdown(libc::SIGTERM, 1, 0x80, true, false));
+        assert!(!decide_clean_shutdown(libc::SIGINT, 1, -1, false, false));
+        assert!(decide_clean_shutdown(libc::SIGTERM, 1, -1, true, true));
+    }
+
+    #[test]
+    fn signed_stop_marker_valid_until_tampered_or_unsigned() {
+        let dir = marker_dir("stop-ok");
+        let marker = dir.join("agent.clean_shutdown");
+        let secret = "unit-secret";
+        let pid = 4242u32;
+        write_signed_stop_marker(&marker, secret, pid).unwrap();
+        let text = fs::read_to_string(&marker).unwrap();
+        let mut lines = text.lines();
+        let canon = lines.next().unwrap();
+        let hmac_line = lines.next().unwrap();
+        assert!(lines.next().is_none());
+        assert!(canon.starts_with("v1|stop|"));
+        assert!(canon.ends_with(&format!("|{pid}")));
+        assert_eq!(hmac_line.len(), "hmac=".len() + 64);
+        assert!(stop_marker_valid(&marker, Some(secret), pid));
+        assert!(clean_marker_hmac_ok(&marker, Some(secret), pid));
+        let no_final_nl = text.trim_end_matches('\n');
+        write_body(&marker, no_final_nl, 0o600);
+        assert!(
+            stop_marker_valid(&marker, Some(secret), pid),
+            "trailing newline after hmac= is optional"
+        );
+        write_body(&marker, &text, 0o600);
+        assert!(!stop_marker_valid(&marker, None, pid));
+        assert!(!stop_marker_valid(&marker, Some(""), pid));
+        assert!(!stop_marker_valid(&marker, Some("other-secret"), pid));
+        assert!(!stop_marker_valid(&marker, Some(secret), pid + 1));
+        assert!(!stop_marker_valid(&marker, Some(secret), 0));
+
+        let mut raw = text.into_bytes();
+        let pos = raw.windows(5).position(|w| w == b"hmac=").unwrap() + 5;
+        raw[pos] = if raw[pos] == b'0' { b'1' } else { b'0' };
+        write_body(&marker, &String::from_utf8(raw).unwrap(), 0o600);
+        assert!(!stop_marker_valid(&marker, Some(secret), pid));
+
+        write_body(&marker, "clean\n", 0o600);
+        assert!(
+            !stop_marker_valid(&marker, Some(secret), pid),
+            "legacy unsigned clean marker is not a signed stop"
+        );
+        assert!(!clean_marker_hmac_ok(&marker, Some(secret), pid));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stop_marker_rejects_skew_wide_mode_and_symlink() {
+        let dir = marker_dir("stop-skew");
+        let marker = dir.join("agent.clean_shutdown");
+        let secret = "unit-secret";
+        let pid = 77u32;
+        let now = unix_secs();
+        write_body(&marker, &signed_body(secret, now - 10, pid), 0o600);
+        assert!(stop_marker_valid(&marker, Some(secret), pid));
+        write_body(&marker, &signed_body(secret, now - 200, pid), 0o600);
+        assert!(!stop_marker_valid(&marker, Some(secret), pid));
+        write_body(&marker, &signed_body(secret, now + 60, pid), 0o600);
+        assert!(!stop_marker_valid(&marker, Some(secret), pid));
+
+        write_body(&marker, &signed_body(secret, now, pid), 0o644);
+        assert!(!stop_marker_valid(&marker, Some(secret), pid));
+
+        let tight = dir.join("tight");
+        write_body(&tight, &signed_body(secret, now, pid), 0o600);
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&tight, &link).unwrap();
+        assert!(!stop_marker_valid(&link, Some(secret), pid));
+        assert!(write_signed_stop_marker(&link, secret, pid).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -107,12 +107,34 @@ def _parse_route_gateways(text: str) -> set[str]:
         for i, tok in enumerate(parts):
             if tok != "via" or i + 1 >= len(parts):
                 continue
+            nxt = parts[i + 1]
+            if nxt in {"inet", "inet6"}:
+                if i + 2 >= len(parts):
+                    continue
+                nxt = parts[i + 2]
             try:
-                addr = unwrap_mapped_ip(ip_address(parts[i + 1].split("%", 1)[0]))
+                addr = unwrap_mapped_ip(ip_address(nxt.split("%", 1)[0]))
             except ValueError:
                 continue
             out.add(str(addr))
     return out
+
+
+def _any_inside(ban_net, hosts: Iterable[str]) -> bool:
+    """True when any host address is contained in a prefix ban."""
+    from sysspectogram.net_ip import unwrap_mapped_ip
+
+    for host in hosts:
+        try:
+            addr = unwrap_mapped_ip(ip_address(str(host).split("%", 1)[0]))
+        except ValueError:
+            continue
+        try:
+            if addr in ban_net:
+                return True
+        except TypeError:
+            continue
+    return False
 
 
 def _gateway_addrs() -> set[str]:
@@ -146,6 +168,7 @@ def is_protected(
     protect_ssh_sessions: bool = True,
     allow_private_bans: bool = False,
     extra_cidrs: Iterable[str] | None = None,
+    ssh_port: int = 22,
 ) -> str | None:
     """Return reason string if ``ip`` must not be auto-banned, else None."""
     from sysspectogram.net_ip import is_lan_like, unwrap_mapped_ip
@@ -164,7 +187,11 @@ def is_protected(
     if ignoreself:
         if addr.is_loopback or addr.is_unspecified or addr.is_link_local or addr.is_multicast:
             return "ignoreself special"
-        if str(addr) in _host_addrs():
+        hosts = _host_addrs()
+        if ban_net is not None:
+            if _any_inside(ban_net, hosts):
+                return "ignoreself host address"
+        elif str(addr) in hosts:
             return "ignoreself host address"
     if not allow_private_bans and is_lan_like(addr):
         return "private/ULA/CGNAT"
@@ -185,12 +212,10 @@ def is_protected(
     resolvers = _resolver_addrs()
     gateways = _gateway_addrs()
     if ban_net is not None:
-        for host in list(resolvers) + list(gateways):
-            try:
-                if ip_address(host) in ban_net:
-                    return "resolver" if host in resolvers else "default gateway"
-            except ValueError:
-                continue
+        if _any_inside(ban_net, resolvers):
+            return "resolver"
+        if _any_inside(ban_net, gateways):
+            return "default gateway"
     else:
         if str(addr) in resolvers:
             return "resolver"
@@ -205,6 +230,17 @@ def is_protected(
                 return f"never_ban {cidr}"
         except ValueError:
             continue
-    if protect_ssh_sessions and ban_net is None and str(addr) in _ssh_session_ips():
-        return "active ssh session"
+    if protect_ssh_sessions:
+        try:
+            port = int(ssh_port)
+        except (TypeError, ValueError):
+            port = 22
+        if port < 1 or port > 65535:
+            port = 22
+        sessions = _ssh_session_ips(ssh_port=port)
+        if ban_net is not None:
+            if _any_inside(ban_net, sessions):
+                return "active ssh session"
+        elif str(addr) in sessions:
+            return "active ssh session"
     return None

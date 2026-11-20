@@ -62,6 +62,24 @@ Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
 - Web `allow`/`mute`/`quiet` validate IP/TTL/bool; helper rejects IPv4-mapped/broadcast/`240/4` and float TTL; concurrent accept + pkcheck timeout.
 - `home health` distinguishes empty ssh source vs no access; non-zero exit when `ok:false`; state dir 0700 / secrets 0600; configure EOF → `--non-interactive`.
 
+## [1.4.1] - 2026-11-20
+
+### Security
+
+- Agent clean shutdown requires an HMAC-signed stop marker; forged `si_pid` (e.g. via `rt_sigqueueinfo`) no longer retires the phoenix watchdog silently.
+- Trusted pidfiles verify starttime/exe (agent/watchdog) or python `sysspectogram … guard` cmdline + uid (guard); foreign live PIDs are rejected.
+- eBPF kill events carry sender `comm`/`ppid` at probe time; known setuid helpers (`sudo`/`su`/…) demote to low; X11/ICE/`/run/user` openat noise filtered.
+
+### Fixed
+
+- Root-watch exact-exe allowlist, baseline persist across respawn, cron/timer demotion, cmdline-aware dedup.
+- Protect sessions/host inside v6 prefix bans; ban6 interval migration; helper v6 prefixes.
+- Auth log injection rate-limit; login code rotation DoS; flow port-scan inbound + v4-mapped unwrap.
+- Python root-watch fallback when agent is down; viz alert window samples; `backend_from_config` everywhere.
+- Absolute `--guard-pidfile` / `--watchdog-pidfile`; phoenix respawn keeps them and `--root-allow`.
+- Day0 GitHub API 403 messaging; refuse empty `--ip` for seed-never-ban.
+- CI builds the agent with the eBPF object and `clippy -D warnings`.
+
 ## [1.4.0] - 2026-10-28
 
 Full notes: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md).

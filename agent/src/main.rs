@@ -38,14 +38,15 @@ use crate::fim::FimWatcher;
 use crate::metrics::MetricsSampler;
 use crate::phoenix::{run_watchdog_loop, write_pidfile};
 use crate::procwatch::ProcWatcher;
-use crate::protect::{
-    check_install, check_unit_file, emit_clean_shutdown, resolve_exe,
-};
+use crate::protect::{check_install, check_unit_file, emit_clean_shutdown, resolve_exe};
 use crate::rules::RuleEngine;
 use crate::watch::PathWatcher;
 
 #[derive(Parser, Debug)]
-#[command(name = "sysspectogram-agent", about = "SysSpectogram integrity + metrics sensor")]
+#[command(
+    name = "sysspectogram-agent",
+    about = "SysSpectogram integrity + metrics sensor"
+)]
 struct Args {
     /// userspace = /proc+inotify (default). ebpf = Aya when clang, BTF and root are available; otherwise falls back to userspace.
     #[arg(long, default_value = "userspace")]
@@ -145,12 +146,19 @@ struct Args {
     hmac_secret: PathBuf,
 
     /// Optional systemd unit path to permission-check.
-    #[arg(long, default_value = "/etc/systemd/system/sysspectogram-agent.service")]
+    #[arg(
+        long,
+        default_value = "/etc/systemd/system/sysspectogram-agent.service"
+    )]
     unit_file: PathBuf,
 
     /// Guard pidfile — if guard dies unexpectedly, send TG via curl.
     #[arg(long, default_value = "state/guard.pid")]
     guard_pidfile: PathBuf,
+
+    /// Phoenix watchdog pidfile (absolutized at start).
+    #[arg(long, default_value = "state/watchdog.pid")]
+    watchdog_pidfile: PathBuf,
 
     /// Root-only Telegram notify env for agent→TG bypass.
     #[arg(long, default_value = "/etc/sysspectogram/agent-notify.env")]
@@ -174,9 +182,10 @@ struct Args {
 }
 
 fn main() {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    absolutize_runtime_paths(&mut args);
     let root_watch = args.root_watch && !args.no_root_watch;
-    let host = args.host_id.unwrap_or_else(hostname_fallback);
+    let host = args.host_id.take().unwrap_or_else(hostname_fallback);
 
     if args.role == "watchdog" {
         let running = Arc::new(AtomicBool::new(true));
@@ -188,10 +197,14 @@ fn main() {
             .watch_pidfile
             .clone()
             .unwrap_or_else(|| PathBuf::from("state/agent.pid"));
-        let exe = args
-            .respawn_exe
-            .clone()
-            .unwrap_or_else(resolve_exe);
+        let exe = args.respawn_exe.clone().unwrap_or_else(resolve_exe);
+        let hmac = crate::auth::load_secret(&args.hmac_secret);
+        if hmac.is_none() {
+            eprintln!(
+                "[sysspectogram-watch] HMAC secret missing — stop markers will not retire the watchdog ({})",
+                args.hmac_secret.display()
+            );
+        }
         eprintln!(
             "[sysspectogram-watch] watching {} respawn={}",
             watch.display(),
@@ -205,6 +218,7 @@ fn main() {
             &running,
             args.jsonl.as_deref(),
             &host,
+            hmac.as_deref(),
         );
         return;
     }
@@ -264,7 +278,7 @@ fn main() {
                 &host,
                 &args.guard_pidfile,
                 &args.pidfile,
-                &PathBuf::from("state/watchdog.pid"),
+                &args.watchdog_pidfile,
             ) {
                 Ok(h) => {
                     eprintln!("[sysspectogram-agent] eBPF attached: execve+openat+module+kill");
@@ -272,7 +286,9 @@ fn main() {
                     effective_mode = "ebpf";
                 }
                 Err(e) => {
-                    eprintln!("[sysspectogram-agent] eBPF attach failed: {e} — falling back to userspace");
+                    eprintln!(
+                        "[sysspectogram-agent] eBPF attach failed: {e} — falling back to userspace"
+                    );
                     effective_mode = "userspace";
                 }
             }
@@ -302,7 +318,7 @@ fn main() {
             args.hmac_secret.display()
         );
     }
-    let emitter = match Emitter::new(&args.socket, args.jsonl.as_deref(), hmac) {
+    let emitter = match Emitter::new(&args.socket, args.jsonl.as_deref(), hmac.clone()) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("[sysspectogram-agent] emit init failed: {e}");
@@ -323,49 +339,27 @@ fn main() {
         clean_exit.clone(),
         exit_sig.clone(),
         exit_sender.clone(),
-        host.clone(),
-        args.jsonl.clone(),
-        args.socket.clone(),
-        args.notify_env.clone(),
-        args.guard_pidfile.clone(),
-        args.pidfile.clone(),
-        PathBuf::from("state/watchdog.pid"),
+        KillWitnessCtx {
+            host: host.clone(),
+            jsonl: args.jsonl.clone(),
+            socket: args.socket.clone(),
+            notify_env: args.notify_env.clone(),
+            clean_marker: args.clean_marker.clone(),
+            hmac_secret: hmac.clone(),
+        },
     );
 
     if args.phoenix {
-        let mut respawn_args: Vec<String> = vec![
-            "--mode".into(),
-            args.mode.clone(),
-            "--socket".into(),
-            args.socket.display().to_string(),
-            "--pidfile".into(),
-            args.pidfile.display().to_string(),
-            "--host-id".into(),
-            host.clone(),
-        ];
-            respawn_args.push("--hmac-secret".into());
-            respawn_args.push(args.hmac_secret.display().to_string());
-            respawn_args.push("--clean-marker".into());
-            respawn_args.push(args.clean_marker.display().to_string());
-            if let Some(ref j) = args.jsonl {
-                respawn_args.push("--jsonl".into());
-                respawn_args.push(j.display().to_string());
-            }
-            if root_watch {
-                respawn_args.push("--root-watch".into());
-                respawn_args.push("--root-learn-sec".into());
-                respawn_args.push(args.root_learn_sec.to_string());
-            } else {
-                respawn_args.push("--no-root-watch".into());
-            }
+        let respawn_args = build_phoenix_respawn_args(&args, &host, root_watch);
         match crate::phoenix::spawn_watchdog(
             &exe,
             &respawn_args,
             &args.pidfile,
-            &PathBuf::from("state/watchdog.pid"),
+            &args.watchdog_pidfile,
             args.jsonl.as_deref(),
             &host,
             &args.clean_marker,
+            &args.hmac_secret,
         ) {
             Ok(_) => eprintln!("[sysspectogram-agent] phoenix watchdog spawned"),
             Err(e) => eprintln!("[sysspectogram-agent] phoenix spawn failed: {e}"),
@@ -376,7 +370,7 @@ fn main() {
     watcher.set_trust_pidfiles(
         args.guard_pidfile.clone(),
         args.pidfile.clone(),
-        PathBuf::from("state/watchdog.pid"),
+        args.watchdog_pidfile.clone(),
     );
     if !args.root_allow.is_empty() {
         watcher.set_extra_allows(args.root_allow.clone());
@@ -591,17 +585,26 @@ fn main() {
                 eprintln!("[sysspectogram-agent] root baseline: {e}");
             }
         }
-        if let Err(e) = crate::phoenix::write_clean_marker(&args.clean_marker) {
-            eprintln!("[sysspectogram-agent] clean marker: {e}");
+        match hmac.as_deref() {
+            Some(secret) => {
+                if let Err(e) = crate::phoenix::write_signed_stop_marker(
+                    &args.clean_marker,
+                    secret,
+                    std::process::id(),
+                ) {
+                    eprintln!("[sysspectogram-agent] signed stop marker: {e}");
+                }
+            }
+            None => {
+                eprintln!(
+                    "[sysspectogram-agent] clean exit without HMAC secret — leaving any pre-signed marker in place"
+                );
+            }
         }
         let sig = exit_sig.load(Ordering::SeqCst);
         let sender = exit_sender.load(Ordering::SeqCst);
-        if let Err(e) = emit_clean_shutdown(
-            &emitter,
-            &host,
-            crate::trust::signal_name(sig),
-            sender,
-        ) {
+        if let Err(e) = emit_clean_shutdown(&emitter, &host, crate::trust::signal_name(sig), sender)
+        {
             eprintln!("[sysspectogram-agent] clean_shutdown emit: {e}");
         }
         eprintln!("[sysspectogram-agent] CLEAN_SHUTDOWN");
@@ -628,16 +631,25 @@ fn arm_watchdog_signals(running: Arc<AtomicBool>) {
                 return;
             }
         };
-        for info in &mut signals {
+        if let Some(info) = signals.into_iter().next() {
             let si_pid = si_pid_of(&info);
+            let si_code = si_code_label(&info);
             eprintln!(
-                "[sysspectogram-watch] signal {} from si_pid={si_pid} — stop loop, no clean marker",
+                "[sysspectogram-watch] signal {} si_pid={si_pid} si_code={si_code} — stop loop, no clean marker",
                 info.signal
             );
             running.store(false, Ordering::SeqCst);
-            break;
         }
     });
+}
+
+struct KillWitnessCtx {
+    host: String,
+    jsonl: Option<PathBuf>,
+    socket: PathBuf,
+    notify_env: PathBuf,
+    clean_marker: PathBuf,
+    hmac_secret: Option<String>,
 }
 
 fn arm_agent_signals(
@@ -645,13 +657,7 @@ fn arm_agent_signals(
     clean_exit: Arc<AtomicBool>,
     exit_sig: Arc<AtomicU32>,
     exit_sender: Arc<AtomicU32>,
-    host: String,
-    jsonl: Option<PathBuf>,
-    socket: PathBuf,
-    notify_env: PathBuf,
-    guard_pidfile: PathBuf,
-    agent_pidfile: PathBuf,
-    watchdog_pidfile: PathBuf,
+    ctx: KillWitnessCtx,
 ) {
     std::thread::spawn(move || {
         let mut signals = match SignalsInfo::<WithOrigin>::new([SIGINT, SIGTERM, SIGHUP]) {
@@ -661,42 +667,171 @@ fn arm_agent_signals(
                 return;
             }
         };
-        for info in &mut signals {
+        if let Some(info) = signals.into_iter().next() {
             let sig = u32::try_from(info.signal).unwrap_or(0);
             let sender = si_pid_of(&info);
+            let si_code = si_code_of(&info);
             exit_sig.store(sig, Ordering::SeqCst);
             exit_sender.store(sender, Ordering::SeqCst);
-            let tree = crate::trust::collect_trusted_tree(&[
-                guard_pidfile.as_path(),
-                agent_pidfile.as_path(),
-                watchdog_pidfile.as_path(),
-            ]);
-            let trusted =
-                sender == 1 || crate::trust::pid_trusted_or_descendant(sender, &tree);
-            if trusted {
+            // si_pid / si_code / trusted tree never set clean_exit. Only a
+            // pre-existing HMAC stop marker does (systemd/guard writes it, then signals).
+            let signature_present = crate::phoenix::stop_marker_valid(
+                &ctx.clean_marker,
+                ctx.hmac_secret.as_deref(),
+                std::process::id(),
+            );
+            let clean = crate::phoenix::decide_clean_shutdown(
+                info.signal,
+                sender,
+                si_code,
+                false,
+                signature_present,
+            );
+            eprintln!(
+                "[sysspectogram-agent] signal {sig} si_pid={sender} si_code={} ({si_code}) clean={clean}",
+                si_code_label(&info)
+            );
+            if clean {
                 clean_exit.store(true, Ordering::SeqCst);
-            } else if let Some(alert) = untrusted_signal_alert(sig, sender, &host) {
+            } else if let Some(alert) = lethal_signal_alert(sig, sender, &ctx.host) {
                 // Jsonl is mandatory when configured. Socket and TG are best-effort
-                // and must not take a lock the main loop holds.
-                if let Some(ref path) = jsonl {
+                // and must not take a lock the main loop holds. Never write a marker here.
+                if let Some(ref path) = ctx.jsonl {
                     if let Err(e) = crate::emit::append_jsonl(path, &alert) {
                         eprintln!("[sysspectogram-agent] kill witness jsonl: {e}");
                     }
                 }
                 if let Ok(line) = serde_json::to_string(&alert) {
-                    crate::emit::best_effort_socket(&socket, &line);
+                    crate::emit::best_effort_socket(&ctx.socket, &line);
                 }
-                if let Err(e) = crate::tg_notify::send_critical(&alert.message, &notify_env) {
+                if let Err(e) = crate::tg_notify::send_critical(&alert.message, &ctx.notify_env) {
                     eprintln!("[sysspectogram-agent] kill witness TG: {e}");
                 }
             }
             running.store(false, Ordering::SeqCst);
-            break;
         }
     });
 }
 
-fn untrusted_signal_alert(sig: u32, sender: u32, host: &str) -> Option<crate::types::AgentAlert> {
+fn absolutize_runtime_paths(args: &mut Args) {
+    let paths = [
+        &mut args.socket,
+        &mut args.pidfile,
+        &mut args.watchdog_pidfile,
+        &mut args.guard_pidfile,
+        &mut args.clean_marker,
+        &mut args.hmac_secret,
+        &mut args.notify_env,
+        &mut args.fim_baseline,
+        &mut args.kirk_baseline,
+        &mut args.unit_file,
+    ];
+    for p in paths {
+        *p = absolutize_path(p.clone());
+    }
+    if let Some(ref mut j) = args.jsonl {
+        *j = absolutize_path(j.clone());
+    }
+    if let Some(ref mut w) = args.watch_pidfile {
+        *w = absolutize_path(w.clone());
+    }
+    if let Some(ref mut r) = args.respawn_exe {
+        *r = absolutize_path(r.clone());
+    }
+    eprintln!(
+        "[sysspectogram-agent] pidfiles agent={} watchdog={} guard={}",
+        args.pidfile.display(),
+        args.watchdog_pidfile.display(),
+        args.guard_pidfile.display()
+    );
+}
+
+fn absolutize_path(p: PathBuf) -> PathBuf {
+    std::path::absolute(&p).unwrap_or(p)
+}
+
+/// Build phoenix respawn argv so the twin keeps the same trust/config surface.
+fn build_phoenix_respawn_args(args: &Args, host: &str, root_watch: bool) -> Vec<String> {
+    let mut respawn_args: Vec<String> = vec![
+        "--mode".into(),
+        args.mode.clone(),
+        "--socket".into(),
+        args.socket.display().to_string(),
+        "--pidfile".into(),
+        args.pidfile.display().to_string(),
+        "--watchdog-pidfile".into(),
+        args.watchdog_pidfile.display().to_string(),
+        "--guard-pidfile".into(),
+        args.guard_pidfile.display().to_string(),
+        "--host-id".into(),
+        host.to_string(),
+        "--hmac-secret".into(),
+        args.hmac_secret.display().to_string(),
+        "--clean-marker".into(),
+        args.clean_marker.display().to_string(),
+        "--metrics-ms".into(),
+        args.metrics_ms.to_string(),
+    ];
+    if let Some(ref j) = args.jsonl {
+        respawn_args.push("--jsonl".into());
+        respawn_args.push(j.display().to_string());
+    }
+    if root_watch {
+        respawn_args.push("--root-watch".into());
+        respawn_args.push("--root-learn-sec".into());
+        respawn_args.push(args.root_learn_sec.to_string());
+    } else {
+        respawn_args.push("--no-root-watch".into());
+    }
+    for allow in &args.root_allow {
+        respawn_args.push("--root-allow".into());
+        respawn_args.push(allow.clone());
+    }
+    if args.fim {
+        respawn_args.push("--fim".into());
+        respawn_args.push("--fim-interval-sec".into());
+        respawn_args.push(args.fim_interval_sec.to_string());
+        respawn_args.push("--fim-baseline".into());
+        respawn_args.push(args.fim_baseline.display().to_string());
+    }
+    respawn_args
+}
+
+/// Best-effort Linux `si_code`. `SI_USER`=0, `SI_QUEUE`=-1, `SI_KERNEL`=0x80.
+/// Unknown causes stay 0 and are still not a clean shutdown.
+fn si_code_of(origin: &signal_hook::iterator::exfiltrator::origin::Origin) -> i32 {
+    use signal_hook::low_level::siginfo::{Cause, Sent};
+    match origin.cause {
+        Cause::Kernel => 0x80,
+        Cause::Sent(sent) => match sent {
+            Sent::User => 0,
+            Sent::Queue => -1,
+            Sent::TKill => -6,
+            Sent::MesgQ => -3,
+            _ => 0,
+        },
+        Cause::Unknown => 0,
+        _ => 0,
+    }
+}
+
+fn si_code_label(origin: &signal_hook::iterator::exfiltrator::origin::Origin) -> String {
+    use signal_hook::low_level::siginfo::{Cause, Sent};
+    match origin.cause {
+        Cause::Kernel => "SI_KERNEL".to_string(),
+        Cause::Sent(sent) => match sent {
+            Sent::User => "SI_USER".to_string(),
+            Sent::Queue => "SI_QUEUE".to_string(),
+            Sent::TKill => "SI_TKILL".to_string(),
+            Sent::MesgQ => "SI_MESGQ".to_string(),
+            _ => format!("SI_SENT({sent:?})"),
+        },
+        Cause::Unknown => "SI_UNKNOWN".to_string(),
+        other => format!("si_code({other:?})"),
+    }
+}
+
+fn lethal_signal_alert(sig: u32, sender: u32, host: &str) -> Option<crate::types::AgentAlert> {
     let targets = crate::trust::KillTargets {
         self_pid: std::process::id(),
         watchdog_pid: None,
@@ -718,4 +853,56 @@ fn hostname_fallback() -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".into())
+}
+
+#[cfg(test)]
+mod respawn_args_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn phoenix_respawn_keeps_guard_pidfile_and_root_allow() {
+        let args = Args::parse_from([
+            "sysspectogram-agent",
+            "--mode",
+            "userspace",
+            "--socket",
+            "/tmp/a.sock",
+            "--pidfile",
+            "/run/agent.pid",
+            "--watchdog-pidfile",
+            "/run/sysspectogram/watchdog.pid",
+            "--guard-pidfile",
+            "/var/lib/sysspectogram/state/guard.pid",
+            "--hmac-secret",
+            "/run/hmac",
+            "--clean-marker",
+            "/run/clean",
+            "--root-allow",
+            "/usr/sbin/cron",
+            "--metrics-ms",
+            "2500",
+        ]);
+        let out = build_phoenix_respawn_args(&args, "host-x", true);
+        assert!(out.windows(2).any(|w| w[0] == "--guard-pidfile"
+            && w[1] == "/var/lib/sysspectogram/state/guard.pid"));
+        assert!(out.windows(2).any(|w| w[0] == "--watchdog-pidfile"
+            && w[1] == "/run/sysspectogram/watchdog.pid"));
+        assert!(out.windows(2).any(|w| w[0] == "--root-allow" && w[1] == "/usr/sbin/cron"));
+        assert!(out.windows(2).any(|w| w[0] == "--metrics-ms" && w[1] == "2500"));
+        assert!(out.iter().any(|a| a == "--root-watch"));
+    }
+
+    #[test]
+    fn watchdog_pidfile_arg_parsed() {
+        let args = Args::parse_from([
+            "sysspectogram-agent",
+            "--watchdog-pidfile",
+            "/run/sysspectogram/watchdog.pid",
+        ]);
+        assert_eq!(
+            args.watchdog_pidfile,
+            PathBuf::from("/run/sysspectogram/watchdog.pid")
+        );
+    }
 }

@@ -45,7 +45,6 @@ def write_secret_file(path: Path, text: str) -> None:
         raise OSError(f"refusing to write through symlink: {path}")
     body = text if (not text or text.endswith("\n")) else text + "\n"
     data = body.encode("utf-8")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     tmp = Path(tmp_name)
     try:

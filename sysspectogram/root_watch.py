@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass, field
@@ -120,7 +122,7 @@ class RootWatchState:
     baseline: set[int | tuple[int, int, str]] = field(default_factory=set)
     baseline_until: float = 0.0
     alerted: dict[int, int] = field(default_factory=dict)
-    dedup: dict[tuple[str, str], float] = field(default_factory=dict)
+    dedup: dict[tuple[str, str, str], float] = field(default_factory=dict)
     trusted_pids: set[int] = field(default_factory=set)
     baseline_path: Path = field(default_factory=lambda: Path("state/root_baseline.py.json"))
     last_baseline_save: float = 0.0
@@ -153,6 +155,29 @@ def _read_ppid(pid: int) -> int | None:
             except (IndexError, ValueError):
                 return None
     return None
+
+
+_CRON_PARENT_EXES = frozenset(
+    {
+        "/usr/sbin/cron",
+        "/usr/bin/cron",
+        "/usr/sbin/crond",
+        "/usr/bin/crond",
+    }
+)
+
+_SYSTEMD_UNIT_DIRS = (
+    Path("/etc/systemd/system"),
+    Path("/usr/lib/systemd/system"),
+    Path("/run/systemd/system"),
+)
+
+
+def _read_cgroup(pid: int) -> str:
+    try:
+        return Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _read_comm(pid: int) -> str:
@@ -246,13 +271,61 @@ def soft_allow(comm: str, exe: str, allow_comms: set[str]) -> bool:
     return False
 
 
-def root_severity(exe: str, parent_comm: str) -> str:
-    if exe.startswith(("/tmp/", "/dev/shm/", "/var/tmp/")):
+def _service_unit_from_cgroup(cgroup: str) -> str | None:
+    for line in (cgroup or "").splitlines():
+        path = line.rsplit(":", 2)[-1]
+        match = re.search(r"/([^/]+)\.service(?:/|$)", path)
+        if match:
+            return f"{match.group(1)}.service"
+    return None
+
+
+def _timer_backed_systemd_service(cgroup: str) -> bool:
+    unit = _service_unit_from_cgroup(cgroup)
+    if not unit:
+        return False
+    stem = unit[: -len(".service")]
+    timer = f"{stem}.timer"
+    return any((root / timer).exists() for root in _SYSTEMD_UNIT_DIRS)
+
+
+def _parent_is_cron(parent_exe: str) -> bool:
+    if not parent_exe:
+        return False
+    path = _canonical_exe(parent_exe)
+    return path in _CRON_PARENT_EXES or any(
+        path == _canonical_exe(item) for item in _CRON_PARENT_EXES
+    )
+
+
+def _cmdline_dedup_tag(cmdline: str) -> str:
+    digest = hashlib.sha1(cmdline.encode("utf-8", errors="replace")).hexdigest()
+    return digest[:12]
+
+
+def root_severity(
+    exe: str,
+    parent_comm: str = "",
+    *,
+    parent_exe: str = "",
+    cgroup: str = "",
+) -> str:
+    """``medium`` only for system-dir exes under real cron or timer-backed systemd."""
+    _ = parent_comm  # comm alone is not trusted for demotion
+    if not exe or _exe_denied(exe):
         return "critical"
-    parent = (parent_comm or "").lower()
-    if parent in {"systemd", "cron", "crond"} or parent.startswith(("systemd", "cron")):
+    path = _canonical_exe(exe)
+    if _exe_denied(path) or not path.startswith(_SYSTEM_EXE_PREFIXES):
+        return "critical"
+    if _parent_is_cron(parent_exe):
+        return "medium"
+    if _timer_backed_systemd_service(cgroup):
         return "medium"
     return "critical"
+
+
+def _root_alert_dedup_key(comm: str, exe: str, cmdline: str) -> tuple[str, str, str]:
+    return (comm, exe or "?", _cmdline_dedup_tag(cmdline))
 
 
 def list_root_pids_cheap() -> set[int]:
@@ -526,13 +599,23 @@ def poll_new_root(
         if soft_allow(p.comm, p.exe, allow):
             _remember_root(state, pid, starttime, p.exe)
             continue
-        p.severity = root_severity(p.exe, p.parent_comm)
-        key = (p.comm, p.exe or "?")
-        prev = state.dedup.get(key)
-        if prev is not None and now - prev < _DEDUP_SEC:
-            state.alerted[pid] = -1 if starttime is None else starttime
-            continue
-        state.dedup[key] = now
+        ppid = _read_ppid(pid) or 0
+        parent_exe = _read_exe(ppid) if ppid > 1 else ""
+        cgroup = _read_cgroup(pid)
+        p.severity = root_severity(
+            p.exe,
+            p.parent_comm,
+            parent_exe=parent_exe,
+            cgroup=cgroup,
+        )
+        deny_path = not p.exe or _exe_denied(p.exe) or _exe_denied(_canonical_exe(p.exe))
+        if not deny_path:
+            key = _root_alert_dedup_key(p.comm, p.exe, p.cmdline)
+            prev = state.dedup.get(key)
+            if prev is not None and now - prev < _DEDUP_SEC:
+                state.alerted[pid] = -1 if starttime is None else starttime
+                continue
+            state.dedup[key] = now
         unexpected.append(p)
         state.alerted[pid] = -1 if starttime is None else starttime
     _maybe_save_root_baseline(state, now)
