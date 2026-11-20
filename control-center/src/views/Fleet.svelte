@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { t } from '../lib/i18n';
   import { ui } from '../lib/state.svelte';
   import FleetPairWizard from './FleetPairWizard.svelte';
+  import FleetHostDetail from './FleetHostDetail.svelte';
 
   type Host = {
     id: string;
@@ -45,6 +47,7 @@
   let showWizard = $state(false);
   let incidentItems = $state<IncidentRow[]>([]);
   let volumetricHint = $state(false);
+  let detailHost = $state<Host | null>(null);
 
   let confirmOpen = $state(false);
   let confirmKind = $state<'ATTACK' | 'BAN' | 'UNLOCK' | 'RELEASE' | 'EDGE'>('ATTACK');
@@ -345,6 +348,13 @@
 </script>
 
 <section class="fleet">
+  {#if detailHost}
+    <FleetHostDetail
+      hostId={detailHost.id}
+      hostLabel={detailHost.label}
+      onBack={() => (detailHost = null)}
+    />
+  {:else}
   <header>
     <h1>{ru() ? 'Флот' : 'Fleet'}</h1>
     <p class="lede">
@@ -486,6 +496,7 @@
           <th>deps</th>
           <th>token</th>
           <th>pin</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -498,6 +509,11 @@
             <td class="mono">{(dependents[h.id] || []).join(', ') || '—'}</td>
             <td>{hostHasToken(h) ? (ru() ? 'да' : 'yes') : (ru() ? 'нет' : 'no')}</td>
             <td>{(h.host_key_line || '').trim() ? (ru() ? 'да' : 'yes') : (ru() ? 'нет' : 'no')}</td>
+            <td>
+              <button type="button" class="ghost" onclick={() => (detailHost = h)}>
+                {t('fleet.hostOpen')}
+              </button>
+            </td>
           </tr>
         {/each}
       </tbody>
@@ -562,6 +578,7 @@
       ? 'Документация: docs/FLEET.md · pin: fleet pin-host · mutating ops нужен host_key_line'
       : 'Docs: docs/FLEET.md · pin: fleet pin-host · mutating ops need host_key_line'}
   </p>
+  {/if}
 </section>
 
 {#if confirmOpen}

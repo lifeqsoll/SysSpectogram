@@ -212,7 +212,9 @@ impl Stack {
         if home_bin.is_dir() {
             path_env = format!("{}:{path_env}", home_bin.display());
         }
-        let spawned = Command::new(paths::python())
+        let mut spawn_cmd = Command::new(paths::python());
+        paths::scrub_host_python_env(&mut spawn_cmd);
+        let spawned = spawn_cmd
             .args(&args)
             .current_dir(&root)
             .env("SYSSPECTOGRAM_HOME", &root)

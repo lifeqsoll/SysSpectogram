@@ -16,7 +16,8 @@ Full design notes: [superpowers/plans/2026-10-24-remote-cc-ssh.md](superpowers/p
 |-------|--------|------|
 | Per-VPS bot | Each server `.env` | Status, charts, kill, `/unlock` for **that** host |
 | Fleet bot | Admin hub `FLEET_TELEGRAM_*` | Pick host / ALL → status, unlock-locked, Attack L2/L3, Release |
-| Control Center Fleet | Admin PC | Same ops + host table |
+| Control Center Fleet | Admin PC | Same ops + host table; **Open** host → Charts/Status/Incidents over SSH |
+| Active host picker | Admin PC sidebar | Charts / Live / Overview / Alerts read **local** or a fleet VPS (no local bot token needed) |
 | `fleet.json` | `~/.config/sysspectogram/fleet.json` (0600) | Hosts, primary, groups, profiles, edges, tokens |
 | Device token | Issued once at pair | Required on control.sock once any device is paired |
 

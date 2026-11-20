@@ -3,7 +3,7 @@
   import { api, errorText, RANGES, type Point, type Range } from '../lib/api';
   import { t } from '../lib/i18n';
   import { fmtBytes, fmtNum } from '../lib/format';
-  import { ui } from '../lib/state.svelte';
+  import { isRemoteHost, ui } from '../lib/state.svelte';
   import { live } from '../lib/live.svelte';
   import Chart from '../lib/Chart.svelte';
 
@@ -38,10 +38,14 @@
     gpu: 'charts.groupGpu',
   };
 
+  /** When embedded in FleetHostDetail, parent already set activeHostId. */
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let available = $state<string[]>([]);
   let series = $state<Record<string, Point[]>>({});
   let error = $state<string | null>(null);
   let loading = $state(false);
+  let loadGen = 0;
 
   const visible = $derived(
     METRICS.filter((m) => {
@@ -71,39 +75,74 @@
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
   }
 
+  function seriesUnchanged(next: Record<string, Point[]>): boolean {
+    const keys = Object.keys(next);
+    if (keys.length !== Object.keys(series).length) return false;
+    for (const k of keys) {
+      const a = series[k] ?? [];
+      const b = next[k] ?? [];
+      if (a.length !== b.length) return false;
+      if (a.length && b.length && (a[a.length - 1].ts !== b[b.length - 1].ts || a[0].ts !== b[0].ts)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   async function loadAll(r: Range): Promise<void> {
+    const gen = ++loadGen;
     loading = true;
     error = null;
     try {
-      const next: Record<string, Point[]> = {};
-      for (const m of visible.length ? visible : METRICS) {
-        try {
-          next[m.id] = await api.timeseriesQuery(m.id, r);
-        } catch {
-          next[m.id] = [];
-        }
-      }
-      series = next;
+      const ids = (visible.length ? visible : METRICS).map((m) => m.id);
+      const next = await api.timeseriesQueryMany(ids, r);
+      if (gen !== loadGen) return;
+      if (!seriesUnchanged(next)) series = next;
     } catch (e) {
+      if (gen !== loadGen) return;
       error = errorText(e);
     } finally {
-      loading = false;
+      if (gen === loadGen) loading = false;
     }
   }
 
-  onMount(async () => {
+  async function refreshMetrics(): Promise<void> {
     try {
       available = await api.timeseriesMetrics();
     } catch {
       available = [];
     }
+  }
+
+  onMount(() => {
+    void refreshMetrics();
   });
 
   $effect(() => {
     const r = ui.range;
-    const period = r === '1h' ? 5000 : 60000;
-    loadAll(r);
-    const timer = setInterval(() => loadAll(r), period);
+    const epoch = ui.hostEpoch;
+    const host = ui.activeHostId;
+    void epoch;
+    void host;
+    void refreshMetrics();
+
+    const onCharts =
+      embedded || ui.section === 'charts' || (ui.section === 'fleet' && embedded);
+    if (!onCharts && !embedded) {
+      return;
+    }
+
+    const visibleDoc =
+      typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    if (!visibleDoc) return;
+
+    const period = isRemoteHost() ? (r === '1h' ? 15000 : 60000) : r === '1h' ? 5000 : 60000;
+    void loadAll(r);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (!embedded && ui.section !== 'charts' && ui.section !== 'fleet') return;
+      void loadAll(r);
+    }, period);
     return () => clearInterval(timer);
   });
 
@@ -111,8 +150,13 @@
   const anyHistory = $derived(Object.values(series).some((pts) => pts.length > 0));
 </script>
 
-<h1>{t('charts.title')}</h1>
-<p class="lead">{t('charts.lead')}</p>
+{#if !embedded}
+  <h1>{t('charts.title')}</h1>
+  <p class="lead">{t('charts.lead')}</p>
+  {#if isRemoteHost()}
+    <div class="notice" style="margin-bottom: 12px">{t('host.remoteHint')} · <span class="mono">{ui.activeHostId}</span></div>
+  {/if}
+{/if}
 
 <div class="row" style="margin-bottom: 14px">
   <div class="segmented">

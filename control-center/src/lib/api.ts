@@ -2,6 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { SettingsExport } from './settings';
+import { ui } from './state.svelte';
 
 export type Range = '1h' | '6h' | '12h' | '24h' | '7d' | '30d';
 export const RANGES: Range[] = ['1h', '6h', '12h', '24h', '7d', '30d'];
@@ -24,7 +25,26 @@ export const fleet = {
     invoke<Record<string, unknown>>('fleet_mark_fp', { scope, label }),
   ban: (scope: string, ip: string, ttl?: number) =>
     invoke<Record<string, unknown>>('fleet_ban', { scope, ip, ttl }),
+  timeseriesMetrics: (scope: string) =>
+    invoke<{ ok: boolean; metrics?: string[]; error?: string }>('fleet_timeseries_metrics', {
+      scope,
+    }),
+  timeseriesLatest: (scope: string, metrics?: string) =>
+    invoke<{ ok: boolean; latest?: Latest[]; error?: string }>('fleet_timeseries_latest', {
+      scope,
+      metrics: metrics ?? null,
+    }),
+  timeseriesQuery: (scope: string, metrics: string, range?: Range) =>
+    invoke<{ ok: boolean; series?: Record<string, Point[]>; error?: string }>(
+      'fleet_timeseries_query',
+      { scope, metrics, range: range ?? null },
+    ),
 };
+
+function activeHostScope(): string | null {
+  const id = ui.activeHostId;
+  return id && id !== 'local' ? id : null;
+}
 
 export interface AppInfo {
   version: string;
@@ -164,10 +184,56 @@ export const api = {
   settingsApply: (changes: Record<string, unknown>) => invoke<unknown>('settings_apply', { changes }),
   settingsRollback: () => invoke<unknown>('settings_rollback'),
   installBundle: (version: string, source: string) => invoke<unknown>('install_bundle', { version, source }),
-  timeseriesQuery: (metric: string, range: Range) => invoke<Point[]>('timeseries_query', { metric, range }),
-  timeseriesMetrics: () => invoke<string[]>('timeseries_metrics'),
-  incidentsList: (limit = 500) => invoke<Incident[]>('incidents_list', { limit }),
-  incidentsRefresh: (limit = 500) => invoke<Incident[]>('incidents_refresh', { limit }),
+  timeseriesQuery: async (metric: string, range: Range): Promise<Point[]> => {
+    const scope = activeHostScope();
+    if (!scope) return invoke<Point[]>('timeseries_query', { metric, range });
+    const res = await fleet.timeseriesQuery(scope, metric, range);
+    if (!res.ok) throw new Error(res.error || 'fleet timeseries query failed');
+    return res.series?.[metric] ?? [];
+  },
+  timeseriesQueryMany: async (
+    metrics: string[],
+    range: Range,
+  ): Promise<Record<string, Point[]>> => {
+    const scope = activeHostScope();
+    if (!scope) {
+      return invoke<Record<string, Point[]>>('timeseries_query_many', { metrics, range });
+    }
+    const res = await fleet.timeseriesQuery(scope, metrics.join(','), range);
+    if (!res.ok) throw new Error(res.error || 'fleet timeseries query failed');
+    return res.series ?? {};
+  },
+  timeseriesMetrics: async (): Promise<string[]> => {
+    const scope = activeHostScope();
+    if (!scope) return invoke<string[]>('timeseries_metrics');
+    const res = await fleet.timeseriesMetrics(scope);
+    if (!res.ok) throw new Error(res.error || 'fleet timeseries metrics failed');
+    return res.metrics ?? [];
+  },
+  timeseriesLatest: async (metrics?: string[]): Promise<Latest[]> => {
+    const scope = activeHostScope();
+    if (!scope) {
+      return invoke<Latest[]>('timeseries_latest', { metrics: metrics ?? null });
+    }
+    const res = await fleet.timeseriesLatest(
+      scope,
+      metrics && metrics.length ? metrics.join(',') : undefined,
+    );
+    if (!res.ok) throw new Error(res.error || 'fleet timeseries latest failed');
+    return res.latest ?? [];
+  },
+  incidentsList: async (limit = 500): Promise<Incident[]> => {
+    const scope = activeHostScope();
+    if (!scope) return invoke<Incident[]>('incidents_list', { limit });
+    const res = await fleet.incidents(scope, limit);
+    const items = (res.items as Incident[] | undefined) ?? [];
+    return items;
+  },
+  incidentsRefresh: async (limit = 500): Promise<Incident[]> => {
+    const scope = activeHostScope();
+    if (!scope) return invoke<Incident[]>('incidents_refresh', { limit });
+    return api.incidentsList(limit);
+  },
   incidentSpectrogram: (id: string) => invoke<ArrayBuffer>('incident_spectrogram', { id }),
   unlockCode: () => invoke<string | null>('unlock_code'),
   incidentReport: (id: string, format: 'html' | 'md') => invoke<string>('incident_report', { id, format }),

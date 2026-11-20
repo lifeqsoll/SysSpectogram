@@ -22,6 +22,7 @@
     }
   }
   import Icon from './lib/Icon.svelte';
+  import HostPicker from './lib/HostPicker.svelte';
   import brandMark from './assets/brand-mark.svg?raw';
   import Home from './views/Home.svelte';
   import Fleet from './views/Fleet.svelte';
@@ -42,6 +43,7 @@
   import Install from './views/Install.svelte';
   import Logs from './views/Logs.svelte';
   import About from './views/About.svelte';
+  import { isRemoteHost } from './lib/state.svelte';
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const VIEWS: Record<string, any> = {
@@ -154,6 +156,7 @@
           <div class="sub">{t('app.subtitleSimple')}</div>
         </div>
       </div>
+      <HostPicker />
       <nav aria-label="Sections">
         {#if ui.fleetHubOnly}
           {#each HUB_SECTIONS as s (s)}
@@ -186,6 +189,9 @@
       </div>
     </aside>
     <main>
+      {#if isRemoteHost() && (ui.section === 'home' || ui.section === 'install' || ui.section === 'lab')}
+        <div class="notice" style="margin: 12px 16px 0">{t('host.remoteHint')}</div>
+      {/if}
       <View />
     </main>
   </div>

@@ -63,6 +63,15 @@ pub fn query(path: &Path, metric: &str, range: &str, now: f64) -> Result<Vec<Poi
     }
     let conn = open(path)?;
     let start = (now - secs) as i64;
+    query_with_conn(&conn, table, metric, start)
+}
+
+fn query_with_conn(
+    conn: &Connection,
+    table: &str,
+    metric: &str,
+    start: i64,
+) -> Result<Vec<Point>, String> {
     let map = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Point> {
         Ok(Point {
             ts: row.get::<_, i64>(0)? as f64,
@@ -73,7 +82,8 @@ pub fn query(path: &Path, metric: &str, range: &str, now: f64) -> Result<Vec<Poi
         })
     };
     let sql = if table == "raw" {
-        "SELECT ts, value, value, value, 1 FROM raw WHERE metric = ?1 AND ts >= ?2 ORDER BY ts".to_string()
+        "SELECT ts, value, value, value, 1 FROM raw WHERE metric = ?1 AND ts >= ?2 ORDER BY ts"
+            .to_string()
     } else {
         format!("SELECT ts, avg, min, max, n FROM {table} WHERE metric = ?1 AND ts >= ?2 ORDER BY ts")
     };
@@ -82,6 +92,30 @@ pub fn query(path: &Path, metric: &str, range: &str, now: f64) -> Result<Vec<Poi
         .query_map(params![metric, start], map)
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+}
+
+/// One SQLite open for many metrics (Charts poll path).
+pub fn query_many(
+    path: &Path,
+    metrics: &[String],
+    range: &str,
+    now: f64,
+) -> Result<std::collections::HashMap<String, Vec<Point>>, String> {
+    let table = table_for(range).ok_or_else(|| format!("unknown range {range:?}"))?;
+    let secs = range_seconds(range).ok_or_else(|| format!("unknown range {range:?}"))?;
+    let mut out = std::collections::HashMap::new();
+    if !path.exists() {
+        for m in metrics {
+            out.insert(m.clone(), Vec::new());
+        }
+        return Ok(out);
+    }
+    let conn = open(path)?;
+    let start = (now - secs) as i64;
+    for m in metrics {
+        out.insert(m.clone(), query_with_conn(&conn, table, m, start)?);
+    }
+    Ok(out)
 }
 
 pub fn latest(path: &Path, metrics: &[&str]) -> Result<Vec<Latest>, String> {

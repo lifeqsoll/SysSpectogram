@@ -221,6 +221,26 @@ class TimeseriesStore:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def latest(self, metrics: list[str] | None = None) -> list[dict[str, float | str]]:
+        """Latest raw sample per metric (for live / fleet hub)."""
+        names = list(metrics) if metrics else self.metrics()
+        out: list[dict[str, float | str]] = []
+        with self._lock:
+            for name in names:
+                row = self._db.execute(
+                    "SELECT ts, value FROM raw WHERE metric = ? ORDER BY ts DESC LIMIT 1",
+                    (name,),
+                ).fetchone()
+                if row is None:
+                    continue
+                out.append({"metric": name, "ts": float(row[0]), "value": float(row[1])})
+        return out
+
+    def query_many(
+        self, metrics: list[str], range_name: str, now: float | None = None
+    ) -> dict[str, list[Point]]:
+        return {m: self.query(m, range_name, now=now) for m in metrics}
+
     def maybe_rollup(self, every_sec: float = 60.0, now: float | None = None) -> bool:
         now = time.time() if now is None else float(now)
         if now - self._last_rollup < every_sec:

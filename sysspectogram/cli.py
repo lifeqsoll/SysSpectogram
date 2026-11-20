@@ -2051,6 +2051,9 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
         mark_false_positive,
         release,
         status_many,
+        timeseries_latest,
+        timeseries_metrics,
+        timeseries_query_many,
         unlock_locked,
         warmup_remote,
     )
@@ -2340,6 +2343,49 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
             )
         )
         return 0
+    if action == "timeseries-metrics":
+        print(
+            json.dumps(
+                timeseries_metrics(store, scope, identity=identity),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if action == "timeseries-latest":
+        print(
+            json.dumps(
+                timeseries_latest(
+                    store,
+                    scope,
+                    metrics=str(getattr(args, "metrics", "") or ""),
+                    identity=identity,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if action == "timeseries-query":
+        metrics = str(getattr(args, "metrics", "") or "")
+        if not metrics.strip():
+            print(json.dumps({"ok": False, "error": "--metrics required"}))
+            return 2
+        range_name = str(getattr(args, "range_name", None) or "1h")
+        print(
+            json.dumps(
+                timeseries_query_many(
+                    store,
+                    scope,
+                    metrics=metrics,
+                    range_name=range_name,
+                    identity=identity,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
     if action == "mark-fp":
         print(
             json.dumps(
@@ -2522,16 +2568,48 @@ def _cmd_timeseries(args: argparse.Namespace) -> int:
 
     from sysspectogram.timeseries.store import TimeseriesStore
 
-
     path = Path(args.path) if args.path else state_root() / "state" / "timeseries.sqlite"
+    action = getattr(args, "timeseries_action", "query")
     store = TimeseriesStore(path)
     try:
+        if action == "metrics":
+            print(_json.dumps(store.metrics()))
+            return 0
+        if action == "latest":
+            names = [
+                x.strip()
+                for x in str(getattr(args, "metrics", "") or "").split(",")
+                if x.strip()
+            ]
+            print(_json.dumps(store.latest(names or None)))
+            return 0
+        if action == "query-many":
+            names = [
+                x.strip()
+                for x in str(getattr(args, "metrics", "") or "").split(",")
+                if x.strip()
+            ]
+            if not names:
+                print(_json.dumps({"ok": False, "error": "--metrics required"}))
+                return 2
+            range_name = str(getattr(args, "range_name", None) or "1h")
+            packed = store.query_many(names, range_name)
+            out = {
+                m: [
+                    {"ts": p.ts, "avg": p.avg, "min": p.min, "max": p.max, "n": p.n}
+                    for p in pts
+                ]
+                for m, pts in packed.items()
+            }
+            print(_json.dumps(out))
+            return 0
+        # query (single metric)
         points = store.query(args.metric, args.range_name)
+        rows = [{"ts": p.ts, "avg": p.avg, "min": p.min, "max": p.max, "n": p.n} for p in points]
+        print(_json.dumps(rows))
+        return 0
     finally:
         store.close()
-    rows = [{"ts": p.ts, "avg": p.avg, "min": p.min, "max": p.max, "n": p.n} for p in points]
-    print(_json.dumps(rows))
-    return 0
 
 
 def _cmd_labels(args: argparse.Namespace) -> int:
@@ -3046,6 +3124,27 @@ def build_parser() -> argparse.ArgumentParser:
     ts_q.add_argument("--range", dest="range_name", default="1h", choices=["1h", "6h", "12h", "24h", "7d", "30d"])
     ts_q.add_argument("--path", default=None)
     ts_q.set_defaults(func=_cmd_timeseries)
+    ts_m = ts_sub.add_parser("metrics", help="list metric names (JSON)")
+    ts_m.add_argument("--path", default=None)
+    ts_m.set_defaults(func=_cmd_timeseries)
+    ts_l = ts_sub.add_parser("latest", help="latest raw sample(s) (JSON)")
+    ts_l.add_argument(
+        "--metrics",
+        default="",
+        help="comma-separated metric ids (default: all in store)",
+    )
+    ts_l.add_argument("--path", default=None)
+    ts_l.set_defaults(func=_cmd_timeseries)
+    ts_qm = ts_sub.add_parser("query-many", help="batch query metrics (JSON object)")
+    ts_qm.add_argument("--metrics", required=True, help="comma-separated metric ids")
+    ts_qm.add_argument(
+        "--range",
+        dest="range_name",
+        default="1h",
+        choices=["1h", "6h", "12h", "24h", "7d", "30d"],
+    )
+    ts_qm.add_argument("--path", default=None)
+    ts_qm.set_defaults(func=_cmd_timeseries)
 
     kk = sub.add_parser("kirk", help="kernel integrity trust probe (IMA/SB/TPM)")
     kk_sub = kk.add_subparsers(dest="kirk_action", required=True)
@@ -3385,6 +3484,9 @@ def build_parser() -> argparse.ArgumentParser:
         ("mark-fp", "mark host ML false positive on scope"),
         ("ban", "ban an IP on every host in scope"),
         ("tg", "run fleet Telegram bot (hub)"),
+        ("timeseries-metrics", "list remote timeseries metrics (single host scope)"),
+        ("timeseries-latest", "latest remote samples (single host scope)"),
+        ("timeseries-query", "batch remote timeseries query (single host scope)"),
     ):
         fp = fleet_sub.add_parser(fname, help=fhelp)
         fp.add_argument("--scope", default="all", help="host id | all | group:id")
@@ -3400,6 +3502,15 @@ def build_parser() -> argparse.ArgumentParser:
             fp.add_argument("--limit", type=int, default=40)
         if fname == "mark-fp":
             fp.add_argument("--label", default="host_fp")
+        if fname in ("timeseries-latest", "timeseries-query"):
+            fp.add_argument("--metrics", default="", help="comma-separated metric ids")
+        if fname == "timeseries-query":
+            fp.add_argument(
+                "--range",
+                dest="range_name",
+                default="1h",
+                choices=["1h", "6h", "12h", "24h", "7d", "30d"],
+            )
         if fname in ("unlock-locked", "attack", "release", "ban"):
             fp.add_argument("--yes", action="store_true", help="confirm destructive op (required non-TTY)")
         fp.set_defaults(func=_cmd_fleet)

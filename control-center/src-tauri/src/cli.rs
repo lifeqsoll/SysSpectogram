@@ -14,6 +14,7 @@ fn base_command() -> Command {
     let root = paths::root();
     let mut cmd = Command::new(paths::python());
     // The CLI must see the same state directory as the guard it talks to.
+    paths::scrub_host_python_env(&mut cmd);
     cmd.arg("-m")
         .arg("sysspectogram")
         .current_dir(&root)

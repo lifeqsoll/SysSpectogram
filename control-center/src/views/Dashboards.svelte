@@ -48,13 +48,19 @@
     }
   });
 
-  // Re-query on metric/range change and poll: fast for 1 h, slower for longer ranges.
+  // Re-query on metric/range change; poll only while this section is visible.
   $effect(() => {
     const m = metric;
     const r = ui.range;
+    void ui.hostEpoch;
+    if (ui.section !== 'dashboards') return;
     const period = r === '1h' ? 5000 : 60000;
-    load(m, r);
-    const timer = setInterval(() => load(m, r), period);
+    void load(m, r);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (ui.section !== 'dashboards') return;
+      void load(m, r);
+    }, period);
     return () => clearInterval(timer);
   });
 

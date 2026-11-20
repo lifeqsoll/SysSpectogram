@@ -52,8 +52,28 @@ function storedFleetHubOnly(): boolean {
   }
 }
 
-/** Nav when Fleet hub-only mode is on. */
-export const HUB_SECTIONS = ['fleet', 'settings'] as const;
+/** Nav when Fleet hub-only mode is on (observability + fleet ops). */
+export const HUB_SECTIONS = [
+  'fleet',
+  'charts',
+  'alerts',
+  'overview',
+  'live',
+  'incidents',
+  'settings',
+] as const;
+
+/** `local` = this machine; otherwise a fleet host id. */
+export type ActiveHostId = 'local' | string;
+
+function storedActiveHost(): ActiveHostId {
+  try {
+    const v = localStorage.getItem('sys-active-host');
+    return v && v.trim() ? v.trim() : 'local';
+  } catch {
+    return 'local';
+  }
+}
 
 export const ui = $state({
   lang: storedLang() as Lang,
@@ -62,10 +82,30 @@ export const ui = $state({
   fleetHubOnly: storedFleetHubOnly(),
   section: (storedFleetHubOnly() ? 'fleet' : 'home') as SectionId,
   range: '1h' as Range,
+  /** Which host Charts/Live/Overview read from. */
+  activeHostId: storedActiveHost() as ActiveHostId,
+  /** Bumped when active host changes so views clear series caches. */
+  hostEpoch: 0,
   onboardingDone: true as boolean,
   /** False until stack is ready (dev checkout always ready). */
   bootstrapDone: true as boolean,
 });
+
+export function isRemoteHost(): boolean {
+  return ui.activeHostId !== 'local';
+}
+
+export function setActiveHost(id: ActiveHostId): void {
+  const next = (id || 'local').trim() || 'local';
+  if (next === ui.activeHostId) return;
+  ui.activeHostId = next;
+  ui.hostEpoch += 1;
+  try {
+    localStorage.setItem('sys-active-host', next);
+  } catch {
+    /* ignore */
+  }
+}
 
 export function setFleetHubOnly(on: boolean): void {
   ui.fleetHubOnly = on;

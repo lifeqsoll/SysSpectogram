@@ -337,7 +337,9 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
     // venv + pip install wheel (no heavy torch)
     let venv = root.join(".venv");
     if !venv.join("bin").join("python").is_file() {
-        let st = Command::new("python3")
+        let mut venv_cmd = Command::new(paths::host_python3());
+        paths::scrub_host_python_env(&mut venv_cmd);
+        let st = venv_cmd
             .args(["-m", "venv", venv.to_str().unwrap_or("")])
             .status()
             .map_err(|e| format!("python3 -m venv: {e}"))?;
@@ -348,7 +350,9 @@ pub fn install_stack(tag: &str) -> Result<Value, String> {
     }
     // Prefer `python -m pip` — venv/bin/pip shebang breaks if the tree was moved.
     let py = venv.join("bin").join("python");
-    let st = Command::new(&py)
+    let mut pip_cmd = Command::new(&py);
+    paths::scrub_host_python_env(&mut pip_cmd);
+    let st = pip_cmd
         .args([
             "-m",
             "pip",

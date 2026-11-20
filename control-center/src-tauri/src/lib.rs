@@ -335,7 +335,10 @@ fn bootstrap_preflight() -> Result<Value, String> {
     // Lightweight checks the UI can show before Install stack.
     use std::process::Command;
     let mut checks = Vec::new();
-    let py3 = Command::new("python3")
+    let host_py = crate::paths::host_python3();
+    let mut py3_cmd = Command::new(host_py);
+    crate::paths::scrub_host_python_env(&mut py3_cmd);
+    let py3 = py3_cmd
         .args(["-c", "import sys; print(sys.version.split()[0])"])
         .output();
     match py3 {
@@ -345,9 +348,9 @@ fn bootstrap_preflight() -> Result<Value, String> {
         })),
         _ => checks.push(json!({"id": "python3", "ok": false, "detail": "python3 missing"})),
     }
-    let venv = Command::new("python3")
-        .args(["-c", "import venv"])
-        .status();
+    let mut venv_cmd = Command::new(host_py);
+    crate::paths::scrub_host_python_env(&mut venv_cmd);
+    let venv = venv_cmd.args(["-c", "import venv"]).status();
     checks.push(json!({
         "id": "venv",
         "ok": matches!(venv, Ok(s) if s.success()),
@@ -456,8 +459,60 @@ fn timeseries_query(metric: String, range: String) -> Result<Vec<timeseries::Poi
 }
 
 #[tauri::command]
+fn timeseries_query_many(
+    metrics: Vec<String>,
+    range: String,
+) -> Result<std::collections::HashMap<String, Vec<timeseries::Point>>, String> {
+    timeseries::query_many(&paths::timeseries_db(), &metrics, &range, now_secs())
+}
+
+#[tauri::command]
 fn timeseries_metrics() -> Result<Vec<String>, String> {
     timeseries::metrics(&paths::timeseries_db())
+}
+
+#[tauri::command]
+fn timeseries_latest(metrics: Option<Vec<String>>) -> Result<Vec<timeseries::Latest>, String> {
+    let names: Vec<String> = metrics.unwrap_or_else(|| {
+        LIVE_METRICS.iter().map(|s| (*s).to_string()).collect()
+    });
+    let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+    timeseries::latest(&paths::timeseries_db(), &refs)
+}
+
+#[tauri::command]
+fn fleet_timeseries_metrics(scope: String) -> Result<Value, String> {
+    cli::run_json(&["fleet", "timeseries-metrics", "--scope", scope.as_str()])
+}
+
+#[tauri::command]
+fn fleet_timeseries_latest(scope: String, metrics: Option<String>) -> Result<Value, String> {
+    let mut args = vec!["fleet", "timeseries-latest", "--scope", scope.as_str()];
+    let metrics_owned = metrics.unwrap_or_default();
+    if !metrics_owned.is_empty() {
+        args.push("--metrics");
+        args.push(metrics_owned.as_str());
+    }
+    cli::run_json(&args)
+}
+
+#[tauri::command]
+fn fleet_timeseries_query(
+    scope: String,
+    metrics: String,
+    range: Option<String>,
+) -> Result<Value, String> {
+    let range_s = range.unwrap_or_else(|| "1h".into());
+    cli::run_json(&[
+        "fleet",
+        "timeseries-query",
+        "--scope",
+        scope.as_str(),
+        "--metrics",
+        metrics.as_str(),
+        "--range",
+        range_s.as_str(),
+    ])
 }
 
 #[tauri::command]
@@ -934,7 +989,12 @@ pub fn run() {
             settings_rollback,
             install_bundle,
             timeseries_query,
+            timeseries_query_many,
             timeseries_metrics,
+            timeseries_latest,
+            fleet_timeseries_metrics,
+            fleet_timeseries_latest,
+            fleet_timeseries_query,
             incidents_list,
             incidents_refresh,
             incident_report,

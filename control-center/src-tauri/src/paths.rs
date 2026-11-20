@@ -117,10 +117,32 @@ pub fn reports_dir() -> PathBuf {
     root().join("reports")
 }
 
+/// AppImage runtimes set `PYTHONHOME`/`PYTHONPATH` to the squashfs tree. Host
+/// `/usr/bin/python3` and the friend-home venv then die with
+/// `ModuleNotFoundError: encodings` — preflight shows "python3 missing" and
+/// `stack_ready` stays false even when the stack is already installed.
+pub fn scrub_host_python_env(cmd: &mut std::process::Command) {
+    cmd.env_remove("PYTHONHOME");
+    cmd.env_remove("PYTHONPATH");
+    cmd.env_remove("PYTHONSTARTUP");
+    cmd.env_remove("PYTHONUSERBASE");
+}
+
+/// Prefer a real interpreter on disk so AppImage PATH shadowing cannot win.
+pub fn host_python3() -> &'static str {
+    if Path::new("/usr/bin/python3").is_file() {
+        "/usr/bin/python3"
+    } else {
+        "python3"
+    }
+}
+
 /// Whether the Python package is importable with our resolved interpreter.
 pub fn stack_ready() -> bool {
     let py = python();
-    let status = std::process::Command::new(&py)
+    let mut cmd = std::process::Command::new(&py);
+    scrub_host_python_env(&mut cmd);
+    let status = cmd
         .args(["-c", "import sysspectogram"])
         .env("SYSSPECTOGRAM_HOME", root())
         .stdout(std::process::Stdio::null())

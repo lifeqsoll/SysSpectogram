@@ -309,8 +309,8 @@
   </label>
   <p class="muted" style="margin: 0 0 12px">
     {ui.lang === 'ru'
-      ? 'Навигация: Fleet + Settings. Для админ-ПК с несколькими VPS.'
-      : 'Nav: Fleet + Settings. For admin PC managing many VPS.'}
+      ? 'Навигация: Fleet + Charts/Alerts/Overview + Settings. Данные VPS по SSH.'
+      : 'Nav: Fleet + Charts/Alerts/Overview + Settings. VPS data over SSH.'}
   </p>
   <label class="row">
     <input type="checkbox" checked={ui.advanced} onchange={(e) => setAdvanced((e.currentTarget as HTMLInputElement).checked)} />
