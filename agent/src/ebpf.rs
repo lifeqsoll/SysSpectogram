@@ -224,7 +224,15 @@ mod imp {
                                     );
                                 }
                             }
-                            parse_and_send(page, ev.read, &host, &tx, &trusted);
+                            parse_and_send(
+                                page,
+                                ev.read,
+                                &host,
+                                &tx,
+                                &trusted,
+                                &guard_pf,
+                                &watch_pf,
+                            );
                         }
                         Err(_) => {}
                     }
@@ -246,6 +254,8 @@ mod imp {
         host: &str,
         tx: &mpsc::SyncSender<AgentAlert>,
         trusted: &std::collections::HashSet<u32>,
+        guard_pf: &std::path::Path,
+        watch_pf: &std::path::Path,
     ) {
         let sz = mem::size_of::<ProbeEvent>();
         let data = page.as_ref();
@@ -256,7 +266,7 @@ mod imp {
             }
             let ev =
                 unsafe { std::ptr::read_unaligned(data[off..].as_ptr() as *const ProbeEvent) };
-            if let Some(alert) = event_to_alert(&ev, host, trusted) {
+            if let Some(alert) = event_to_alert(&ev, host, trusted, guard_pf, watch_pf) {
                 let _ = tx.try_send(alert);
             }
         }
@@ -266,6 +276,8 @@ mod imp {
         ev: &ProbeEvent,
         host: &str,
         trusted: &std::collections::HashSet<u32>,
+        guard_pf: &std::path::Path,
+        watch_pf: &std::path::Path,
     ) -> Option<AgentAlert> {
         if ev.kind == KIND_SETUID {
             // Skip if caller already root (noise from daemons)
@@ -292,7 +304,7 @@ mod imp {
             return Some(a);
         }
         if ev.kind == KIND_KILL {
-            return kill_event_to_alert(ev, host, trusted);
+            return kill_event_to_alert(ev, host, trusted, guard_pf, watch_pf);
         }
         let end = ev
             .path
@@ -336,48 +348,42 @@ mod imp {
         ev: &ProbeEvent,
         host: &str,
         trusted: &std::collections::HashSet<u32>,
+        guard_pf: &std::path::Path,
+        watch_pf: &std::path::Path,
     ) -> Option<AgentAlert> {
         let tpid = u32::from_ne_bytes(ev.path[0..4].try_into().ok()?);
         let sig = u32::from_ne_bytes(ev.path[4..8].try_into().ok()?);
-        let self_pid = std::process::id();
-        // Only signals aimed at this agent process.
-        if tpid != self_pid {
-            return None;
-        }
-        let sev = crate::trust::kill_alert_severity(sig)?;
-        // Guard / phoenix / our children probing with kill(pid, 0) or ops signals.
-        if crate::trust::pid_trusted_or_descendant(ev.pid, trusted) {
-            return None;
-        }
-        let sig_name = crate::trust::signal_name(sig);
-        let sender_ppid = crate::trust::read_ppid(ev.pid).unwrap_or(0);
-        let sender_comm = crate::trust::read_comm(ev.pid).unwrap_or_else(|| "?".into());
-        let parent_comm = if sender_ppid > 1 {
-            crate::trust::read_comm(sender_ppid).unwrap_or_else(|| "?".into())
-        } else {
-            "?".into()
+        // Pids are read at event time. The trusted set is already the expanded tree.
+        let targets = crate::trust::KillTargets {
+            self_pid: std::process::id(),
+            watchdog_pid: crate::trust::read_pidfile(watch_pf),
+            guard_pid: crate::trust::read_pidfile(guard_pf),
         };
-        let mut a = AgentAlert::new(
-            "agent_kirk_agent_kill_attempt",
-            sev,
-            format!(
+        let mut a = crate::trust::classify_kill(ev.pid, tpid, sig, &targets, trusted, host)?;
+        let sig_name = crate::trust::signal_name(sig);
+        let sender_ppid = crate::trust::read_ppid(ev.pid);
+        let sender_comm = crate::trust::read_comm(ev.pid);
+        if sender_ppid.is_some() || sender_comm.is_some() {
+            let sender_ppid = sender_ppid.unwrap_or(0);
+            let sender_comm = sender_comm.unwrap_or_else(|| "?".into());
+            let parent_comm = if sender_ppid > 1 {
+                crate::trust::read_comm(sender_ppid).unwrap_or_else(|| "?".into())
+            } else {
+                "?".into()
+            };
+            a.ppid = Some(sender_ppid);
+            a.comm = Some(sender_comm.clone());
+            a.message = format!(
                 "kill/signal toward agent pid={tpid} {sig_name}({sig}) from uid={} \
                  sender_pid={} sender_comm={sender_comm} parent_pid={sender_ppid} \
                  parent_comm={parent_comm}",
                 ev.uid, ev.pid
-            ),
-            host,
-        );
-        a.pid = Some(ev.pid);
-        a.ppid = Some(sender_ppid);
-        a.comm = Some(sender_comm);
-        a.extras = Some(serde_json::json!({
-            "signal": sig,
-            "signal_name": sig_name,
-            "target_pid": tpid,
-            "parent_pid": sender_ppid,
-            "parent_comm": parent_comm,
-        }));
+            );
+            if let Some(serde_json::Value::Object(map)) = a.extras.as_mut() {
+                map.insert("parent_pid".into(), serde_json::json!(sender_ppid));
+                map.insert("parent_comm".into(), serde_json::json!(parent_comm));
+            }
+        }
         Some(a)
     }
 

@@ -73,12 +73,19 @@ pub fn check_unit_file(path: &Path) -> Vec<String> {
     warnings
 }
 
-/// Emit CLEAN_SHUTDOWN so guard does not treat systemd stop as Dead-man.
-pub fn emit_clean_shutdown(emitter: &Emitter, host_id: &str) -> io::Result<()> {
+/// Emit CLEAN_SHUTDOWN so guard does not treat a trusted stop as Dead-man.
+pub fn emit_clean_shutdown(
+    emitter: &Emitter,
+    host_id: &str,
+    signal_name: &str,
+    sender_pid: u32,
+) -> io::Result<()> {
     let alert = AgentAlert::new(
         "agent_kirk_clean_shutdown",
         "info",
-        "CLEAN_SHUTDOWN (SIGTERM) — intentional stop, not Dead-man",
+        format!(
+            "CLEAN_SHUTDOWN ({signal_name}) from pid={sender_pid} — intentional stop, not Dead-man"
+        ),
         host_id,
     );
     emitter.emit_alert(&alert)

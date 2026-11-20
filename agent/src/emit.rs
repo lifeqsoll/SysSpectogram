@@ -79,3 +79,26 @@ impl Emitter {
         Ok(())
     }
 }
+
+/// Append one alert line. Does not touch the datagram socket or any lock the main loop holds.
+pub fn append_jsonl(path: &Path, alert: &AgentAlert) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(path)?;
+    use std::io::Write;
+    let line = serde_json::to_string(alert).map_err(io::Error::other)?;
+    writeln!(f, "{line}")?;
+    Ok(())
+}
+
+/// Best-effort datagram write. Failure is ignored.
+pub fn best_effort_socket(socket: &Path, line: &str) {
+    let Ok(sock) = UnixDatagram::unbound() else {
+        return;
+    };
+    let bytes = format!("{line}\n");
+    let _ = sock.send_to(bytes.as_bytes(), socket);
+}

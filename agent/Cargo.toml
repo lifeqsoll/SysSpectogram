@@ -15,18 +15,18 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
-ctrlc = "3"
 notify = "7"
 hmac = "0.12"
 sha2 = "0.10"
+libc = "0.2"
+signal-hook = { version = "0.3", features = ["iterator", "extended-siginfo"] }
 aya = { version = "0.13", optional = true }
-libc = { version = "0.2", optional = true }
 bytes = { version = "1", optional = true }
 sysspectogram-common = { path = "common", features = ["user"], optional = true }
 
 [features]
 default = ["ebpf"]
-ebpf = ["dep:aya", "dep:libc", "dep:bytes", "dep:sysspectogram-common"]
+ebpf = ["dep:aya", "dep:bytes", "dep:sysspectogram-common"]
 
 [profile.release]
 lto = true

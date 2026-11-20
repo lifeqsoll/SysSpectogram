@@ -21,9 +21,13 @@ mod watch;
 
 use clap::Parser;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
+use signal_hook::iterator::exfiltrator::WithOrigin;
+use signal_hook::iterator::SignalsInfo;
 
 use crate::aggregate::Aggregator;
 use crate::baseline::{BaselineMonitor, SymbolBaseline, DEFAULT_WATCH_SYMBOLS};
@@ -176,14 +180,9 @@ fn main() {
 
     if args.role == "watchdog" {
         let running = Arc::new(AtomicBool::new(true));
-        {
-            let r = running.clone();
-            let marker = args.clean_marker.clone();
-            let _ = ctrlc::set_handler(move || {
-                let _ = std::fs::File::create(&marker);
-                r.store(false, Ordering::SeqCst);
-            });
-        }
+        // Signals stop the loop only. Creating the clean marker here would forge
+        // a clean agent shutdown and retire the watchdog.
+        arm_watchdog_signals(running.clone());
         let _ = write_pidfile(&args.pidfile, std::process::id());
         let watch = args
             .watch_pidfile
@@ -204,6 +203,8 @@ fn main() {
             &exe,
             &args.respawn_arg,
             &running,
+            args.jsonl.as_deref(),
+            &host,
         );
         return;
     }
@@ -315,14 +316,21 @@ fn main() {
 
     let running = Arc::new(AtomicBool::new(true));
     let clean_exit = Arc::new(AtomicBool::new(false));
-    {
-        let r = running.clone();
-        let c = clean_exit.clone();
-        let _ = ctrlc::set_handler(move || {
-            c.store(true, Ordering::SeqCst);
-            r.store(false, Ordering::SeqCst);
-        });
-    }
+    let exit_sig = Arc::new(AtomicU32::new(libc::SIGTERM as u32));
+    let exit_sender = Arc::new(AtomicU32::new(0));
+    arm_agent_signals(
+        running.clone(),
+        clean_exit.clone(),
+        exit_sig.clone(),
+        exit_sender.clone(),
+        host.clone(),
+        args.jsonl.clone(),
+        args.socket.clone(),
+        args.notify_env.clone(),
+        args.guard_pidfile.clone(),
+        args.pidfile.clone(),
+        PathBuf::from("state/watchdog.pid"),
+    );
 
     if args.phoenix {
         let mut respawn_args: Vec<String> = vec![
@@ -337,6 +345,8 @@ fn main() {
         ];
             respawn_args.push("--hmac-secret".into());
             respawn_args.push(args.hmac_secret.display().to_string());
+            respawn_args.push("--clean-marker".into());
+            respawn_args.push(args.clean_marker.display().to_string());
             if let Some(ref j) = args.jsonl {
                 respawn_args.push("--jsonl".into());
                 respawn_args.push(j.display().to_string());
@@ -353,6 +363,9 @@ fn main() {
             &respawn_args,
             &args.pidfile,
             &PathBuf::from("state/watchdog.pid"),
+            args.jsonl.as_deref(),
+            &host,
+            &args.clean_marker,
         ) {
             Ok(_) => eprintln!("[sysspectogram-agent] phoenix watchdog spawned"),
             Err(e) => eprintln!("[sysspectogram-agent] phoenix spawn failed: {e}"),
@@ -573,14 +586,130 @@ fn main() {
     }
 
     if clean_exit.load(Ordering::SeqCst) {
-        let _ = std::fs::File::create(&args.clean_marker);
-        if let Err(e) = emit_clean_shutdown(&emitter, &host) {
+        if root_watch {
+            if let Err(e) = watcher.save_root_baseline() {
+                eprintln!("[sysspectogram-agent] root baseline: {e}");
+            }
+        }
+        if let Err(e) = crate::phoenix::write_clean_marker(&args.clean_marker) {
+            eprintln!("[sysspectogram-agent] clean marker: {e}");
+        }
+        let sig = exit_sig.load(Ordering::SeqCst);
+        let sender = exit_sender.load(Ordering::SeqCst);
+        if let Err(e) = emit_clean_shutdown(
+            &emitter,
+            &host,
+            crate::trust::signal_name(sig),
+            sender,
+        ) {
             eprintln!("[sysspectogram-agent] clean_shutdown emit: {e}");
         }
         eprintln!("[sysspectogram-agent] CLEAN_SHUTDOWN");
     }
 
     eprintln!("[sysspectogram-agent] stopped");
+}
+
+/// `Origin.process.pid` is siginfo `si_pid` (`sighook_signal_pid` reads `info->si_pid`).
+/// Missing process → 0.
+fn si_pid_of(origin: &signal_hook::iterator::exfiltrator::origin::Origin) -> u32 {
+    match origin.process {
+        Some(process) if process.pid > 0 => process.pid as u32,
+        _ => 0,
+    }
+}
+
+fn arm_watchdog_signals(running: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let mut signals = match SignalsInfo::<WithOrigin>::new([SIGINT, SIGTERM, SIGHUP]) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[sysspectogram-watch] signal hook failed: {e}");
+                return;
+            }
+        };
+        for info in &mut signals {
+            let si_pid = si_pid_of(&info);
+            eprintln!(
+                "[sysspectogram-watch] signal {} from si_pid={si_pid} — stop loop, no clean marker",
+                info.signal
+            );
+            running.store(false, Ordering::SeqCst);
+            break;
+        }
+    });
+}
+
+fn arm_agent_signals(
+    running: Arc<AtomicBool>,
+    clean_exit: Arc<AtomicBool>,
+    exit_sig: Arc<AtomicU32>,
+    exit_sender: Arc<AtomicU32>,
+    host: String,
+    jsonl: Option<PathBuf>,
+    socket: PathBuf,
+    notify_env: PathBuf,
+    guard_pidfile: PathBuf,
+    agent_pidfile: PathBuf,
+    watchdog_pidfile: PathBuf,
+) {
+    std::thread::spawn(move || {
+        let mut signals = match SignalsInfo::<WithOrigin>::new([SIGINT, SIGTERM, SIGHUP]) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[sysspectogram-agent] signal hook failed: {e}");
+                return;
+            }
+        };
+        for info in &mut signals {
+            let sig = u32::try_from(info.signal).unwrap_or(0);
+            let sender = si_pid_of(&info);
+            exit_sig.store(sig, Ordering::SeqCst);
+            exit_sender.store(sender, Ordering::SeqCst);
+            let tree = crate::trust::collect_trusted_tree(&[
+                guard_pidfile.as_path(),
+                agent_pidfile.as_path(),
+                watchdog_pidfile.as_path(),
+            ]);
+            let trusted =
+                sender == 1 || crate::trust::pid_trusted_or_descendant(sender, &tree);
+            if trusted {
+                clean_exit.store(true, Ordering::SeqCst);
+            } else if let Some(alert) = untrusted_signal_alert(sig, sender, &host) {
+                // Jsonl is mandatory when configured. Socket and TG are best-effort
+                // and must not take a lock the main loop holds.
+                if let Some(ref path) = jsonl {
+                    if let Err(e) = crate::emit::append_jsonl(path, &alert) {
+                        eprintln!("[sysspectogram-agent] kill witness jsonl: {e}");
+                    }
+                }
+                if let Ok(line) = serde_json::to_string(&alert) {
+                    crate::emit::best_effort_socket(&socket, &line);
+                }
+                if let Err(e) = crate::tg_notify::send_critical(&alert.message, &notify_env) {
+                    eprintln!("[sysspectogram-agent] kill witness TG: {e}");
+                }
+            }
+            running.store(false, Ordering::SeqCst);
+            break;
+        }
+    });
+}
+
+fn untrusted_signal_alert(sig: u32, sender: u32, host: &str) -> Option<crate::types::AgentAlert> {
+    let targets = crate::trust::KillTargets {
+        self_pid: std::process::id(),
+        watchdog_pid: None,
+        guard_pid: None,
+    };
+    crate::trust::classify_kill(
+        sender,
+        std::process::id(),
+        sig,
+        &targets,
+        &std::collections::HashSet::new(),
+        host,
+    )
 }
 
 fn hostname_fallback() -> String {
