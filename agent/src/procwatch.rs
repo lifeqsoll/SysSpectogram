@@ -1,11 +1,12 @@
+use crate::trust::{collect_trusted_tree, pid_trusted_or_descendant, read_comm};
 use crate::types::{AgentAlert, EventKind, RawEvent};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Soft-allow root daemons (comm prefix or exact). Learned quietly after baseline.
+/// Soft-allow root daemons (comm prefix/exact or known system exe basenames).
 const DEFAULT_ALLOW_COMMS: &[&str] = &[
     "systemd",
     "kthreadd",
@@ -24,7 +25,43 @@ const DEFAULT_ALLOW_COMMS: &[&str] = &[
     "nftables",
     "sysspectogram-a",
     "sysspectogram-agent",
+    // Safe system utilities (comm); exe path also checked when present.
+    "journalctl",
+    "systemctl",
+    "nft",
+    "ip",
+    "ss",
+    "pacman",
+    "sudo", // only the sudo process itself — children still checked
+    "logrotate",
+    "man-db",
+    "mandb",
+    "updatedb",
+    "fstrim",
 ];
+
+/// Absolute exe prefixes / basenames that are soft-allowed when they match.
+const DEFAULT_ALLOW_EXES: &[&str] = &[
+    "/usr/bin/journalctl",
+    "/usr/bin/systemctl",
+    "/usr/sbin/nft",
+    "/usr/bin/nft",
+    "/usr/sbin/ip",
+    "/usr/bin/ip",
+    "/usr/bin/ss",
+    "/usr/bin/pacman",
+    "/usr/bin/sudo",
+    "/usr/sbin/logrotate",
+    "/usr/bin/logrotate",
+    "/usr/bin/mandb",
+    "/usr/bin/updatedb",
+    "/usr/sbin/fstrim",
+    "/usr/bin/fstrim",
+    "/usr/local/sbin/sysspectogram-agent",
+    "/usr/sbin/sysspectogram-agent",
+];
+
+const ROOT_DEDUP_SEC: u64 = 600;
 
 pub struct ProcWatcher {
     known_pids: HashSet<u32>,
@@ -39,6 +76,14 @@ pub struct ProcWatcher {
     root_baseline: HashSet<u32>,
     root_alerted: HashSet<u32>,
     pending_root: Vec<RootHit>,
+    /// Dedup identical (comm, exe) unexpected-root alerts.
+    root_dedup: HashMap<(String, String), Instant>,
+    extra_allows: Vec<String>,
+    guard_pidfile: PathBuf,
+    agent_pidfile: PathBuf,
+    watchdog_pidfile: PathBuf,
+    trusted_cache: HashSet<u32>,
+    trusted_refresh: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +92,8 @@ struct RootHit {
     comm: String,
     path: Option<String>,
     cmdline: String,
+    severity: String,
+    parent_comm: String,
 }
 
 impl ProcWatcher {
@@ -68,7 +115,41 @@ impl ProcWatcher {
             root_baseline: HashSet::new(),
             root_alerted: HashSet::new(),
             pending_root: Vec::new(),
+            root_dedup: HashMap::new(),
+            extra_allows: Vec::new(),
+            guard_pidfile: PathBuf::from("state/guard.pid"),
+            agent_pidfile: PathBuf::from("state/agent.pid"),
+            watchdog_pidfile: PathBuf::from("state/watchdog.pid"),
+            trusted_cache: HashSet::new(),
+            trusted_refresh: Instant::now()
+                .checked_sub(Duration::from_secs(3600))
+                .unwrap_or_else(Instant::now),
         }
+    }
+
+    pub fn set_trust_pidfiles(
+        &mut self,
+        guard: PathBuf,
+        agent: PathBuf,
+        watchdog: PathBuf,
+    ) {
+        self.guard_pidfile = guard;
+        self.agent_pidfile = agent;
+        self.watchdog_pidfile = watchdog;
+        self.refresh_trusted();
+    }
+
+    pub fn set_extra_allows(&mut self, allows: Vec<String>) {
+        self.extra_allows = allows;
+    }
+
+    fn refresh_trusted(&mut self) {
+        self.trusted_cache = collect_trusted_tree(&[
+            self.guard_pidfile.as_path(),
+            self.agent_pidfile.as_path(),
+            self.watchdog_pidfile.as_path(),
+        ]);
+        self.trusted_refresh = Instant::now();
     }
 
     pub fn poll(&mut self) -> io::Result<Vec<RawEvent>> {
@@ -76,6 +157,10 @@ impl ProcWatcher {
         let mut current = HashSet::new();
         let mut root_now = HashSet::new();
         let learning = Instant::now() < self.root_learn_until;
+
+        if self.trusted_refresh.elapsed() >= Duration::from_secs(2) {
+            self.refresh_trusted();
+        }
 
         let proc = Path::new("/proc");
         for ent in fs::read_dir(proc)? {
@@ -126,8 +211,16 @@ impl ProcWatcher {
         }
 
         if self.root_enabled && !learning {
+            let now = Instant::now();
+            self.root_dedup
+                .retain(|_, ts| now.duration_since(*ts) < Duration::from_secs(ROOT_DEDUP_SEC));
             for pid in &root_now {
                 if self.root_baseline.contains(pid) || self.root_alerted.contains(pid) {
+                    continue;
+                }
+                // Spawned by guard / agent / phoenix — not unexpected.
+                if pid_trusted_or_descendant(*pid, &self.trusted_cache) {
+                    self.root_baseline.insert(*pid);
                     continue;
                 }
                 let st = read_status(*pid);
@@ -141,16 +234,34 @@ impl ProcWatcher {
                     self.root_baseline.insert(*pid);
                     continue;
                 }
-                if soft_allow(&comm) {
+                if soft_allow(&comm, exe.as_deref(), &self.extra_allows) {
                     self.root_baseline.insert(*pid);
                     continue;
                 }
+                let parent_comm = st
+                    .as_ref()
+                    .and_then(|s| read_comm(s.ppid))
+                    .unwrap_or_else(|| "?".into());
+                let severity = root_severity(exe.as_deref(), &parent_comm);
+                let dedup_key = (
+                    comm.clone(),
+                    exe.clone().unwrap_or_else(|| "?".into()),
+                );
+                if let Some(prev) = self.root_dedup.get(&dedup_key) {
+                    if now.duration_since(*prev) < Duration::from_secs(ROOT_DEDUP_SEC) {
+                        self.root_alerted.insert(*pid);
+                        continue;
+                    }
+                }
+                self.root_dedup.insert(dedup_key, now);
                 self.root_alerted.insert(*pid);
                 self.pending_root.push(RootHit {
                     pid: *pid,
                     comm,
                     path: exe,
                     cmdline: read_cmdline(*pid),
+                    severity: severity.to_string(),
+                    parent_comm,
                 });
             }
         }
@@ -191,10 +302,10 @@ impl ProcWatcher {
                 let path = h.path.clone().unwrap_or_else(|| "?".into());
                 let mut a = AgentAlert::new(
                     "agent_unexpected_root",
-                    "critical",
+                    &h.severity,
                     format!(
-                        "New root process pid={} comm={} exe={}",
-                        h.pid, h.comm, path
+                        "New root process pid={} comm={} exe={} parent={}",
+                        h.pid, h.comm, path, h.parent_comm
                     ),
                     host_id,
                 );
@@ -204,6 +315,7 @@ impl ProcWatcher {
                 a.extras = Some(serde_json::json!({
                     "cmdline": h.cmdline,
                     "source": "procwatch",
+                    "parent_comm": h.parent_comm,
                 }));
                 a
             })
@@ -287,10 +399,104 @@ struct StatusInfo {
     euid: u32,
 }
 
-fn soft_allow(comm: &str) -> bool {
-    DEFAULT_ALLOW_COMMS
+fn soft_allow(comm: &str, exe: Option<&str>, extra: &[String]) -> bool {
+    if DEFAULT_ALLOW_COMMS
         .iter()
         .any(|a| comm == *a || comm.starts_with(a))
+    {
+        // Prefer exe confirmation when we have a path for utility names.
+        if let Some(path) = exe {
+            if is_utility_comm(comm) && !exe_allowed(path, extra) {
+                // comm forged — refuse soft-allow without matching exe
+                return false;
+            }
+        }
+        return true;
+    }
+    if let Some(path) = exe {
+        if exe_allowed(path, extra) {
+            return true;
+        }
+    }
+    for a in extra {
+        let a = a.trim();
+        if a.is_empty() {
+            continue;
+        }
+        if a.starts_with('/') {
+            if let Some(path) = exe {
+                if path == a || path.ends_with(a) {
+                    return true;
+                }
+            }
+        } else if comm == a || comm.starts_with(a) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_utility_comm(comm: &str) -> bool {
+    matches!(
+        comm,
+        "journalctl"
+            | "systemctl"
+            | "nft"
+            | "ip"
+            | "ss"
+            | "pacman"
+            | "sudo"
+            | "logrotate"
+            | "man-db"
+            | "mandb"
+            | "updatedb"
+            | "fstrim"
+    )
+}
+
+fn exe_allowed(path: &str, extra: &[String]) -> bool {
+    if DEFAULT_ALLOW_EXES.iter().any(|p| path == *p) {
+        return true;
+    }
+    // basename match under standard bin dirs
+    let base = path.rsplit('/').next().unwrap_or("");
+    if DEFAULT_ALLOW_COMMS.iter().any(|c| *c == base)
+        && (path.starts_with("/usr/bin/")
+            || path.starts_with("/usr/sbin/")
+            || path.starts_with("/bin/")
+            || path.starts_with("/sbin/"))
+    {
+        return true;
+    }
+    for a in extra {
+        let a = a.trim();
+        if a.starts_with('/') && (path == a || Path::new(path).ends_with(a.trim_start_matches('/')))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// cron/systemd timer children → medium; unknown /tmp binaries stay critical.
+fn root_severity(exe: Option<&str>, parent_comm: &str) -> &'static str {
+    let timerish = parent_comm == "systemd"
+        || parent_comm.starts_with("systemd")
+        || parent_comm == "cron"
+        || parent_comm == "crond"
+        || parent_comm.starts_with("cron");
+    if let Some(path) = exe {
+        if path.starts_with("/tmp/")
+            || path.starts_with("/dev/shm/")
+            || path.starts_with("/var/tmp/")
+        {
+            return "critical";
+        }
+    }
+    if timerish {
+        return "medium";
+    }
+    "critical"
 }
 
 fn read_status(pid: u32) -> Option<StatusInfo> {
@@ -367,10 +573,39 @@ mod tests {
 
     #[test]
     fn soft_allow_matches_prefixes() {
-        assert!(soft_allow("sshd"));
-        assert!(soft_allow("kworker/0:1"));
-        assert!(soft_allow("sysspectogram-agent"));
-        assert!(!soft_allow("evil-rootkit"));
+        assert!(soft_allow("sshd", Some("/usr/sbin/sshd"), &[]));
+        assert!(soft_allow("kworker/0:1", None, &[]));
+        assert!(soft_allow(
+            "sysspectogram-agent",
+            Some("/usr/local/sbin/sysspectogram-agent"),
+            &[]
+        ));
+        assert!(!soft_allow("evil-rootkit", Some("/tmp/evil"), &[]));
+    }
+
+    #[test]
+    fn soft_allow_utilities_need_real_exe() {
+        assert!(soft_allow("journalctl", Some("/usr/bin/journalctl"), &[]));
+        // forged comm without matching exe
+        assert!(!soft_allow("journalctl", Some("/tmp/journalctl"), &[]));
+        assert!(soft_allow("sudo", Some("/usr/bin/sudo"), &[]));
+    }
+
+    #[test]
+    fn soft_allow_extra_from_config() {
+        assert!(soft_allow(
+            "mydaemon",
+            Some("/opt/mydaemon"),
+            &["/opt/mydaemon".into()]
+        ));
+        assert!(soft_allow("customd", None, &["customd".into()]));
+    }
+
+    #[test]
+    fn tmp_binary_stays_critical() {
+        assert_eq!(root_severity(Some("/tmp/evil"), "systemd"), "critical");
+        assert_eq!(root_severity(Some("/usr/bin/something"), "cron"), "medium");
+        assert_eq!(root_severity(Some("/usr/bin/something"), "bash"), "critical");
     }
 
     #[test]
@@ -378,5 +613,17 @@ mod tests {
         let mut w = ProcWatcher::with_root(false, 1);
         let _ = w.poll();
         assert!(w.drain_root_alerts("t").is_empty());
+    }
+
+    #[test]
+    fn trusted_descendant_skipped() {
+        let mut w = ProcWatcher::with_root(true, 1);
+        // Force end of learn
+        w.root_learn_until = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        w.refresh_trusted();
+        let me = std::process::id();
+        assert!(pid_trusted_or_descendant(me, &w.trusted_cache));
     }
 }

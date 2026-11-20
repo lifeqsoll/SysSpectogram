@@ -513,6 +513,33 @@ class TelegramBot:
         ]
         if msg and str(msg) != info.what:
             lines.append(f"{detail_l}: {msg}")
+        extras = getattr(alert, "extras", None) or {}
+        if not isinstance(extras, dict):
+            extras = {}
+        # Kill-attempt: show SIGKILL-style name and sender parent explicitly.
+        if str(rid) == "agent_kirk_agent_kill_attempt":
+            sig_name = extras.get("signal_name") or ""
+            if not sig_name and isinstance(msg, str) and "SIG" in msg:
+                for tok in str(msg).replace("(", " ").replace(")", " ").split():
+                    if tok.startswith("SIG"):
+                        sig_name = tok
+                        break
+            parent_comm = extras.get("parent_comm") or ""
+            parent_pid = extras.get("parent_pid")
+            if self.lang == "ru":
+                if sig_name:
+                    lines.append(f"Сигнал: {sig_name}")
+                if parent_comm or parent_pid:
+                    lines.append(
+                        f"Родитель отправителя: {parent_comm or '?'} pid={parent_pid or '?'}"
+                    )
+            else:
+                if sig_name:
+                    lines.append(f"Signal: {sig_name}")
+                if parent_comm or parent_pid:
+                    lines.append(
+                        f"Sender parent: {parent_comm or '?'} pid={parent_pid or '?'}"
+                    )
         meta = []
         if comm:
             meta.append(f"comm={comm}")

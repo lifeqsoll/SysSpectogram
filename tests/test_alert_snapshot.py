@@ -44,6 +44,37 @@ def test_render_window_produces_png(tmp_path):
         store.close()
 
 
+def test_render_window_has_process_sample(tmp_path, monkeypatch):
+    """Critical-alert spectrogram must not show empty Top processes (n/a)."""
+    pytest.importorskip("matplotlib")
+    import numpy as np
+
+    from sysspectogram.viz import snapshot as snap_mod
+
+    store = TimeseriesStore(tmp_path / "ts.sqlite")
+    try:
+        now = time.time()
+        for i in range(200):
+            store.write_many({"cpu_percent": float(i % 50)}, ts=now - 200 + i)
+        store.flush()
+        monkeypatch.setattr(
+            snap_mod,
+            "live_proc_matrix",
+            lambda top_k=8: (
+                np.array([[12.0], [3.0]], dtype=np.float32),
+                ["python(1)", "sshd(2)"],
+            ),
+        )
+        png = render_window(store, now - 200, now - 1, title="critical")
+        assert png is not None
+        mat, labels = snap_mod.live_proc_matrix()
+        assert len(labels) >= 1
+        assert labels != ["n/a"]
+        assert mat.size >= 1
+    finally:
+        store.close()
+
+
 def test_render_window_without_data_returns_none(tmp_path):
     store = TimeseriesStore(tmp_path / "empty.sqlite")
     try:

@@ -50,7 +50,7 @@ class AgentAlert:
             ppid=data.get("ppid"),
             comm=data.get("comm"),
             path=data.get("path"),
-            extras={},
+            extras=dict(data.get("extras") or {}) if isinstance(data.get("extras"), dict) else {},
             kind=kind,
         )
 
@@ -296,7 +296,10 @@ class AgentSocketListener:
                         "socat",
                     )
                 )
-                alert.extras = {"risky_comm": risky, "hmac_ok": hmac_ok}
+                merged = dict(alert.extras or {})
+                merged["risky_comm"] = risky
+                merged["hmac_ok"] = hmac_ok
+                alert.extras = merged
                 key = f"{alert.rule_id}:{alert.pid}:{alert.path}"
                 now = time.time()
                 prev = self._cooldown.get(key, 0.0)

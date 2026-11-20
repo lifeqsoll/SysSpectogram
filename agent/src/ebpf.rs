@@ -73,7 +73,12 @@ mod imp {
         }
     }
 
-    pub fn start_runtime(host_id: &str) -> Result<EbpfHandle, String> {
+    pub fn start_runtime(
+        host_id: &str,
+        guard_pidfile: &std::path::Path,
+        agent_pidfile: &std::path::Path,
+        watchdog_pidfile: &std::path::Path,
+    ) -> Result<EbpfHandle, String> {
         // Aya finds tracefs via readdir; on Arch /sys/kernel/tracing is root-only (0700).
         // CAP_BPF alone is not enough — need real root (or readable tracefs).
         let tracing = std::path::Path::new("/sys/kernel/tracing");
@@ -166,6 +171,9 @@ mod imp {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
         let host = host_id.to_string();
+        let guard_pf = guard_pidfile.to_path_buf();
+        let agent_pf = agent_pidfile.to_path_buf();
+        let watch_pf = watchdog_pidfile.to_path_buf();
         let cpus = online_cpus().map_err(|e| format!("online_cpus: {e:?}"))?;
 
         let mut buffers = Vec::new();
@@ -183,7 +191,21 @@ mod imp {
                 .iter()
                 .map(|_| BytesMut::with_capacity(4096))
                 .collect();
+            let mut trusted = crate::trust::collect_trusted_tree(&[
+                guard_pf.as_path(),
+                agent_pf.as_path(),
+                watch_pf.as_path(),
+            ]);
+            let mut last_trust_refresh = std::time::Instant::now();
             while !stop_t.load(Ordering::Relaxed) {
+                if last_trust_refresh.elapsed() >= Duration::from_secs(2) {
+                    trusted = crate::trust::collect_trusted_tree(&[
+                        guard_pf.as_path(),
+                        agent_pf.as_path(),
+                        watch_pf.as_path(),
+                    ]);
+                    last_trust_refresh = std::time::Instant::now();
+                }
                 for (i, buf) in buffers.iter_mut().enumerate() {
                     let page = &mut pages[i];
                     page.clear();
@@ -202,7 +224,7 @@ mod imp {
                                     );
                                 }
                             }
-                            parse_and_send(page, ev.read, &host, &tx);
+                            parse_and_send(page, ev.read, &host, &tx, &trusted);
                         }
                         Err(_) => {}
                     }
@@ -223,6 +245,7 @@ mod imp {
         n_events: usize,
         host: &str,
         tx: &mpsc::SyncSender<AgentAlert>,
+        trusted: &std::collections::HashSet<u32>,
     ) {
         let sz = mem::size_of::<ProbeEvent>();
         let data = page.as_ref();
@@ -233,13 +256,17 @@ mod imp {
             }
             let ev =
                 unsafe { std::ptr::read_unaligned(data[off..].as_ptr() as *const ProbeEvent) };
-            if let Some(alert) = event_to_alert(&ev, host) {
+            if let Some(alert) = event_to_alert(&ev, host, trusted) {
                 let _ = tx.try_send(alert);
             }
         }
     }
 
-    fn event_to_alert(ev: &ProbeEvent, host: &str) -> Option<AgentAlert> {
+    fn event_to_alert(
+        ev: &ProbeEvent,
+        host: &str,
+        trusted: &std::collections::HashSet<u32>,
+    ) -> Option<AgentAlert> {
         if ev.kind == KIND_SETUID {
             // Skip if caller already root (noise from daemons)
             if ev.uid == 0 {
@@ -265,28 +292,7 @@ mod imp {
             return Some(a);
         }
         if ev.kind == KIND_KILL {
-            let tpid = u32::from_ne_bytes(ev.path[0..4].try_into().ok()?);
-            let sig = u32::from_ne_bytes(ev.path[4..8].try_into().ok()?);
-            let self_pid = std::process::id();
-            // Only care when someone signals *us* (or common twin range — exact twin via path later)
-            if tpid != self_pid && sig != 9 && sig != 15 {
-                return None;
-            }
-            if tpid != self_pid {
-                return None;
-            }
-            // SIGTERM handled in userspace as CLEAN_SHUTDOWN — skip noise here for 15
-            if sig == 15 {
-                return None;
-            }
-            let mut a = AgentAlert::new(
-                "agent_kirk_agent_kill_attempt",
-                "critical",
-                format!("kill/signal toward agent pid={tpid} sig={sig} from uid={}", ev.uid),
-                host,
-            );
-            a.pid = Some(ev.pid);
-            return Some(a);
+            return kill_event_to_alert(ev, host, trusted);
         }
         let end = ev
             .path
@@ -323,6 +329,55 @@ mod imp {
         );
         a.pid = Some(ev.pid);
         a.path = Some(path);
+        Some(a)
+    }
+
+    fn kill_event_to_alert(
+        ev: &ProbeEvent,
+        host: &str,
+        trusted: &std::collections::HashSet<u32>,
+    ) -> Option<AgentAlert> {
+        let tpid = u32::from_ne_bytes(ev.path[0..4].try_into().ok()?);
+        let sig = u32::from_ne_bytes(ev.path[4..8].try_into().ok()?);
+        let self_pid = std::process::id();
+        // Only signals aimed at this agent process.
+        if tpid != self_pid {
+            return None;
+        }
+        let sev = crate::trust::kill_alert_severity(sig)?;
+        // Guard / phoenix / our children probing with kill(pid, 0) or ops signals.
+        if crate::trust::pid_trusted_or_descendant(ev.pid, trusted) {
+            return None;
+        }
+        let sig_name = crate::trust::signal_name(sig);
+        let sender_ppid = crate::trust::read_ppid(ev.pid).unwrap_or(0);
+        let sender_comm = crate::trust::read_comm(ev.pid).unwrap_or_else(|| "?".into());
+        let parent_comm = if sender_ppid > 1 {
+            crate::trust::read_comm(sender_ppid).unwrap_or_else(|| "?".into())
+        } else {
+            "?".into()
+        };
+        let mut a = AgentAlert::new(
+            "agent_kirk_agent_kill_attempt",
+            sev,
+            format!(
+                "kill/signal toward agent pid={tpid} {sig_name}({sig}) from uid={} \
+                 sender_pid={} sender_comm={sender_comm} parent_pid={sender_ppid} \
+                 parent_comm={parent_comm}",
+                ev.uid, ev.pid
+            ),
+            host,
+        );
+        a.pid = Some(ev.pid);
+        a.ppid = Some(sender_ppid);
+        a.comm = Some(sender_comm);
+        a.extras = Some(serde_json::json!({
+            "signal": sig,
+            "signal_name": sig_name,
+            "target_pid": tpid,
+            "parent_pid": sender_ppid,
+            "parent_comm": parent_comm,
+        }));
         Some(a)
     }
 

@@ -1826,6 +1826,16 @@ def run_guard(
             if alert.rule_id.startswith("agent_kirk_"):
                 body = f"{body}\nkirk.trust={kirk_status.get('trust')}"
 
+            bus_extras = dict(getattr(alert, "extras", None) or {})
+            bus_extras.update(
+                {
+                    "pid": alert.pid,
+                    "ppid": alert.ppid,
+                    "comm": alert.comm,
+                    "path": alert.path,
+                    "agent_score": ascore,
+                }
+            )
             GLOBAL_BUS.push_alert(
                 LiveAlert(
                     ts=alert.ts,
@@ -1834,13 +1844,7 @@ def run_guard(
                     body=body,
                     kind="agent",
                     rule_id=alert.rule_id,
-                    extras={
-                        "pid": alert.pid,
-                        "ppid": alert.ppid,
-                        "comm": alert.comm,
-                        "path": alert.path,
-                        "agent_score": ascore,
-                    },
+                    extras=bus_extras,
                 )
             )
             pa = PAlert(
@@ -1848,12 +1852,8 @@ def run_guard(
                 severity=alert.severity,
                 message=body,
                 extras={
-                    "pid": alert.pid,
-                    "ppid": alert.ppid,
-                    "comm": alert.comm,
-                    "path": alert.path,
+                    **bus_extras,
                     "source": "agent",
-                    "agent_score": ascore,
                 },
             )
             if jsonl_out or per_cfg.get("jsonl_out"):
@@ -2223,6 +2223,20 @@ def run_guard(
                             str(int(agent_cfg.get("root_learn_sec", 300))),
                         ]
                     )
+                    # Pass root_watch.allow_comms into the Rust agent (exe or comm).
+                    rw_cfg = config.get("root_watch") or {}
+                    for item in list(rw_cfg.get("allow_comms") or []) + list(
+                        agent_cfg.get("root_allow") or []
+                    ):
+                        s = str(item).strip()
+                        if s:
+                            cmd.extend(["--root-allow", s])
+                    cmd.extend(
+                        [
+                            "--guard-pidfile",
+                            str(_resolve("state/guard.pid")),
+                        ]
+                    )
                 else:
                     cmd.append("--no-root-watch")
                 wd_cfg = dict(config.get("watchdog") or {})
@@ -2443,24 +2457,37 @@ def run_guard(
                 t0 = time.monotonic()
                 while not stop.is_set():
                     try:
+                        from sysspectogram.trusted_pids import collect_trusted_pids
+
+                        trusted = collect_trusted_pids(
+                            agent_pidfile=_resolve(
+                                (config.get("agent") or {}).get("pidfile") or "state/agent.pid"
+                            ),
+                            watchdog_pidfile=_resolve("state/watchdog.pid"),
+                            guard_pidfile=_resolve("state/guard.pid"),
+                            child_of=os.getpid(),
+                            include_descendants=True,
+                        )
                         news = poll_new_root(
                             root_state,
                             learn_sec=float(root_cfg.get("learn_sec", 300)),
                             allow_comms=allow_comms,
+                            trusted_pids=trusted,
                         )
                         for p in news:
                             a = PAlert(
                                 rule_id="unexpected_root_process",
-                                severity="critical",
+                                severity=getattr(p, "severity", None) or "critical",
                                 message=(
                                     f"New root process pid={p.pid} comm={p.comm} "
-                                    f"exe={p.exe or '?'}"
+                                    f"exe={p.exe or '?'} parent={getattr(p, 'parent_comm', '')}"
                                 ),
                                 extras={
                                     "pid": p.pid,
                                     "comm": p.comm,
                                     "path": p.exe,
                                     "cmdline": p.cmdline,
+                                    "parent_comm": getattr(p, "parent_comm", ""),
                                 },
                             )
                             watcher.emit(a)

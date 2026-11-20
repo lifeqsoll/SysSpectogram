@@ -81,22 +81,68 @@ def pid_matches_seal(
     return True
 
 
+def _ppid_of(pid: int) -> int | None:
+    try:
+        text = Path(f"/proc/{int(pid)}/status").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("PPid:"):
+            try:
+                return int(line.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def expand_descendant_pids(roots: set[int]) -> set[int]:
+    """Add every live process whose ppid chain reaches one of ``roots``."""
+    if not roots:
+        return set()
+    children: dict[int, list[int]] = {}
+    try:
+        entries = Path("/proc").iterdir()
+    except OSError:
+        return set(roots)
+    for ent in entries:
+        if not ent.name.isdigit():
+            continue
+        pid = int(ent.name)
+        ppid = _ppid_of(pid)
+        if ppid is None:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    out = set(roots)
+    stack = list(roots)
+    while stack:
+        cur = stack.pop()
+        for kid in children.get(cur, ()):
+            if kid not in out:
+                out.add(kid)
+                stack.append(kid)
+    return out
+
+
 def collect_trusted_pids(
     *,
     agent_pidfile: Path,
     watchdog_pidfile: Path | None = None,
+    guard_pidfile: Path | None = None,
     extra: set[int] | None = None,
     child_of: int | None = None,
     allowed_exe_paths: set[str] | None = None,
     expected_sha256: str | None = None,
+    include_descendants: bool = False,
 ) -> set[int]:
     """PIDs allowed to speak on the agent socket.
 
     Same-UID alone is not enough: only these PIDs pass PEERCRED allowlist.
     Optional exe path + sha256 seal rejects a replaced binary that reused the pidfile.
+    When ``include_descendants`` is true, children of trusted roots are included
+    (guard probes, agent helpers) — never matched by forged ``comm``.
     """
     out: set[int] = set(extra or ())
-    for p in (agent_pidfile, watchdog_pidfile):
+    for p in (agent_pidfile, watchdog_pidfile, guard_pidfile):
         if p is None:
             continue
         pid = read_pidfile(Path(p))
@@ -114,5 +160,7 @@ def collect_trusted_pids(
         for pid in out:
             if pid_matches_seal(pid, allowed_paths=paths, expected_sha256=expected_sha256):
                 trusted.add(pid)
-        return trusted
+        out = trusted
+    if include_descendants:
+        out = expand_descendant_pids(out)
     return out

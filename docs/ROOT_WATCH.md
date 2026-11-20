@@ -16,13 +16,16 @@ Lite VPS: keep the agent on. Detection reuses the same `/proc` walk the agent al
 1. For `root_learn_sec` (default 300) record all root PIDs (real or effective uid 0).
 2. After learn: new root PID not in baseline → alert once.
 3. Skip kernel threads (no `/proc/pid/exe`).
-4. Soft-allow known daemon `comm` prefixes (systemd, sshd, sysspectogram-agent, …).
-5. Emit `agent_unexpected_root` (severity `critical`, HMAC required).
+4. Soft-allow known daemon/utility names **and** matching system exe paths (systemd, sshd, journalctl, nft, ip, ss, pacman, sudo as the sudo process only, …). Pass extras with `--root-allow`.
+5. Skip processes in the trusted tree (guard / agent / phoenix pidfiles + descendants).
+6. cron/systemd-timer children → severity `medium` with 10‑minute dedup on `(comm, exe)`; unknown `/tmp` binaries stay `critical`.
+7. Emit `agent_unexpected_root` (HMAC required).
 
 CLI:
 
 ```bash
-sysspectogram-agent --root-watch --root-learn-sec 300
+sysspectogram-agent --root-watch --root-learn-sec 300 \
+  --root-allow /usr/local/bin/mytool --root-allow customd
 # disable:
 sysspectogram-agent --no-root-watch
 ```

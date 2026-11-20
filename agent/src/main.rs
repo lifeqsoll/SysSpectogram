@@ -15,6 +15,7 @@ mod procwatch;
 mod protect;
 mod rules;
 mod tg_notify;
+mod trust;
 mod types;
 mod watch;
 
@@ -162,6 +163,10 @@ struct Args {
     /// Learn existing root PIDs before alerting (seconds).
     #[arg(long, default_value_t = 300)]
     root_learn_sec: u64,
+
+    /// Extra root_watch allowlist entries (comm name or absolute exe path). Repeatable.
+    #[arg(long = "root-allow")]
+    root_allow: Vec<String>,
 }
 
 fn main() {
@@ -254,9 +259,14 @@ fn main() {
         );
         #[cfg(feature = "ebpf")]
         {
-            match crate::ebpf::start_runtime(&host) {
+            match crate::ebpf::start_runtime(
+                &host,
+                &args.guard_pidfile,
+                &args.pidfile,
+                &PathBuf::from("state/watchdog.pid"),
+            ) {
                 Ok(h) => {
-                    eprintln!("[sysspectogram-agent] eBPF attached: execve+openat+module");
+                    eprintln!("[sysspectogram-agent] eBPF attached: execve+openat+module+kill");
                     ebpf_rt = Some(h);
                     effective_mode = "ebpf";
                 }
@@ -350,10 +360,19 @@ fn main() {
     }
 
     let mut watcher = ProcWatcher::with_root(root_watch, args.root_learn_sec);
+    watcher.set_trust_pidfiles(
+        args.guard_pidfile.clone(),
+        args.pidfile.clone(),
+        PathBuf::from("state/watchdog.pid"),
+    );
+    if !args.root_allow.is_empty() {
+        watcher.set_extra_allows(args.root_allow.clone());
+    }
     if root_watch {
         eprintln!(
-            "[sysspectogram-agent] root_watch learn={}s",
-            args.root_learn_sec
+            "[sysspectogram-agent] root_watch learn={}s allows={}",
+            args.root_learn_sec,
+            args.root_allow.len()
         );
     }
     let mut agg = Aggregator::new();

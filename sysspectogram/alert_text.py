@@ -135,6 +135,18 @@ RULE_TEXT: dict[str, dict[Lang, AlertText]] = {
             "Проверьте процесс и его родителя. Это важный сигнал: при сомнении остановите процесс.",
         ),
     },
+    "agent_kirk_agent_kill_attempt": {
+        "en": _e(
+            "Kill attempt against the agent",
+            "Another process sent a terminating signal toward the integrity agent.",
+            "If it was not you, inspect the sender PID and its parent immediately.",
+        ),
+        "ru": _e(
+            "Попытка убить агент",
+            "Другой процесс послал убивающий сигнал агенту целостности.",
+            "Если это не вы — сразу проверьте PID отправителя и его родителя.",
+        ),
+    },
     "agent_ebpf_execve": {
         "en": _e(
             "Program start (eBPF)",
