@@ -865,9 +865,7 @@ fn lethal_signal_alert(sig: u32, sender: u32, host: &str) -> Option<crate::types
 }
 
 fn open_onnx_scorer(args: &Args) -> Option<crate::onnx::OnnxScorer> {
-    let Some(path) = args.onnx_model.as_ref() else {
-        return None;
-    };
+    let path = args.onnx_model.as_ref()?;
     match crate::onnx::OnnxScorer::load(path, args.onnx_shadow) {
         Ok(scorer) => {
             eprintln!(
