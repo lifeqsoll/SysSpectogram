@@ -21,7 +21,7 @@ sha1 = "0.10"
 sha2 = "0.10"
 libc = "0.2"
 signal-hook = { version = "0.3", features = ["iterator", "extended-siginfo"] }
-aya = { version = "0.13", optional = true }
+aya = { version = "0.16", optional = true }
 bytes = { version = "1", optional = true }
 sysspectogram-common = { path = "common", features = ["user"], optional = true }
 tract-onnx = { version = "0.21.19", optional = true }
