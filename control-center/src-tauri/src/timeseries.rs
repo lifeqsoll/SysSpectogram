@@ -55,7 +55,40 @@ fn open(path: &Path) -> Result<Connection, String> {
     .map_err(|e| format!("open {}: {e}", path.display()))
 }
 
-pub fn query(path: &Path, metric: &str, range: &str, now: f64) -> Result<Vec<Point>, String> {
+/// Default cap for a single full-width chart (~viewport width).
+pub const DEFAULT_MAX_POINTS: usize = 1000;
+
+/// Stride-downsample so series length never exceeds `max_points`.
+/// Always keeps the first and last samples when truncating.
+pub fn downsample(mut pts: Vec<Point>, max_points: usize) -> Vec<Point> {
+    if max_points == 0 || pts.len() <= max_points {
+        return pts;
+    }
+    let n = pts.len();
+    let step = n.div_ceil(max_points).max(1);
+    let mut out: Vec<Point> = pts.iter().step_by(step).cloned().collect();
+    // Ensure the newest point is present (step_by may skip the last).
+    if let Some(last) = pts.pop() {
+        if out.last().map(|p| p.ts) != Some(last.ts) {
+            if out.len() >= max_points {
+                out.pop();
+            }
+            out.push(last);
+        }
+    }
+    if out.len() > max_points {
+        out.truncate(max_points);
+    }
+    out
+}
+
+pub fn query(
+    path: &Path,
+    metric: &str,
+    range: &str,
+    now: f64,
+    max_points: Option<usize>,
+) -> Result<Vec<Point>, String> {
     let table = table_for(range).ok_or_else(|| format!("unknown range {range:?}"))?;
     let secs = range_seconds(range).ok_or_else(|| format!("unknown range {range:?}"))?;
     if !path.exists() {
@@ -63,7 +96,8 @@ pub fn query(path: &Path, metric: &str, range: &str, now: f64) -> Result<Vec<Poi
     }
     let conn = open(path)?;
     let start = (now - secs) as i64;
-    query_with_conn(&conn, table, metric, start)
+    let pts = query_with_conn(&conn, table, metric, start)?;
+    Ok(downsample(pts, max_points.unwrap_or(DEFAULT_MAX_POINTS)))
 }
 
 fn query_with_conn(
@@ -100,9 +134,12 @@ pub fn query_many(
     metrics: &[String],
     range: &str,
     now: f64,
+    max_points: Option<usize>,
+    after_ts: Option<f64>,
 ) -> Result<std::collections::HashMap<String, Vec<Point>>, String> {
     let table = table_for(range).ok_or_else(|| format!("unknown range {range:?}"))?;
     let secs = range_seconds(range).ok_or_else(|| format!("unknown range {range:?}"))?;
+    let cap = max_points.unwrap_or(DEFAULT_MAX_POINTS);
     let mut out = std::collections::HashMap::new();
     if !path.exists() {
         for m in metrics {
@@ -111,9 +148,22 @@ pub fn query_many(
         return Ok(out);
     }
     let conn = open(path)?;
-    let start = (now - secs) as i64;
+    let range_start = (now - secs) as i64;
+    let start = match after_ts {
+        Some(after) => range_start.max(after.floor() as i64 + 1),
+        None => range_start,
+    };
     for m in metrics {
-        out.insert(m.clone(), query_with_conn(&conn, table, m, start)?);
+        let pts = query_with_conn(&conn, table, m, start)?;
+        // Tail fetches are small — skip stride when after_ts is set.
+        out.insert(
+            m.clone(),
+            if after_ts.is_some() {
+                pts
+            } else {
+                downsample(pts, cap)
+            },
+        );
     }
     Ok(out)
 }
@@ -156,4 +206,57 @@ pub fn metrics(path: &Path) -> Result<Vec<String>, String> {
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+}
+
+/// Points with `ts > after_ts` within the range window (for incremental chart tail).
+pub fn query_after(
+    path: &Path,
+    metric: &str,
+    range: &str,
+    now: f64,
+    after_ts: f64,
+    max_points: Option<usize>,
+) -> Result<Vec<Point>, String> {
+    let table = table_for(range).ok_or_else(|| format!("unknown range {range:?}"))?;
+    let secs = range_seconds(range).ok_or_else(|| format!("unknown range {range:?}"))?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = open(path)?;
+    let start = (now - secs) as i64;
+    let after = after_ts.floor() as i64;
+    let window_start = start.max(after + 1);
+    let pts = query_with_conn(&conn, table, metric, window_start)?;
+    Ok(downsample(pts, max_points.unwrap_or(DEFAULT_MAX_POINTS)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pt(ts: f64, v: f64) -> Point {
+        Point {
+            ts,
+            avg: v,
+            min: v,
+            max: v,
+            n: 1,
+        }
+    }
+
+    #[test]
+    fn downsample_noop_when_under_cap() {
+        let pts: Vec<_> = (0..10).map(|i| pt(i as f64, i as f64)).collect();
+        assert_eq!(downsample(pts.clone(), 100).len(), 10);
+        assert_eq!(downsample(pts, 0).len(), 10);
+    }
+
+    #[test]
+    fn downsample_caps_and_keeps_last() {
+        let pts: Vec<_> = (0..1000).map(|i| pt(i as f64, i as f64)).collect();
+        let out = downsample(pts, 100);
+        assert!(out.len() <= 100);
+        assert_eq!(out.last().map(|p| p.ts), Some(999.0));
+        assert_eq!(out.first().map(|p| p.ts), Some(0.0));
+    }
 }

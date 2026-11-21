@@ -154,7 +154,17 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     processes = list_top_processes(10) if what in {"processes", "report"} else None
     suspicious = suspicious_heuristics() if what in {"processes", "report"} else None
     ports = list_listening_and_established() if what in {"ports", "report"} else None
-    rootkit = rootkit_heuristics() if what in {"rootkit", "report"} else None
+    downgrade = True
+    try:
+        cfg = load_config(getattr(args, "config", None))
+        downgrade = bool((cfg.get("audit") or {}).get("deleted_exe_downgrade_on_upgrade", True))
+    except Exception:
+        downgrade = True
+    rootkit = (
+        rootkit_heuristics(downgrade_on_upgrade=downgrade)
+        if what in {"rootkit", "report"}
+        else None
+    )
 
     if what == "processes":
         console.print(processes)
@@ -222,8 +232,14 @@ def _cmd_watch_perimeter(args: argparse.Namespace) -> int:
         host_id=host.get("id"),
         fail_threshold=int(per.get("fail_threshold", 8)),
         fail_window_sec=float(per.get("fail_window_sec", 60)),
-        scan_unique_ips=int(per.get("scan_unique_ips", 8)),
+        scan_unique_ips=int(per["scan_unique_ips"]) if "scan_unique_ips" in per else None,
+        scan_unique_ports=int(per["scan_unique_ports"]) if "scan_unique_ports" in per else None,
         scan_window_sec=float(per.get("scan_window_sec", 60)),
+        public_ports=(
+            [int(p) for p in per.get("public_ports")]
+            if per.get("public_ports") is not None
+            else None
+        ),
         denylist_paths=denylist,
         suspicious_domains=set(per.get("suspicious_domains") or []),
         state_path=_resolve(per.get("state_path", "state/perimeter.json")),
@@ -2372,6 +2388,7 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
             print(json.dumps({"ok": False, "error": "--metrics required"}))
             return 2
         range_name = str(getattr(args, "range_name", None) or "1h")
+        max_points = int(getattr(args, "max_points", None) or 240)
         print(
             json.dumps(
                 timeseries_query_many(
@@ -2380,6 +2397,7 @@ def _cmd_fleet(args: argparse.Namespace) -> int:
                     metrics=metrics,
                     range_name=range_name,
                     identity=identity,
+                    max_points=max_points,
                 ),
                 indent=2,
                 ensure_ascii=False,
@@ -3510,6 +3528,13 @@ def build_parser() -> argparse.ArgumentParser:
                 dest="range_name",
                 default="1h",
                 choices=["1h", "6h", "12h", "24h", "7d", "30d"],
+            )
+            fp.add_argument(
+                "--max-points",
+                dest="max_points",
+                type=int,
+                default=240,
+                help="downsample series to at most N points (default 240)",
             )
         if fname in ("unlock-locked", "attack", "release", "ban"):
             fp.add_argument("--yes", action="store_true", help="confirm destructive op (required non-TTY)")

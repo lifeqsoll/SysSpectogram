@@ -454,16 +454,46 @@ fn install_bundle(version: String, source: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn timeseries_query(metric: String, range: String) -> Result<Vec<timeseries::Point>, String> {
-    timeseries::query(&paths::timeseries_db(), &metric, &range, now_secs())
+fn timeseries_query(
+    metric: String,
+    range: String,
+    max_points: Option<usize>,
+    after_ts: Option<f64>,
+) -> Result<Vec<timeseries::Point>, String> {
+    if let Some(after) = after_ts {
+        return timeseries::query_after(
+            &paths::timeseries_db(),
+            &metric,
+            &range,
+            now_secs(),
+            after,
+            max_points,
+        );
+    }
+    timeseries::query(
+        &paths::timeseries_db(),
+        &metric,
+        &range,
+        now_secs(),
+        max_points,
+    )
 }
 
 #[tauri::command]
 fn timeseries_query_many(
     metrics: Vec<String>,
     range: String,
+    max_points: Option<usize>,
+    after_ts: Option<f64>,
 ) -> Result<std::collections::HashMap<String, Vec<timeseries::Point>>, String> {
-    timeseries::query_many(&paths::timeseries_db(), &metrics, &range, now_secs())
+    timeseries::query_many(
+        &paths::timeseries_db(),
+        &metrics,
+        &range,
+        now_secs(),
+        max_points,
+        after_ts,
+    )
 }
 
 #[tauri::command]
@@ -501,9 +531,11 @@ fn fleet_timeseries_query(
     scope: String,
     metrics: String,
     range: Option<String>,
+    max_points: Option<u32>,
 ) -> Result<Value, String> {
     let range_s = range.unwrap_or_else(|| "1h".into());
-    cli::run_json(&[
+    let max_s = max_points.map(|n| n.to_string());
+    let mut args = vec![
         "fleet",
         "timeseries-query",
         "--scope",
@@ -512,7 +544,12 @@ fn fleet_timeseries_query(
         metrics.as_str(),
         "--range",
         range_s.as_str(),
-    ])
+    ];
+    if let Some(ref m) = max_s {
+        args.push("--max-points");
+        args.push(m.as_str());
+    }
+    cli::run_json(&args)
 }
 
 #[tauri::command]

@@ -34,16 +34,25 @@ export const fleet = {
       scope,
       metrics: metrics ?? null,
     }),
-  timeseriesQuery: (scope: string, metrics: string, range?: Range) =>
+  timeseriesQuery: (scope: string, metrics: string, range?: Range, maxPoints?: number) =>
     invoke<{ ok: boolean; series?: Record<string, Point[]>; error?: string }>(
       'fleet_timeseries_query',
-      { scope, metrics, range: range ?? null },
+      { scope, metrics, range: range ?? null, maxPoints: maxPoints ?? null },
     ),
 };
 
 function activeHostScope(): string | null {
   const id = ui.activeHostId;
   return id && id !== 'local' ? id : null;
+}
+
+/** Metric-list cache (changes rarely; avoid DISTINCT scan on every mount). */
+const METRICS_CACHE_TTL_MS = 5 * 60 * 1000;
+const metricsCache = new Map<string, { at: number; metrics: string[] }>();
+
+export function invalidateMetricsCache(scope?: string): void {
+  if (scope) metricsCache.delete(scope);
+  else metricsCache.clear();
 }
 
 export interface AppInfo {
@@ -184,31 +193,72 @@ export const api = {
   settingsApply: (changes: Record<string, unknown>) => invoke<unknown>('settings_apply', { changes }),
   settingsRollback: () => invoke<unknown>('settings_rollback'),
   installBundle: (version: string, source: string) => invoke<unknown>('install_bundle', { version, source }),
-  timeseriesQuery: async (metric: string, range: Range): Promise<Point[]> => {
+  timeseriesQuery: async (
+    metric: string,
+    range: Range,
+    opts?: { maxPoints?: number; afterTs?: number },
+  ): Promise<Point[]> => {
     const scope = activeHostScope();
-    if (!scope) return invoke<Point[]>('timeseries_query', { metric, range });
-    const res = await fleet.timeseriesQuery(scope, metric, range);
+    const maxPoints = opts?.maxPoints;
+    const afterTs = opts?.afterTs;
+    if (!scope) {
+      return invoke<Point[]>('timeseries_query', {
+        metric,
+        range,
+        maxPoints: maxPoints ?? null,
+        afterTs: afterTs ?? null,
+      });
+    }
+    // Fleet path: full window + client filter for afterTs (remote downsample still applies).
+    const res = await fleet.timeseriesQuery(scope, metric, range, maxPoints);
     if (!res.ok) throw new Error(res.error || 'fleet timeseries query failed');
-    return res.series?.[metric] ?? [];
+    let pts = res.series?.[metric] ?? [];
+    if (afterTs != null) pts = pts.filter((p) => p.ts > afterTs);
+    return pts;
   },
   timeseriesQueryMany: async (
     metrics: string[],
     range: Range,
+    opts?: { maxPoints?: number; afterTs?: number },
   ): Promise<Record<string, Point[]>> => {
     const scope = activeHostScope();
+    const maxPoints = opts?.maxPoints;
+    const afterTs = opts?.afterTs;
     if (!scope) {
-      return invoke<Record<string, Point[]>>('timeseries_query_many', { metrics, range });
+      return invoke<Record<string, Point[]>>('timeseries_query_many', {
+        metrics,
+        range,
+        maxPoints: maxPoints ?? null,
+        afterTs: afterTs ?? null,
+      });
     }
-    const res = await fleet.timeseriesQuery(scope, metrics.join(','), range);
+    const res = await fleet.timeseriesQuery(scope, metrics.join(','), range, maxPoints);
     if (!res.ok) throw new Error(res.error || 'fleet timeseries query failed');
-    return res.series ?? {};
+    const series = res.series ?? {};
+    if (afterTs == null) return series;
+    const out: Record<string, Point[]> = {};
+    for (const [k, pts] of Object.entries(series)) {
+      out[k] = pts.filter((p) => p.ts > afterTs);
+    }
+    return out;
   },
-  timeseriesMetrics: async (): Promise<string[]> => {
-    const scope = activeHostScope();
-    if (!scope) return invoke<string[]>('timeseries_metrics');
-    const res = await fleet.timeseriesMetrics(scope);
-    if (!res.ok) throw new Error(res.error || 'fleet timeseries metrics failed');
-    return res.metrics ?? [];
+  timeseriesMetrics: async (opts?: { force?: boolean }): Promise<string[]> => {
+    const scope = activeHostScope() ?? 'local';
+    const now = Date.now();
+    const hit = metricsCache.get(scope);
+    if (!opts?.force && hit && now - hit.at < METRICS_CACHE_TTL_MS) {
+      return hit.metrics;
+    }
+    let metrics: string[];
+    if (scope === 'local' || !activeHostScope()) {
+      metrics = await invoke<string[]>('timeseries_metrics');
+    } else {
+      const res = await fleet.timeseriesMetrics(scope);
+      if (!res.ok) throw new Error(res.error || 'fleet timeseries metrics failed');
+      metrics = res.metrics ?? [];
+    }
+    metricsCache.set(scope, { at: now, metrics });
+    return metrics;
   },
   timeseriesLatest: async (metrics?: string[]): Promise<Latest[]> => {
     const scope = activeHostScope();
