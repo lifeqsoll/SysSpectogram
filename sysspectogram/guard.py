@@ -853,6 +853,7 @@ def run_guard(
             supply_chain=config.get("supply_chain") or {},
             lang=notify_lang,
             allowed_user_ids=parse_allowed_user_ids(tg_cfg),
+            tg_cfg=tg_cfg,
         )
         if unlock_gate.enabled:
             try:

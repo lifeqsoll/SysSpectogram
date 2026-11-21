@@ -38,6 +38,7 @@ Perimeter / response:
 /bans /ban <ip> [ttl_sec|perm]
 /unban <ip> /allow <ip> /mute <ip> [sec]
 /quiet on|off /lockdown /kirk_release
+/notify [on|off|list|group <id> on|off|sev <level>]
 /recon <ip> /labnmap <ip> /report
 
 Load sims (lab only; telegram.allow_destructive_sims):
@@ -206,6 +207,14 @@ class TelegramBot:
         self._busy = False
         self._if_refit_lock = False
         self.last_if_refit: dict | None = None
+        from sysspectogram.config import resolve_runtime_path
+        from sysspectogram.telegram_notify_prefs import NotifyPrefs
+
+        notify_cfg = dict((tg_cfg or {}).get("notify") or {})
+        prefs_path = resolve_runtime_path(
+            str(notify_cfg.get("path") or "state/telegram_notify.json")
+        )
+        self.notify_prefs = NotifyPrefs.load(prefs_path, config=notify_cfg)
 
     def begin_console_unlock(self) -> str:
         return self.unlock.begin()
@@ -402,8 +411,24 @@ class TelegramBot:
         )
         return _markup(rows)
 
+    def _tg_allowed(
+        self,
+        *,
+        rule_id: str,
+        severity: str = "medium",
+        pattern: str | None = None,
+    ) -> bool:
+        try:
+            return self.notify_prefs.should_notify(
+                rule_id=rule_id, severity=severity, pattern=pattern
+            )
+        except Exception:
+            return True
+
     def send_root_alert(self, proc) -> None:
         if not self.client.configured:
+            return
+        if not self._tg_allowed(rule_id="unexpected_root_process", severity="critical"):
             return
         pid = int(getattr(proc, "pid", 0) or 0)
         comm = str(getattr(proc, "comm", "") or "")
@@ -439,6 +464,8 @@ class TelegramBot:
     def send_session_alert(self, session) -> None:
         if not self.client.configured:
             return
+        if not self._tg_allowed(rule_id="unexpected_ssh_session", severity="high"):
+            return
         user = getattr(session, "user", "?")
         tty = getattr(session, "tty", "")
         host = getattr(session, "host", "")
@@ -463,6 +490,13 @@ class TelegramBot:
             return
         from sysspectogram.viz.panels import format_perimeter_alert, perimeter_pattern
 
+        pat = perimeter_pattern(alert.rule_id)
+        if not self._tg_allowed(
+            rule_id=str(alert.rule_id),
+            severity=str(alert.severity or "medium"),
+            pattern=pat,
+        ):
+            return
         self._alert_count_day += 1
         self._digest_counts[alert.rule_id] = self._digest_counts.get(alert.rule_id, 0) + 1
         recon_txt = None
@@ -476,7 +510,7 @@ class TelegramBot:
             rule_id=alert.rule_id,
             message=alert.message,
             explain=explain_perimeter(alert, lang=self.lang),
-            pattern=perimeter_pattern(alert.rule_id),
+            pattern=pat,
             recon_summary=recon_txt,
         )
         self.client.send_message(text, reply_markup=self.alert_keyboard(alert))
@@ -484,10 +518,12 @@ class TelegramBot:
     def send_agent_alert(self, alert, png: bytes | None = None) -> None:
         if not self.client.configured:
             return
-        self._alert_count_day += 1
         rid = getattr(alert, "rule_id", "agent")
-        self._digest_counts[rid] = self._digest_counts.get(rid, 0) + 1
         sev = getattr(alert, "severity", "medium")
+        if not self._tg_allowed(rule_id=str(rid), severity=str(sev or "medium")):
+            return
+        self._alert_count_day += 1
+        self._digest_counts[rid] = self._digest_counts.get(rid, 0) + 1
         msg = getattr(alert, "message", "")
         pid = getattr(alert, "pid", None)
         ppid = getattr(alert, "ppid", None)
@@ -631,6 +667,8 @@ class TelegramBot:
         expl = explain_host_anomaly(top_procs=top_procs, lang=self.lang, **(explain_kwargs or {}))
         kw = {k: v for k, v in (explain_kwargs or {}).items() if k != "top_features"}
         pat = pattern or detect_host_pattern(top_procs=top_procs, **kw)
+        if not self._tg_allowed(rule_id="host_anomaly", severity="high", pattern=pat):
+            return
         if caption_override:
             text = caption_override
         else:
@@ -693,7 +731,8 @@ class TelegramBot:
         rows = [
             [_btn("Status", "menu|status"), _btn("Audit", "menu|audit"), _btn("Charts", "menu|charts")],
             [_btn("Panel", "menu|panel"), _btn("Score", "menu|score"), _btn("Ports", "menu|ports")],
-            [_btn("Bans", "menu|bans"), _btn("Digest", "menu|digest"), _btn("Help", "menu|help")],
+            [_btn("Bans", "menu|bans"), _btn("Digest", "menu|digest"), _btn("Notify", "menu|notify")],
+            [_btn("Help", "menu|help")],
         ]
         if self.webapp_url:
             rows.insert(
@@ -701,6 +740,34 @@ class TelegramBot:
                 [{"text": "Open Dashboard", "web_app": {"url": self.webapp_url}}],
             )
         return _markup(rows)
+
+    def _notify_markup(self) -> dict:
+        from sysspectogram.telegram_notify_prefs import NOTIFY_GROUPS
+
+        rows: list[list[dict]] = [
+            [
+                _btn(
+                    f"{'ON' if self.notify_prefs.enabled else 'OFF'} master",
+                    "notify|master",
+                )
+            ]
+        ]
+        for gid, meta in NOTIFY_GROUPS.items():
+            on = self.notify_prefs.groups.get(gid, True)
+            label = meta.get("label_ru") if self.lang == "ru" else meta.get("label")
+            mark = "✓" if on else "✗"
+            rows.append([_btn(f"{mark} {label}"[:60], f"notify|g|{gid}")])
+        rows.append(
+            [
+                _btn("sev≥low", "notify|sev|low"),
+                _btn("sev≥med", "notify|sev|medium"),
+                _btn("sev≥high", "notify|sev|high"),
+            ]
+        )
+        return _markup(rows)
+
+    def _notify_text(self) -> str:
+        return "\n".join(self.notify_prefs.summary_lines(lang=self.lang))
 
     def handle_command(
         self,
@@ -854,6 +921,8 @@ class TelegramBot:
                     self.watcher.state.quiet = on
                     self.watcher.persist()
                 self.client.send_message(self.prefix(f"quiet={'on' if on else 'off'}"), chat_id=chat_id)
+            elif cmd == "/notify":
+                self._cmd_notify(args, chat_id)
             elif cmd == "/lockdown":
                 tok = self.tokens.issue("lockdown", {})
                 self.client.send_message(
@@ -1025,6 +1094,7 @@ class TelegramBot:
                 "ports": "/ports",
                 "bans": "/bans",
                 "digest": "/digest",
+                "notify": "/notify",
                 "recipes": "/recipes",
                 "help": "/help",
             }
@@ -1035,6 +1105,9 @@ class TelegramBot:
                     chat_type=str(chat.get("type") or ""),
                     from_user_id=from_user.get("id"),
                 )
+            return
+        if data.startswith("notify|"):
+            self._handle_notify_callback(cq_id, data, chat_id)
             return
         if data.startswith("ask|") or data.startswith("ask2|"):
             double = data.startswith("ask2|")
@@ -1450,6 +1523,112 @@ class TelegramBot:
 
         threading.Thread(target=job, daemon=True).start()
         return f"started collect {duration}s → {out}"
+
+    def _cmd_notify(self, args: list[str], chat_id: str) -> None:
+        from sysspectogram.telegram_notify_prefs import NOTIFY_GROUPS
+
+        if not args:
+            self.client.send_message(
+                self.prefix(self._notify_text()),
+                chat_id=chat_id,
+                reply_markup=self._notify_markup(),
+            )
+            return
+        head = args[0].lower()
+        if head in ("list", "show", "status"):
+            self.client.send_message(
+                self.prefix(self._notify_text()),
+                chat_id=chat_id,
+                reply_markup=self._notify_markup(),
+            )
+            return
+        if head in ("on", "off"):
+            self.notify_prefs.set_master(head == "on")
+            self.client.send_message(
+                self.prefix(self._notify_text()),
+                chat_id=chat_id,
+                reply_markup=self._notify_markup(),
+            )
+            return
+        if head in ("sev", "severity", "min") and len(args) >= 2:
+            try:
+                self.notify_prefs.set_min_severity(args[1])
+            except ValueError:
+                self.client.send_message(
+                    self.prefix("usage: /notify sev low|medium|high|critical"),
+                    chat_id=chat_id,
+                )
+                return
+            self.client.send_message(
+                self.prefix(self._notify_text()),
+                chat_id=chat_id,
+                reply_markup=self._notify_markup(),
+            )
+            return
+        if head in ("group", "g") and len(args) >= 3:
+            gid = args[1]
+            on = args[2].lower() in ("on", "1", "true", "yes")
+            if gid not in NOTIFY_GROUPS:
+                self.client.send_message(
+                    self.prefix(f"unknown group; choose: {', '.join(NOTIFY_GROUPS)}"),
+                    chat_id=chat_id,
+                )
+                return
+            self.notify_prefs.set_group(gid, on)
+            self.client.send_message(
+                self.prefix(self._notify_text()),
+                chat_id=chat_id,
+                reply_markup=self._notify_markup(),
+            )
+            return
+        if head == "rule" and len(args) >= 3:
+            rid = args[1]
+            on = args[2].lower() in ("on", "1", "true", "yes")
+            self.notify_prefs.set_rule(rid, on)
+            self.client.send_message(
+                self.prefix(self._notify_text()),
+                chat_id=chat_id,
+                reply_markup=self._notify_markup(),
+            )
+            return
+        self.client.send_message(
+            self.prefix(
+                "usage:\n"
+                "/notify\n"
+                "/notify on|off\n"
+                "/notify group <id> on|off\n"
+                "/notify rule <rule_id> on|off\n"
+                "/notify sev low|medium|high|critical"
+            ),
+            chat_id=chat_id,
+        )
+
+    def _handle_notify_callback(self, cq_id: str, data: str, chat_id: str) -> None:
+        from sysspectogram.telegram_notify_prefs import NOTIFY_GROUPS
+
+        parts = data.split("|")
+        try:
+            if len(parts) >= 2 and parts[1] == "master":
+                self.notify_prefs.set_master(not self.notify_prefs.enabled)
+            elif len(parts) >= 3 and parts[1] == "g":
+                gid = parts[2]
+                if gid in NOTIFY_GROUPS:
+                    cur = self.notify_prefs.groups.get(gid, True)
+                    self.notify_prefs.set_group(gid, not cur)
+            elif len(parts) >= 3 and parts[1] == "sev":
+                self.notify_prefs.set_min_severity(parts[2])
+            else:
+                self.client.answer_callback(cq_id, "noop")
+                return
+        except Exception as exc:
+            self.client.answer_callback(cq_id, f"err:{exc}"[:40])
+            return
+        self.client.answer_callback(cq_id, "ok")
+        self.client.send_message(
+            self.prefix(self._notify_text()),
+            chat_id=chat_id,
+            reply_markup=self._notify_markup(),
+        )
 
     def _cmd_audit(self, chat_id: str) -> None:
         from sysspectogram.audit.ports import list_listening_and_established

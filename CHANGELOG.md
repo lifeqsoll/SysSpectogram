@@ -15,6 +15,7 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft
 
 ### Added
 
+- Telegram **/notify** settings: toggle groups (Usually internet noise, port scans, SSH, egress/DNS, host ML, eBPF, critical), min severity, per-rule overrides (`state/telegram_notify.json`).
 - Control Center charts **grid** (multi-metric), shared poll helpers, metrics cache, cursor sync, fleet host charts over SSH.
 - Timeseries backend **downsample** + incremental tail (`max_points` / `after_ts`).
 - Perimeter: **per-source** `port_scan_suspected`, `public_ports`, `inbound_flood_suspected`; TG Shield warn on public ports.

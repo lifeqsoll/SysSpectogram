@@ -82,6 +82,24 @@ telegram:
   unlock_code_len: 10
   health_ping_hours: 0
   allowed_user_ids: []
+  # What the bot pushes. Toggle live via /notify or Menu → Notify.
+  notify:
+    enabled: true
+    min_severity: low
+    path: state/telegram_notify.json
+    groups:
+      # Off by default: port-scan/flood/SYN/"internet noise" style alerts.
+      internet_noise: false
+      port_scans: true
+      ssh_auth: true
+      egress_dns: true
+      host_ml: true
+      agent_ebpf: false
+      agent_critical: true
+    # Optional per-rule force on/off, e.g. port_scan_suspected: false
+    rules: {}
+    # Host ML pattern strings to suppress (case-insensitive)
+    disable_patterns: []
 web:
   enabled: false
   host: 127.0.0.1
