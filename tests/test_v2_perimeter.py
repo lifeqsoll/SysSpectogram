@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from sysspectogram.explain.templates import explain_host_anomaly, explain_perimeter
@@ -46,13 +47,82 @@ def test_allowlist_blocks_brute():
         assert eng.on_auth_fail("203.0.113.1") is None
 
 
-def test_port_scan_rule():
-    eng = RuleEngine(scan_unique_ips=4, scan_window_sec=60)
+def test_port_scan_rule_per_source():
+    """One source probing many ports → port_scan_suspected (that IP)."""
+    eng = RuleEngine(scan_unique_ports=4, scan_window_sec=60, public_ports={80, 443})
     last = None
-    for i in range(4):
-        last = eng.on_inbound(f"203.0.113.{i}", 22)
+    for port in (22, 23, 25, 8080):
+        a = eng.on_inbound("203.0.113.50", port)
+        if a:
+            last = a
     assert last is not None
     assert last.rule_id == "port_scan_suspected"
+    assert last.ip == "203.0.113.50"
+
+
+def test_many_ips_on_public_port_not_port_scan():
+    """200 distinct IPs × 1 hit on :443 → no port_scan (normal web traffic)."""
+    eng = RuleEngine(
+        scan_unique_ports=10,
+        scan_window_sec=60,
+        public_ports={80, 443},
+        listening_ports={80, 443},
+        flood_enabled=False,
+    )
+    for i in range(200):
+        # 192.0.2.0/24 documentation range
+        ip = f"192.0.2.{(i % 254) + 1}"
+        a = eng.on_inbound(ip, 443)
+        assert a is None or a.rule_id != "port_scan_suspected"
+
+
+def test_horizontal_scan_30_ports():
+    eng = RuleEngine(scan_unique_ports=10, public_ports={80, 443}, listening_ports={80, 443, 22})
+    last = None
+    for port in range(1, 31):
+        a = eng.on_inbound("198.51.100.9", port)
+        if a:
+            last = a
+    assert last is not None
+    assert last.rule_id == "port_scan_suspected"
+    assert last.ip == "198.51.100.9"
+
+
+def test_inbound_flood_on_public_port():
+    eng = RuleEngine(
+        scan_unique_ports=10,
+        public_ports={443},
+        listening_ports={443},
+        flood_enabled=True,
+        flood_min_ip_per_min=50,
+        flood_mult=5.0,
+        flood_cooldown_sec=60,
+        flood_ewma_alpha=0.0,  # hold seeded 1h-style baseline steady
+    )
+    eng._flood_ewma[443] = 10.0
+    eng._flood_samples[443] = 100
+    last = None
+    # ~100 unique IPs/min vs baseline 10 (×10) and above min 50 → flood
+    for i in range(100):
+        if i < 50:
+            ip = f"203.0.113.{i + 1}"
+        else:
+            ip = f"198.51.100.{i - 49}"
+        a = eng.on_inbound(ip, 443)
+        if a and a.rule_id == "inbound_flood_suspected":
+            last = a
+    assert last is not None
+    assert last.rule_id == "inbound_flood_suspected"
+    assert last.severity == "medium"
+    assert last.ip is None
+
+
+def test_scan_unique_ips_alias_warns():
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        eng = RuleEngine(scan_unique_ips=7)
+        assert eng.scan_unique_ports == 7
+        assert any(issubclass(x.category, DeprecationWarning) for x in w)
 
 
 def test_denylist_egress(tmp_path: Path):

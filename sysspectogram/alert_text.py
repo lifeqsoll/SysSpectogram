@@ -174,13 +174,25 @@ RULE_TEXT: dict[str, dict[Lang, AlertText]] = {
     "port_scan_suspected": {
         "en": _e(
             "Possible port scan",
-            "Many different external addresses hit the same port.",
-            "Usually internet noise. Ban persistent scanners; keep unused ports closed.",
+            "One source address probed many different ports in a short window.",
+            "Ban the scanner IP; keep unused ports closed. Public web ports are not scanned this way.",
         ),
         "ru": _e(
             "Похоже на сканирование портов",
-            "Много разных внешних адресов стучатся в один порт.",
-            "Часто это шум из интернета. Баньте настойчивых сканеров; закрывайте лишние порты.",
+            "Один источник за короткое окно трогал много разных портов.",
+            "Баньте IP сканера; закрывайте лишние порты. Публичные веб-порты так не считаются сканом.",
+        ),
+    },
+    "inbound_flood_suspected": {
+        "en": _e(
+            "Inbound flood on a public port",
+            "Unusually many distinct IPs hit a public service port versus its baseline.",
+            "Medium severity, not auto-banned. Check CDN/provider; do not shield the public port lightly.",
+        ),
+        "ru": _e(
+            "Всплеск входящих на публичный порт",
+            "Аномально много разных IP на публичный сервисный порт относительно baseline.",
+            "Средняя важность, без автобана. Смотрите CDN/провайдера; не экранируйте публичный порт без нужды.",
         ),
     },
     "flow_syn_burst": {

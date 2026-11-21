@@ -159,6 +159,7 @@ class TelegramBot:
     ) -> None:
         self.client = client
         self.watcher = watcher
+        self.config = dict(config or {})
         if nft is not None:
             self.nft = nft
         else:
@@ -351,8 +352,21 @@ class TelegramBot:
                 ]
             )
         if port:
-            tsh = self.tokens.issue("shield", {"port": port, "ttl": 3600})
-            rows.append([_btn(f"Shield :{port}", f"ask|{tsh}")])
+            public = set()
+            if self.watcher is not None:
+                public = set(getattr(self.watcher.engine, "public_ports", ()) or ())
+            if int(port) in public:
+                # Shielding a public service port takes the site offline for everyone.
+                tsh = self.tokens.issue(
+                    "shield",
+                    {"port": int(port), "ttl": 3600, "public_confirm": True},
+                )
+                rows.append(
+                    [_btn(f"Shield :{port} (site offline!)", f"ask|{tsh}")]
+                )
+            else:
+                tsh = self.tokens.issue("shield", {"port": port, "ttl": 3600})
+                rows.append([_btn(f"Shield :{port}", f"ask|{tsh}")])
         extras = alert.extras or {}
         pid = extras.get("pid")
         comm = extras.get("comm") or extras.get("process")
@@ -1346,9 +1360,12 @@ class TelegramBot:
         from sysspectogram.viz.panels import format_audit_message
 
         ports = list_listening_and_established()
+        downgrade = bool(
+            ((self.config or {}).get("audit") or {}).get("deleted_exe_downgrade_on_upgrade", True)
+        )
         text = format_audit_message(
             host_id=self.host_id,
-            rootkit=rootkit_heuristics(),
+            rootkit=rootkit_heuristics(downgrade_on_upgrade=downgrade),
             top_procs=list_top_processes(8),
             suspicious=suspicious_heuristics(),
             listen_count=ports.get("listen_count") if isinstance(ports, dict) else None,
@@ -1387,7 +1404,10 @@ class TelegramBot:
         from sysspectogram.audit.rootkit import rootkit_heuristics
         from sysspectogram.kirk_trust import probe_kirk_trust
 
-        findings = rootkit_heuristics()
+        downgrade = bool(
+            ((self.config or {}).get("audit") or {}).get("deleted_exe_downgrade_on_upgrade", True)
+        )
+        findings = rootkit_heuristics(downgrade_on_upgrade=downgrade)
         report = probe_kirk_trust()
         lines = [
             f"kirk.trust={report.trust} ima={report.ima_present} "

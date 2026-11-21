@@ -605,8 +605,18 @@ def run_guard(
         fail_threshold=int(per_cfg.get("fail_threshold", 8)),
         fail_window_sec=float(per_cfg.get("fail_window_sec", 60)),
         v6_brute_prefix=validate_v6_brute_prefix(per_cfg.get("v6_brute_prefix", 0)),
-        scan_unique_ips=int(per_cfg.get("scan_unique_ips", 8)),
+        scan_unique_ips=(
+            int(per_cfg["scan_unique_ips"]) if "scan_unique_ips" in per_cfg else None
+        ),
+        scan_unique_ports=(
+            int(per_cfg["scan_unique_ports"]) if "scan_unique_ports" in per_cfg else None
+        ),
         scan_window_sec=float(per_cfg.get("scan_window_sec", 60)),
+        public_ports=(
+            [int(p) for p in per_cfg.get("public_ports")]
+            if per_cfg.get("public_ports") is not None
+            else None
+        ),
         denylist_paths=denylist_paths,
         suspicious_domains=suspicious_domains,
         state_path=state_path,

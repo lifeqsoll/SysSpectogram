@@ -88,6 +88,21 @@ def listening_ports(rows: list[ConnRow] | None = None) -> set[int]:
     return {r.local_port for r in rows if r.state == "LISTEN"}
 
 
+def _is_wildcard_bind(ip: str) -> bool:
+    s = (ip or "").lower()
+    return s in {"0.0.0.0", "::", "::0", "*"}
+
+
+def public_bind_listening_ports(rows: list[ConnRow] | None = None) -> set[int]:
+    """Ports listening on 0.0.0.0 / :: (public service binds)."""
+    rows = rows if rows is not None else snapshot_connections()
+    return {
+        r.local_port
+        for r in rows
+        if r.state == "LISTEN" and _is_wildcard_bind(r.local_ip)
+    }
+
+
 def inbound_external(rows: list[ConnRow] | None = None) -> list[ConnRow]:
     rows = rows if rows is not None else snapshot_connections()
     listens = listening_ports(rows)

@@ -26,8 +26,13 @@ host:
 perimeter:
   fail_threshold: 8
   fail_window_sec: 60
-  scan_unique_ips: 8
+  # Unique destination ports per source IP → port_scan_suspected (default 10).
+  scan_unique_ports: 10
+  # Deprecated alias for scan_unique_ports (kept for older configs).
+  # scan_unique_ips: 10
   scan_window_sec: 60
+  # null = auto (wildcard listeners + 80/443). Set explicitly to override.
+  public_ports: null
   state_path: state/perimeter.json
   jsonl_out: reports/perimeter.jsonl
   denylist_paths:
@@ -109,6 +114,9 @@ sessions:
   poll_sec: 15
   allow_users: []
   allow_cidrs: []
+audit:
+  # When false, deleted_exe findings stay high even after package upgrades (paranoid).
+  deleted_exe_downgrade_on_upgrade: true
 root_watch:
   enabled: false
   learn_sec: 300

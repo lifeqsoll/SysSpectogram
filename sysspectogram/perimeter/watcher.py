@@ -12,7 +12,14 @@ from rich.console import Console
 
 from sysspectogram.audit.report import append_jsonl
 from sysspectogram.perimeter.auth import AuthWatcher
-from sysspectogram.perimeter.connections import egress_external, inbound_external, snapshot_connections
+from sysspectogram.perimeter.connections import (
+    egress_external,
+    inbound_external,
+    listening_ports,
+    public_bind_listening_ports,
+    snapshot_connections,
+)
+from sysspectogram.perimeter.rules import resolve_public_ports
 from sysspectogram.perimeter.dns_watch import DnsWatcher
 from sysspectogram.perimeter.proc_map import inode_to_process
 from sysspectogram.perimeter.rules import Alert, Denylist, RuleEngine
@@ -98,8 +105,10 @@ class PerimeterWatcher:
         host_id: str | None = None,
         fail_threshold: int = 8,
         fail_window_sec: float = 60.0,
-        scan_unique_ips: int = 8,
+        scan_unique_ips: int | None = None,
+        scan_unique_ports: int | None = None,
         scan_window_sec: float = 60.0,
+        public_ports: list[int] | None = None,
         denylist_paths: list[Path] | None = None,
         suspicious_domains: set[str] | None = None,
         state_path: Path | None = None,
@@ -146,9 +155,15 @@ class PerimeterWatcher:
         self._inj_host_overflow = 0
 
         denylist = Denylist(denylist_paths or [])
+        self._public_ports_cfg = list(public_ports) if public_ports is not None else None
+        initial_public = resolve_public_ports(
+            self._public_ports_cfg,
+            public_bind_listening_ports(),
+        )
         self.engine = RuleEngine(
             fail_threshold=fail_threshold,
             fail_window_sec=fail_window_sec,
+            scan_unique_ports=scan_unique_ports,
             scan_unique_ips=scan_unique_ips,
             scan_window_sec=scan_window_sec,
             allowlist=set(self.state.allowlist),
@@ -156,6 +171,8 @@ class PerimeterWatcher:
             known_login_ips=set(self.state.known_logins),
             alert_new_egress=alert_new_egress,
             v6_brute_prefix=v6_brute_prefix,
+            public_ports=initial_public,
+            listening_ports=listening_ports(),
         )
         self.auth = AuthWatcher()
         self.dns = DnsWatcher()
@@ -413,6 +430,10 @@ class PerimeterWatcher:
                     emitted.append(a)
 
         rows = snapshot_connections()
+        self.engine.set_listening_ports(listening_ports(rows))
+        self.engine.set_public_ports(
+            resolve_public_ports(self._public_ports_cfg, public_bind_listening_ports(rows))
+        )
         if not self._bootstrapped_conns:
             keys = [f"{r.remote_ip}:{r.remote_port}" for r in egress_external(rows)]
             self.engine.seed_egress(keys)
