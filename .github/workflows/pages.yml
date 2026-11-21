@@ -26,7 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      # v4 uploads via actions/upload-artifact@v4; deploy-pages@v4 cannot see v3 artifacts
+      # (fails with: No artifacts named "github-pages" were found).
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: docs
       - id: deployment
