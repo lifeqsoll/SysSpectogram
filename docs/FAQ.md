@@ -38,7 +38,23 @@ Release assets ship **SHA256SUMS** and, when published, **minisign** signatures.
 
 ## Is host ML production-ready?
 
-Treat it as **experimental**. Default guard paths do not require PyTorch on the VPS (`notorch` / ONNX). Run offline gates in [EVAL.md](EVAL.md) before trusting F1 / FPR claims on your data.
+Treat it as **experimental**. Default is `runtime.prefer: onnx` with a metrics-only fallback when artifacts are missing — no PyTorch required on the VPS. Run offline gates in [EVAL.md](EVAL.md) before trusting F1 / FPR claims on your data.
+
+## How do I quiet Telegram noise (port scans / eBPF)?
+
+Use **`/notify`** (or Menu → Notify): toggle groups (`internet_noise`, `port_scans`, `agent_ebpf`, …), set min severity, or pin individual rule ids via `/notify ids`. Persists under `state/telegram_notify.json`. Details: [TELEGRAM.md](TELEGRAM.md).
+
+## How do I update an existing friend install?
+
+```bash
+export SYSSPECTOGRAM_HOME="${SYSSPECTOGRAM_HOME:-$HOME/.local/share/sysspectogram}"
+source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
+python -m sysspectogram home update --tag v1.5.0   # or latest tag
+systemctl --user restart sysspectogram-protect.service
+# optional: re-run signed install-helper-from-release.sh for the same tag
+```
+
+See [FRIEND.md](FRIEND.md) · [INSTALL.md](INSTALL.md#update-signed-releases-only).
 
 ## Where is the comparison to fail2ban / Wazuh?
 

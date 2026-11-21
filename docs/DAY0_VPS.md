@@ -21,12 +21,12 @@ python -m sysspectogram configure --accept-recommended --role ssh
 # python -m sysspectogram configure --role ssh
 ```
 
-This writes `configs/default.yaml` defaults: `runtime` without Torch when possible, `response.mode: observe`, FIM on for lite, Telegram prompts if desired.
+This writes recommended defaults: `runtime.prefer: onnx` (metrics-only without artifacts), `response.mode: observe`, FIM on for lite, Telegram prompts if desired.
 
 ## 3. Model (optional on day-0)
 
-- **No model yet:** run perimeter + agent (`notorch`).
-- **Have ONNX pack:** put under `artifacts/live`, set `runtime.prefer: onnx`, verify:
+- **No model yet:** perimeter + agent still run (metrics-only host path).
+- **Have ONNX pack:** put under `artifacts/live` (default prefer is already `onnx`), verify:
 
 ```bash
 python -m sysspectogram supply-chain verify artifacts/live

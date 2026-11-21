@@ -81,7 +81,7 @@ Copy the model folder back to the VPS, then in Control Center Settings → **Imp
 python -m sysspectogram home import-model /path/to/artifacts/real
 ```
 
-Restart the guard so it picks up `artifacts/live` (or `state/model.path`). Prefer ONNX (`runtime.prefer: onnx` / `pip install -e '.[onnx]'`).
+Restart the guard so it picks up `artifacts/live` (or `state/model.path`). Default prefer is already **`onnx`**; without artifacts the host stays metrics-only. Builder: `pip install -e '.[onnx]'` (or `[ml]` when training with torch).
 
 More detail: [FRIEND.md](FRIEND.md), [TRAIN_BRIDGE.md](TRAIN_BRIDGE.md). Geek git path: [DAY0_VPS.md](DAY0_VPS.md).
 

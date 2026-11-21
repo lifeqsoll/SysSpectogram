@@ -58,7 +58,18 @@ Dry-run gallery (safe for public docs):
 
 More: [assets/tg/](assets/tg/).
 
-v0.7: `/labels`, `/digest` includes bias + kirk + label counts; **+ similar** widens rules. See [FEEDBACK.md](FEEDBACK.md), [CONFIGURE.md](CONFIGURE.md).
+`/labels`, `/digest` include bias + kirk + label counts; **+ similar** widens rules. See [FEEDBACK.md](FEEDBACK.md), [CONFIGURE.md](CONFIGURE.md).
+
+## Notify filters (1.5.0)
+
+What the bot **pushes** is separate from slash commands. Defaults live under `telegram.notify` in `configs/default.yaml` and can be overridden live:
+
+| Command | Notes |
+| --- | --- |
+| `/notify` | Menu: toggle groups, min severity |
+| `/notify ids` | Catalog of group ids + common rule ids for per-rule overrides |
+
+Groups (defaults): `internet_noise` off; `port_scans`, `ssh_auth`, `egress_dns`, `host_ml`, `agent_critical` on; `agent_ebpf` off. Persist to `state/telegram_notify.json` (`telegram.notify.path`). Optional `rules: { rule_id: true\|false }` and `disable_patterns` for host-ML text.
 
 ## Slash commands
 
@@ -69,9 +80,10 @@ v0.7: `/labels`, `/digest` includes bias + kirk + label counts; **+ similar** wi
 | `/unlock <code>` | console pairing unlock |
 | `/lock` | re-lock; new code on host console |
 | `/help` `/start` | full command list + menu |
-| `/menu` | inline shortcuts |
+| `/menu` | inline shortcuts (includes Notify) |
+| `/notify` | push filters (see above) |
 | `/version` | package version, model path, dry_run |
-| `/status` | uptime, quiet/lockdown, listens, allowlist |
+| `/status` | uptime, quiet/lockdown, listens, allowlist, `ml_phase=` |
 | `/digest` | alert counts by rule |
 | `/last [n]` | last perimeter alerts |
 | `/recipes` | best CLI flag recipes |

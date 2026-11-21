@@ -4,15 +4,17 @@ SysSpectogram is a **self-hosted** Linux host guard. This document is the operat
 
 For the deeper model (assets, adversaries, residual risk) see [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). For signing and manifests see [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).
 
-## Audit fixes (1.4.1)
+## Recent hardening
 
-Hardening from the `686a05f` audit: HMAC-signed agent stop markers (do not trust signal `si_pid` alone), verified pidfile identity, eBPF sender `comm`/`ppid`, quieter setuid/openat, and protect/prefix/flow/login hardening. See `CHANGELOG.md` `[1.4.1]`.
+- **1.5.0** — live guard-core RuleEngine/risk over Unix socket (Python fallback); ban6 migrate preserves IPv6 members; Telegram `/notify` filters. See `CHANGELOG.md` `[1.5.0]` and [RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md).
+- **1.4.1** — HMAC-signed agent stop markers (do not trust signal `si_pid` alone), verified pidfile identity, eBPF sender `comm`/`ppid`, quieter setuid/openat, protect/prefix/flow/login hardening. See `CHANGELOG.md` `[1.4.1]`.
 
 ## Supported versions
 
 | Version | Supported |
 | --- | --- |
-| **1.4.x** | Full support (fixes + hardening) |
+| **1.5.x** | Full support (current) |
+| **1.4.x** | Security fixes |
 | **1.3.x** | Security fixes |
 | **1.2.x** | Security fixes |
 | 1.1.x | Security fixes only |
@@ -173,5 +175,5 @@ Full write-up: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 | [ROOT_WATCH.md](docs/ROOT_WATCH.md) | Unexpected root |
 | [KIRK.md](docs/KIRK.md) | Integrity / isolate |
 | [CONTROL_CENTER.md](docs/CONTROL_CENTER.md) | Helper + polkit surface |
-| [RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md) | Latest release notes |
+| [RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) | Latest release notes |
 | [FRIEND.md](docs/FRIEND.md) | Friend install path |

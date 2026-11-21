@@ -46,11 +46,11 @@ Optional **helper** (soft auto-ban on non-root guard): `curl -fsSL -O "https://g
 
 **Other paths:** [Control Center AppImage / `.deb`](#1-desktop-appimage--deb) · [source / dev](#3-source-install) · [AI-assisted install](docs/INSTALL_WITH_AI.md)
 
-Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft) · [v1.4.0](docs/RELEASE_v1.4.0.md) and older `docs/RELEASE_*.md`.
+Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) · older `docs/RELEASE_*.md`.
 
 ### Host ML (optional)
 
-Default `runtime.prefer: **onnx**` when `cnn.onnx` exists (no torch on the hot path). Without artifacts the guard stays rules + agent. Gates still apply before trusting fuse scores ([EVAL.md](docs/EVAL.md), [ML.md](docs/ML.md), `check_ml_ready.py`). Do not cite headline F1 without EVAL on **your** CSVs.
+Default `runtime.prefer: **onnx**` (no torch on the hot path). Without `cnn.onnx` / artifacts the guard stays on a **metrics-only** path (rules + agent). Trust fuse scores only after gates on **your** data ([EVAL.md](docs/EVAL.md), [ML.md](docs/ML.md), `check_ml_ready.py`).
 
 ---
 
@@ -106,9 +106,10 @@ python -m sysspectogram guard --telegram --dry-run
 - **Control Center (simple + Advanced)** — Home, Charts, Alerts, Settings, **Fleet**; light/dark; EN/RU; first-run wizard
 - **Fleet (many VPS)** — SSH + pair + device token; status / unlock-locked / Attack L2–L3 / profiles / graph ([FLEET.md](docs/FLEET.md))
 - **Telegram + optional web** — Clear alerts; `/charts`; Ban/Kill after console unlock; optional fleet hub bot; web off by default
-- **Guard + Rust agent** — Perimeter (SSH brute, …), FIM/process signals, timeseries charts
-- **Privileged helper** — polkit allowlist for settings / service / signed bundles
-- **Optional host ML (experimental)** — Train on a builder PC; ONNX on VPS; validate with [EVAL.md](docs/EVAL.md) ([HOME.md](docs/HOME.md))
+- **Guard + Rust agent** — Perimeter (SSH brute, per-source scans, …), FIM/process signals, timeseries charts; optional live **guard-core** RuleEngine/risk over a Unix socket
+- **Privileged helper** — polkit / group allowlist for settings / service / signed bans
+- **Optional host ML (experimental)** — Default ONNX prefer; train on a builder PC; validate with [EVAL.md](docs/EVAL.md) ([HOME.md](docs/HOME.md), [ML.md](docs/ML.md))
+- **Telegram notify filters** — `/notify` groups + per-rule overrides ([TELEGRAM.md](docs/TELEGRAM.md))
 
 ### Limitations
 
@@ -120,7 +121,7 @@ Full list: **[Limitations and safety](#limitations-and-safety)** · [SECURITY.md
 
 | Topic | Links |
 | --- | --- |
-| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.4.0](docs/RELEASE_v1.4.0.md) |
+| Simple path | [Friend path](docs/FRIEND.md) · [Simple home](docs/HOME.md) · [Release v1.5.0](docs/RELEASE_v1.5.0.md) |
 | Many VPS | [Fleet](docs/FLEET.md) · Control Center Fleet tab · `fleet` / `home pair-*` CLI |
 | Geek / advanced | [Configure](docs/CONFIGURE.md) · [Day-0 CLI (git)](docs/DAY0_VPS.md) · [Cold install](docs/COLD_INSTALL.md) · [Configuration](docs/CONFIG.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Defense | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |

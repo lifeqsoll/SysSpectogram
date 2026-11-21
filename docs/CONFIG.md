@@ -69,16 +69,20 @@ Fusion is renormalized so the two weights sum to 1.
 
 See `configs/default.yaml` and the Russian config doc for full tables. Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `WEBAPP_URL`.
 
-Notable **v0.6** keys:
+Notable keys (see `configs/default.yaml` for the full file):
 
 | Section | Key | Default | Meaning |
 | --- | --- | --- | --- |
 | `load_profile` | `lite` / `full` | `lite` | CPU budget (VPS vs VDS) |
-| `runtime` | `prefer` | `notorch` | `notorch` \| `onnx` \| `torch_ml` |
+| `runtime` | `prefer` | `onnx` | `onnx` \| `notorch` \| `torch_ml` (no artifacts → metrics-only) |
+| `perimeter` | `scan_unique_ports` | `10` | Distinct destination ports per source IP → `port_scan_suspected` |
+| `perimeter` | `public_ports` | `null` | Ports treated as expected/public (scan weight / Shield warn) |
+| `perimeter` | `scan_unique_ips` | — | **Deprecated** alias of `scan_unique_ports` |
 | `response` | `mode` | `observe` | `observe` \| `shield` \| `aggressive` \| `isolate` |
 | `response` | `never_ban_cidrs` | `[]` | CIDRs that must never be auto-banned (your admin IP as `/32`) |
 | `telegram` | `require_console_unlock` | `true` | Gate TG + web actions until `/unlock` |
-| `agent` | `mode` | `userspace` | `userspace` or `ebpf` (attach needs root) |
+| `telegram.notify` | `groups` / `rules` | see yaml | Push filters; live via `/notify` ([TELEGRAM.md](TELEGRAM.md)) |
+| `agent` | `mode` | `userspace` | `userspace` or `ebpf` (attach needs root; musl release builds link eBPF) |
 | `agent` | `require_hmac` | `true` | Reject unsigned critical agent rules |
 | `agent` | `root_watch` | `true` | Unexpected uid=0 via ProcWatcher ([ROOT_WATCH.md](ROOT_WATCH.md)) |
 | `agent` | `root_learn_sec` | `300` | Baseline root PIDs before alert |
@@ -88,11 +92,13 @@ Notable **v0.6** keys:
 | `kirk` | `auto_isolate` | `false` | CRITICAL kirk → nft `ss_kirk` (set `allow_ssh_cidrs`) |
 | `kirk` | `auto_isolate_host_risk` | `false` | Also isolate when host ML score ≥ threshold |
 | `kirk` | `host_risk_threshold` | `0.99` | Host-risk isolate threshold |
-| `kirk` | `vmi` | `false` | Reserved; live VMI → **v1.0** ([VMI.md](VMI.md)) |
+| `kirk` | `vmi` | `false` | Reserved; live VMI → [VMI.md](VMI.md) |
 | `alerts` | `sinks` | file jsonl | Fan-out `file` / `syslog` / `https` |
 | `watchdog` | `phoenix` / `kernel_protect` | `true` / `false` | Twin + optional DKMS PID registry |
 | `agent.fim` | `enabled` / `baseline_path` | profile | FIM poll + persisted baseline |
 | `ensemble` | `host_weight` / `agent_weight` | see yaml | Fuse host ML + agent IF → `risk` |
+| `guard_core` | `use_for_rules` / `use_for_risk` | `true` | Live RuleEngine / decide_risk over Unix socket ([ML.md](ML.md)) |
+| `ml` | `mode` / `adaptive_thresholds` | `one_class` / `true` | Unsupervised default; per-rule severity EWMA |
 | `supply_chain` | `enforce` | `false` | Verify manifest and minisign signature before model deserialization |
 | `supply_chain` | `public_key` | `null` | Minisign public key file or key string used when enforcement is enabled |
 | `supply_chain` | `manifest_name` | `artifacts.manifest.json` | Model manifest filename |
@@ -102,7 +108,6 @@ Notable **v0.6** keys:
 
 ## Environment notes
 
-- v0.8: supply-chain enforcement is opt-in for compatibility. `configure` can
-  enable it only when a public key is supplied. See [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
-- v0.6: agent HMAC + PID allowlist + exe seal; root watch in Rust; Role Lab; feedback. VMI deferred to v1.0.
+- Supply-chain enforcement is opt-in for compatibility. `configure` can enable it only when a public key is supplied. See [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md).
+- Bundled wheel configs under `sysspectogram/resources/configs/` must stay identical to repo `configs/` (`scripts/check_bundled_configs.py` / CI).
 - Changing `max_cores` or feature schema requires rebuilding the dataset and retraining; old artifacts will not match new column layouts.

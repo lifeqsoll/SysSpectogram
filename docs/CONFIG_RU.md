@@ -7,6 +7,8 @@
 
 Флаги CLI имеют приоритет над отдельными ключами (например `--epochs` перекрывает `train.epochs`).
 
+Актуально для **1.5.0**: `runtime.prefer: onnx` (без артефактов — metrics-only), `perimeter.scan_unique_ports`, `telegram.notify`, `guard_core.use_for_rules` / `use_for_risk`. Полная EN-таблица: [CONFIG.md](CONFIG.md). Копия в колесе должна совпадать с `configs/` (`scripts/check_bundled_configs.py`).
+
 ---
 
 ## `collector`
@@ -78,7 +80,9 @@ CLI `--window` / `--stride` у `build-dataset` перекрывают эти з�
 | `poll_sec` | float | `2` | Интервал опроса auth/conn/DNS |
 | `fail_threshold` | int | `8` | SSH fails для brute |
 | `fail_window_sec` | float | `60` | Окно brute |
-| `scan_unique_ips` | int | `8` | Уникальных IP на порт → scan |
+| `scan_unique_ports` | int | `10` | Уникальных **портов на source IP** → `port_scan_suspected` |
+| `public_ports` | list/null | `null` | Ожидаемые/публичные порты (вес скана / предупреждение Shield) |
+| `scan_unique_ips` | int | — | **Устарело**: алиас `scan_unique_ports` |
 | `denylist_paths` | list | `configs/denylist.txt` | Egress denylist |
 | `suspicious_domains` | list | … | DNS NIDS-lite |
 | `state_path` | path | `state/perimeter.json` | allowlist/mute/quiet |

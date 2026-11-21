@@ -43,10 +43,21 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 | ![help](assets/tg/01-help.jpg) | ![menu](assets/tg/02-menu.jpg) |
 | ![root](assets/tg/08-alert-unexpected-root.jpg) | ![ssh](assets/tg/09-alert-ssh-session.jpg) |
 
+## Фильтры пуша (`/notify`, 1.5.0)
+
+Что бот **сам шлёт** — отдельно от slash-команд. Дефолты: `telegram.notify` в `configs/default.yaml`.
+
+| Команда | Смысл |
+| --- | --- |
+| `/notify` | Меню: группы, мин. severity |
+| `/notify ids` | Каталог group id и типичных rule id |
+
+Группы: `internet_noise` выкл.; `port_scans`, `ssh_auth`, `egress_dns`, `host_ml`, `agent_critical` вкл.; `agent_ebpf` выкл. Persist: `state/telegram_notify.json`. Подробнее: [TELEGRAM.md](TELEGRAM.md).
+
 ## Slash-команды
 
 ### Статус
-`/ping` `/help` `/start` `/menu` `/version` `/status` `/digest` `/last [n]` `/recipes`
+`/ping` `/help` `/start` `/menu` `/notify` `/version` `/status` `/digest` `/last [n]` `/recipes`
 
 ### Аудит хоста (= CLI `audit`)
 | Команда | Смысл |

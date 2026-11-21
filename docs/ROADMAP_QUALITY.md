@@ -3,7 +3,7 @@
 Single forward plan. Goal: credible, honest, installable Linux VPS / host defense —
 not a “rootkit killer” marketing claim.
 
-**Status:** **v1.1.1** friend path shipped; host ML contract fix (schema v2 raw windows) + local retrain evidence in [EVAL.md](EVAL.md) — default runtime still `notorch` until enablement gate. Earlier: [RELEASE_v1.1.1.md](RELEASE_v1.1.1.md) · [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md).
+**Status:** **v1.5.0** current ([RELEASE_v1.5.0.md](RELEASE_v1.5.0.md), [CHANGELOG](../CHANGELOG.md)). Friend path, guard-core live rules/risk, ONNX-prefer (metrics-only without artifacts), Telegram `/notify`, musl agent eBPF-on-by-default. Host ML remains experimental — gate with [EVAL.md](EVAL.md). Earlier milestones: [RELEASE_v1.4.0.md](RELEASE_v1.4.0.md) · [RELEASE_v1.1.1.md](RELEASE_v1.1.1.md) · [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md).
 
 ---
 
@@ -11,7 +11,7 @@ not a “rootkit killer” marketing claim.
 
 1. Honest trust labels — never claim `measured` / out-of-band without evidence.
 2. Safe defaults — observe / dry-run; `auto_isolate` off; unlock gates destructive TG.
-3. VPS-first — `notorch` / ONNX day-0; Torch only on builder.
+3. VPS-first — ONNX prefer / metrics-only without artifacts; Torch only on builder.
 4. No malware / rootkit samples in repo.
 5. Reproducible packs — sha256, HMAC `.sig`, CI artifacts.
 6. Small surface — fewer sharp tools that work.

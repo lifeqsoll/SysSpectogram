@@ -2,7 +2,7 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-**Beta** · самостоятельная **защита Linux VPS/хоста**: понятные алерты, периметр SSH, по желанию nft auto-ban, Telegram — без облачного SIEM. **Для кого:** один или несколько VPS (AppImage / `friend-day0.sh`). Не SIEM — [сравнение](docs/COMPARISON.md).
+**1.5.0** · самостоятельная **защита Linux VPS/хоста**: понятные алерты, периметр SSH, по желанию nft auto-ban, Telegram — без облачного SIEM. **Для кого:** один или несколько VPS (AppImage / `friend-day0.sh`). Не SIEM — [сравнение](docs/COMPARISON.md).
 
 [![CI](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml/badge.svg)](https://github.com/lifeqsoll/SysSpectogram/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/lifeqsoll/SysSpectogram)](https://github.com/lifeqsoll/SysSpectogram/releases)
@@ -37,7 +37,7 @@ python -m sysspectogram home seed-never-ban --ip "${SSH_CONNECTION%% *}"
 loginctl enable-linger "$USER" && python -m sysspectogram protect enable
 ```
 
-Host ML **эксперимент** — [EVAL.md](docs/EVAL.md). История: [CHANGELOG.md](CHANGELOG.md) · [RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md).
+Host ML **эксперимент** (дефолт `runtime.prefer: onnx`, без артефактов — metrics-only) — [EVAL.md](docs/EVAL.md) · [ML.md](docs/ML.md). История: [CHANGELOG.md](CHANGELOG.md) · [RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md).
 
 ---
 
@@ -115,9 +115,10 @@ python -m sysspectogram guard --telegram --dry-run
 - **Control Center** — простой режим и Advanced: главная, графики, алерты, настройки, вкладка **Флот**; светлая/тёмная тема; EN/RU; мастер первого запуска
 - **Флот (несколько VPS)** — с админского ПК: SSH, одноразовый pair-код и device token; статус, массовый unlock, Attack L2–L3, профили и граф зависимостей ([FLEET.md](docs/FLEET.md))
 - **Telegram** (и по желанию web) — понятные алерты, `/charts`, Ban/Kill после unlock; для флота — отдельный hub-бот; web по умолчанию выключен
-- **Guard и Rust-агент** — периметр (брутфорс SSH и др.), FIM/процессы, графики по timeseries
-- **Helper** — polkit: настройки, служба, подписанные bundle
-- **Host ML по желанию** — обучение на builder-ПК, на VPS — импорт ONNX ([HOME.md](docs/HOME.md))
+- **Guard и Rust-агент** — периметр (SSH brute, сканы per-source), FIM/процессы, графики; опционально live **guard-core** (RuleEngine/risk)
+- **Helper** — polkit / группа: настройки, служба, баны
+- **Host ML по желанию** — дефолт ONNX; обучение на builder-ПК ([HOME.md](docs/HOME.md), [ML.md](docs/ML.md))
+- **Фильтры Telegram** — `/notify` группы и per-rule ([TELEGRAM_RU.md](docs/TELEGRAM_RU.md))
 
 ### Ограничения
 
@@ -129,7 +130,7 @@ Root на том же хосте может остановить сервис и
 
 | Тема | Ссылки |
 | --- | --- |
-| Простой путь | [Установка без гиковщины](docs/FRIEND.md) · [Домашний экран](docs/HOME.md) · [Релиз v1.4.0](docs/RELEASE_v1.4.0.md) |
+| Простой путь | [Установка без гиковщины](docs/FRIEND.md) · [Домашний экран](docs/HOME.md) · [Релиз v1.5.0](docs/RELEASE_v1.5.0.md) |
 | Несколько VPS | [Флот](docs/FLEET.md) · вкладка Флот в Control Center · CLI `fleet` / `home pair-*` |
 | Для гиков | [Configure](docs/CONFIGURE.md) · [Day-0 через git](docs/DAY0_VPS.md) · [Холодная установка](docs/COLD_INSTALL.md) · [Конфиг](docs/CONFIG_RU.md) · [Control Center](docs/CONTROL_CENTER.md) |
 | Защита | [Agent](docs/AGENT.md) · [Root watch](docs/ROOT_WATCH.md) · [eBPF](docs/EBPF_SETUP.md) · [Kirk](docs/KIRK.md) · [Threat model](docs/THREAT_MODEL.md) · [Supply chain](docs/SUPPLY_CHAIN.md) · [Security](SECURITY.md) |

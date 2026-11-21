@@ -2,7 +2,7 @@
 
 Reproduce Precision / Recall / F1 / FPR / ROC-AUC / PR-AUC for host ML methods on a labeled window dataset.
 
-**Status (v1.4.x):** host ML stays **experimental**. Default runtime is `notorch`. Per-host MAD baseline (`ml.host_baseline`) may learn quietly with **no alerts** until the baseline period ends. Enable CNN/fuse only after `check_ml_ready.py` shows the model beats the best statistical baseline (robust z / EWMA / IForest-stats / PCA / zscore) on **PR-AUC** and **recall@FPR 1%**.
+**Status (v1.5.x):** host ML stays **experimental**. Default `runtime.prefer` is **`onnx`**; without artifacts the guard stays metrics-only (rules + agent). Per-host MAD baseline (`ml.host_baseline`) may learn quietly with **no alerts** until the baseline period ends. Trust CNN/fuse scores only after `check_ml_ready.py` shows the model beats the best statistical baseline (robust z / EWMA / IForest-stats / PCA / zscore) on **PR-AUC** and **recall@FPR 1%**.
 
 ## Window contract (schema v2)
 
@@ -50,7 +50,7 @@ Writes `reports/eval/metrics.json` and `reports/eval/metrics.md` (includes per-c
 
 ### Enablement gate (safety) — Phase 7.4
 
-Default config stays `runtime.prefer: notorch`. Only flip to `onnx` / `torch_ml` after:
+Default config is `runtime.prefer: onnx` (safe without artifacts). Keep trusting fuse / CNN only after:
 
 ```bash
 python scripts/check_ml_ready.py \
@@ -111,7 +111,7 @@ Rebuilt with raw windows + deeper CNN + label smoothing. Command:
 | iforest | 0.0 | 0.0 | 0.0 | 0.0 |
 | fuse | 1.0 | 0.8421 | 0.9143 | 0.0 |
 
-CNN separates classes under the fixed contract. IsolationForest alone stays weak at the fuse threshold; fuse is usable. **Default `runtime.prefer` remains `notorch`** — enable only after `check_ml_ready.py` on your own data. Filters make lab CSV separation easier than wild VPS traffic; treat as local builder evidence, not friend-default.
+CNN separates classes under the fixed contract. IsolationForest alone stays weak at the fuse threshold; fuse is usable. **Default `runtime.prefer` is `onnx`**, but treat lab CSV separation as builder evidence — run `check_ml_ready.py` on your own data before trusting scores on a friend VPS.
 
 ## v1.0 measurement (dataset/real, artifacts/real_v3)
 

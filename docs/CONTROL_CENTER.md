@@ -1,6 +1,6 @@
 # Control Center
 
-Desktop application for SysSpectogram v1.0, in `control-center/`. Built with Tauri 2 (Rust core) and Svelte 5 + TypeScript (UI). The UI runs as the normal user. Privileged actions go through `sysspectogram-helper` (in `helper/`). See [PRODUCT_v1.0.md](PRODUCT_v1.0.md) and [adr/0004-privilege-helper-split.md](adr/0004-privilege-helper-split.md).
+Desktop application for SysSpectogram (**1.5.x**), in `control-center/`. Built with Tauri 2 (Rust core) and Svelte 5 + TypeScript (UI). The UI runs as the normal user. Privileged actions go through `sysspectogram-helper` (in `helper/`). Product context: [RELEASE_v1.5.0.md](RELEASE_v1.5.0.md); privilege split: [adr/0004-privilege-helper-split.md](adr/0004-privilege-helper-split.md). Historical 1.0 write-up: [PRODUCT_v1.0.md](PRODUCT_v1.0.md).
 
 ## Boundaries
 
@@ -55,16 +55,14 @@ From v1.1 the Control Center can install the stack from a signed GitHub release 
 
 | Section | Purpose |
 | --- | --- |
-| Overview | Guard and helper state, version, host risk for the last hour, latest incidents |
-| Live | Latest samples, 5-minute chart; values older than 10 s are marked stale |
-| Dashboards | Metrics for 1 h, 6 h, 12 h, 24 h, 7 d and 30 d from the timeseries store |
-| Incidents | List, timeline, entities, ATT&CK techniques, HTML or Markdown report |
-| Agent | Agent mode, half-life, spectrogram flag, agent score chart |
-| Perimeter | Recent `perimeter.jsonl` alerts |
-| Settings | Schema-driven editor, pending-changes diff in the selected language, apply, rollback |
-| Scenarios | Protection presets with a preview of the changes before applying |
-| Tests and Lab | Registered localhost lab runs, streamed output, check for the expected alert |
-| Install and Updates | Guard start, stop and restart, bundle install |
+| Home / Overview | Guard and helper state, version, host risk, Start protection |
+| Charts | Multi-metric **grid**, overlays (risk+threshold, score+ml_raw, mem/swap, net/disk), shared poller with Dashboards, cursor sync, marker → Alerts |
+| Dashboards | Longer ranges (1 h … 30 d) from the timeseries store; shared poll helpers / cache |
+| Alerts | Stacked severity rates; jump from chart markers |
+| Fleet | SSH host picker + remote timeseries (see [FLEET.md](FLEET.md)) |
+| Settings | Schema-driven editor, never-ban, apply / rollback, Update stack |
+| Scenarios | Protection presets with a preview before applying |
+| Install and Updates | Bootstrap / update from signed GitHub release; helper / bundle paths |
 | Logs and Audit | Tail of the JSONL reports |
 | About and Docs | Version, project root, helper socket, documentation list |
 
@@ -72,7 +70,7 @@ Icons are SVG files in `control-center/src/assets/icons/`: 24 px grid, stroke 1.
 
 ## Timeseries
 
-`sysspectogram/timeseries/store.py` writes per-second samples from the guard (`cpu_percent`, `mem_percent`, `swap_percent`, network and disk rates, `gpu_util_percent`) and per-inference values (`host_score`, `host_risk`, `agent_score`, `threshold`). Rollups run once a minute.
+`sysspectogram/timeseries/store.py` writes per-second samples from the guard (`cpu_percent`, `mem_percent`, `swap_percent`, network and disk rates, `gpu_util_percent`) and per-inference / alert values (`host_score`, `host_risk`, `agent_score`, `threshold`, `ml_raw_score`, `baseline_z`, severity-split alert rates). Reads support downsample + incremental tail (`max_points` / `after_ts`). Rollups run once a minute.
 
 | Level | Resolution | Kept for | Used by ranges |
 | --- | --- | --- | --- |

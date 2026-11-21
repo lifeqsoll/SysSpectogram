@@ -23,6 +23,12 @@ There is **no** `flush ruleset` on the live path. Hook is **input only** — Doc
 
 `kirk_isolate` flushes **only** `inet ss_kirk` and sets a strict policy with `never_ban` exceptions. Intentional full host lockdown — not a global nft wipe.
 
+## Sets (`ban4` / `ban6`)
+
+Named sets live in `inet sysspectogram` with kernel timeouts. Soft/full bans go through these sets (or the helper when the guard is non-root).
+
+**IPv6 migrate (1.5.0):** upgrading a legacy `ban6` set from `flags timeout` to `flags interval,timeout` keeps existing members. Empty `nft -j` output falls back to parsing the text `nft list` so active IPv6 bans are not dropped.
+
 ## Startup note
 
 When Docker is detected (`/.dockerenv` or `docker0`), status may note that the forward chain is not touched. No automatic firewall changes for that.

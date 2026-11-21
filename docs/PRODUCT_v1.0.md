@@ -1,8 +1,10 @@
 # SysSpectogram 1.0 — Product Description
 
+> **Historical snapshot of v1.0.0.** Current product: **[v1.5.0](RELEASE_v1.5.0.md)** · [CHANGELOG](../CHANGELOG.md) · [README](../README.md). Defaults and ML status in this file may be outdated (e.g. `notorch`); see [ML.md](ML.md) / [CONFIG.md](CONFIG.md).
+
 SysSpectogram is a host defense utility for Linux servers and workstations. It watches a single machine, explains what it sees in plain language, groups related signals into incidents, and lets the operator decide what to do about them. It is local-first: it runs on your host, keeps its data on your host, and never needs a cloud service to work.
 
-This document describes the product as shipped in version 1.0.0: what it does, how it is built, how to operate it, what it protects against, and what it does not do yet. For install steps see the [README](../README.md). For the desktop app see [Control Center](CONTROL_CENTER.md). For release notes and the test record see [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md).
+This document describes the product as shipped in version 1.0.0: what it does, how it is built, how to operate it, what it protects against, and what it does not do yet. For install steps see the [README](../README.md). For the desktop app see [Control Center](CONTROL_CENTER.md). For that era’s release notes see [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md).
 
 ---
 

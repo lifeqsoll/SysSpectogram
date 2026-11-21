@@ -70,4 +70,6 @@ Geek Day-0 wizard remains: `python -m sysspectogram configure`.
 
 ## Same-version rule
 
-GUI version, wheel, and musl agent must match the release tag (ADR 0005). No `git clone` on the VPS for friends.
+GUI version, wheel, and musl agent must match the release tag (ADR 0005). No `git clone` on the VPS for friends. Current release notes: [RELEASE_v1.5.0.md](RELEASE_v1.5.0.md).
+
+After update, restart protect so Telegram / guard pick up the new wheel (`systemctl --user restart sysspectogram-protect.service`, or Home → Start protection). Re-run the signed helper installer when the helper binary must match the tag.

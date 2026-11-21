@@ -68,7 +68,9 @@ sudo -E ./target/release/sysspectogram-agent \
   --hmac-secret state/agent_hmac.secret
 ```
 
-Without root/clang, `--mode ebpf` falls back to userspace. Details: [EBPF_SETUP.md](EBPF_SETUP.md).
+Without root/clang, `--mode ebpf` falls back to userspace (`mode=proc (ebpf unavailable: …)`). Details: [EBPF_SETUP.md](EBPF_SETUP.md).
+
+**Release musl agent (1.5.0+)** ships with the **eBPF feature linked**; runtime still falls back to userspace when the host cannot attach. Optional host-side ONNX scoring is a separate `--features onnx` build (not in the default musl asset).
 
 ## Build
 
@@ -77,6 +79,7 @@ cd agent
 cargo build --release
 # binary: agent/target/release/sysspectogram-agent
 # skip BPF: SYSSPECTOGRAM_SKIP_EBPF=1 cargo build --release --no-default-features
+# optional tract ONNX extras: cargo build --release --features onnx
 ```
 
 ## Run

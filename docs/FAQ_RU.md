@@ -38,7 +38,22 @@ loginctl enable-linger "$USER"
 
 ## Host ML для продакшена?
 
-**Экспериментально.** На VPS по умолчанию без PyTorch (ONNX). Сначала офлайн-оценка: [EVAL.md](EVAL.md).
+**Экспериментально.** Дефолт `runtime.prefer: onnx` (без артефактов — metrics-only); PyTorch на VPS не нужен. Сначала офлайн-оценка: [EVAL.md](EVAL.md).
+
+## Как приглушить шум в Telegram (сканы / eBPF)?
+
+**`/notify`** (или Menu → Notify): группы (`internet_noise`, `port_scans`, `agent_ebpf`, …), мин. severity, точечные rule id через `/notify ids`. Файл: `state/telegram_notify.json`. [TELEGRAM_RU.md](TELEGRAM_RU.md).
+
+## Как обновить уже стоящий friend-стек?
+
+```bash
+export SYSSPECTOGRAM_HOME="${SYSSPECTOGRAM_HOME:-$HOME/.local/share/sysspectogram}"
+source "$SYSSPECTOGRAM_HOME/.venv/bin/activate"
+python -m sysspectogram home update --tag v1.5.0
+systemctl --user restart sysspectogram-protect.service
+```
+
+[FRIEND.md](FRIEND.md) · [INSTALL_RU.md](INSTALL_RU.md).
 
 ## Сравнение с fail2ban / Wazuh?
 
