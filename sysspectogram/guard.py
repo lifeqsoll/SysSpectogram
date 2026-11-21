@@ -736,6 +736,53 @@ def run_guard(
         dry_run=bool(dry_run_actions),
     )
 
+    # Live swap: guard-core serve owns RuleEngine + decide_risk when enabled.
+    gc_use_rules = bool(gc_cfg.get("use_for_rules", True))
+    gc_use_risk = bool(gc_cfg.get("use_for_risk", True))
+    gc_sock = _resolve(gc_cfg.get("socket") or "state/guard-core.sock")
+    _gc_serve_proc = None
+    if gc_use_rules or gc_use_risk:
+        try:
+            from sysspectogram.guard_core_client import (
+                GuardCoreClient,
+                RemoteRuleEngine,
+                ensure_guard_core_serve,
+                set_risk_client,
+            )
+
+            _gc_serve_proc = ensure_guard_core_serve(gc_sock, bin_path=gc_bin)
+            # brief wait for bind
+            for _ in range(20):
+                if Path(gc_sock).is_socket():
+                    break
+                time.sleep(0.05)
+            gc_client = GuardCoreClient(gc_sock)
+            if gc_client.available():
+                console.print(f"[cyan]guard-core serve[/] {gc_sock}")
+                if gc_use_risk:
+                    set_risk_client(gc_client)
+                if gc_use_rules:
+                    py_engine = watcher.engine
+                    remote = RemoteRuleEngine(gc_client, fallback=py_engine)
+                    remote.allowlist = set(getattr(py_engine, "allowlist", set()) or set())
+                    remote.set_public_ports(set(getattr(py_engine, "public_ports", {80, 443}) or {80, 443}))
+                    remote.set_listening_ports(set(getattr(py_engine, "listening_ports", set()) or set()))
+                    remote.fail_threshold = int(getattr(py_engine, "fail_threshold", 8))
+                    remote.scan_unique_ports = int(getattr(py_engine, "scan_unique_ports", 10))
+                    gc_client.configure_rules(
+                        fail_threshold=remote.fail_threshold,
+                        scan_unique_ports=remote.scan_unique_ports,
+                        public_ports=sorted(remote.public_ports),
+                        listening_ports=sorted(remote.listening_ports),
+                        allowlist=sorted(remote.allowlist),
+                    )
+                    watcher.engine = remote
+                    console.print("[cyan]guard-core[/] RuleEngine live (Rust); Python fallback on socket error")
+            else:
+                console.print(f"[yellow]guard-core serve unavailable[/] {gc_sock} — Python rules/risk")
+        except Exception as exc:
+            console.print(f"[yellow]guard-core live swap[/] {exc}")
+
     bot = None
 
     unlock_file = _resolve("state/unlock.code")

@@ -82,13 +82,34 @@ def decide_risk(
 
     Optional MAD ``baseline_*`` may only *promote* a quiet fuse decision to
     anomaly. Baseline never suppresses a fuse/host alert.
+
+    When ``guard_core.use_for_risk`` wired a live client, prefer Rust decide_risk.
     """
+    try:
+        from sysspectogram.guard_core_client import decide_risk_via_core
+
+        remote = decide_risk_via_core(
+            host_score=float(host_score),
+            agent_score=(float(agent_score) if agent_score is not None else None),
+            agent_age_sec=(float(agent_age_sec) if agent_age_sec is not None else None),
+            host_threshold=float(host_threshold),
+            risk_threshold=float(risk_threshold),
+            host_weight=float(host_weight),
+            agent_weight=float(agent_weight),
+            agent_half_life_sec=float(agent_half_life_sec),
+            baseline_z=(float(baseline_z) if baseline_z is not None else None),
+            baseline_alert=baseline_alert,
+        )
+        if remote is not None:
+            return remote
+    except Exception:
+        pass
     decayed = None
     if agent_score is not None:
         decayed = decay_agent_score(agent_score, agent_age_sec, agent_half_life_sec)
     risk = fuse_host_agent(
         host_score,
-        decayed if decayed is not None else 0.0,
+        decayed,
         host_weight=host_weight,
         agent_weight=agent_weight,
     )

@@ -4,6 +4,9 @@ pub mod auth;
 pub mod flow;
 pub mod metrics;
 pub mod render;
+pub mod response;
+pub mod risk;
+pub mod rules;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

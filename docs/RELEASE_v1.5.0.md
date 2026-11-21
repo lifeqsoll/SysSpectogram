@@ -10,7 +10,7 @@
 2. **Perimeter** — port scans counted **per source IP** (not “many IPs on :443”); `public_ports` + optional `inbound_flood_suspected`; Telegram Shield warns on public ports.
 3. **Rootkit** — `(deleted)` exe after package upgrade → **info**, not high (`audit.deleted_exe_downgrade_on_upgrade`).
 4. **Stability** — non-UTF8 `/proc` comm; timeseries disk-full does not kill sampling; TG poll backoff.
-5. **guard-core** — Rust crate with `schema_version`, metrics/auth/tcp/render, Unix `serve` JSONL IPC, Python shadow + optional metrics swap (throttled, bundled-bin preferred, optional SHA pin).
+5. **guard-core** — live **RuleEngine** + **decide_risk** + helper ban over `serve` socket (defaults on); metrics/auth/tcp/render; Python fallback if binary/socket missing.
 6. **eBPF** — release musl build ships with eBPF feature; runtime prints `mode=ebpf` or `mode=proc (ebpf unavailable: …)`.
 7. **ML** — ONNX prefer + `one_class` default; feature events + weak-label audit; adaptive thresholds on; model-occlusion explain; promote/shadow; optional agent `tract-onnx`.
 8. **Charts** — combined overlays, stacked severity alerts, shared poller with Dashboards, marker jump to Alerts.
@@ -35,7 +35,6 @@ Config snippets: see `configs/default.yaml` (`public_ports`, `scan_unique_ports`
 
 ## Known limitations
 
-- Perimeter **RuleEngine**, response/ban policy, and host/agent risk fusion stay in Python (guard-core is helpers + shadow + IPC, not a full loop replacement).
 - Agent ONNX is an optional `onnx` feature (`tract-onnx`), not linked into the default musl build; scores are extras only.
 
 ## Verify before tag (Mell)

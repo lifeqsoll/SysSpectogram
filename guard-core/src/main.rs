@@ -2,11 +2,13 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
-use sysspectogram_guard_core::{auth, flow, metrics, render, SCHEMA_VERSION};
+use sysspectogram_guard_core::rules::{RuleEngine, RuleEngineConfig};
+use sysspectogram_guard_core::{auth, flow, metrics, render, response, risk, SCHEMA_VERSION};
 
 #[derive(Parser, Debug)]
 #[command(name = "sysspectogram-guard-core", version, about = "Guard metrics/alert control-plane")]
@@ -93,14 +95,16 @@ fn serve_socket(path: &std::path::Path) {
         eprintln!("serve bind {}: {err}", path.display());
         std::process::exit(1);
     });
+    let engine = Arc::new(Mutex::new(RuleEngine::new(RuleEngineConfig::default())));
     eprintln!(
-        "[sysspectogram-guard-core] serve schema_version={SCHEMA_VERSION} socket={}",
+        "[sysspectogram-guard-core] serve schema_version={SCHEMA_VERSION} socket={} (rules+risk+response)",
         path.display()
     );
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
-                if let Err(err) = handle_client(stream) {
+                let eng = Arc::clone(&engine);
+                if let Err(err) = handle_client(stream, eng) {
                     eprintln!("serve client: {err}");
                 }
             }
@@ -109,7 +113,7 @@ fn serve_socket(path: &std::path::Path) {
     }
 }
 
-fn handle_client(stream: UnixStream) -> Result<(), String> {
+fn handle_client(stream: UnixStream, engine: Arc<Mutex<RuleEngine>>) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut writer = stream;
     let mut line = String::new();
@@ -143,6 +147,104 @@ fn handle_client(stream: UnixStream) -> Result<(), String> {
                     Some((ip, port)) => json!({"ok": true, "ip": ip, "port": port}),
                     None => json!({"ok": false, "error": "bad_field"}),
                 }
+            }
+            "on_auth_fail" => {
+                let ip = req.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+                let user = req.get("user").and_then(|v| v.as_str()).unwrap_or("");
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let alert = eng.on_auth_fail(ip, user);
+                json!({"ok": true, "alert": alert})
+            }
+            "on_auth_accepted" => {
+                let ip = req.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+                let user = req.get("user").and_then(|v| v.as_str()).unwrap_or("");
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let alert = eng.on_auth_accepted(ip, user);
+                json!({"ok": true, "alert": alert})
+            }
+            "on_inbound" => {
+                let ip = req.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+                let port = req.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let alert = eng.on_inbound(ip, port);
+                json!({"ok": true, "alert": alert})
+            }
+            "on_egress" => {
+                let ip = req.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+                let port = req.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let proc = req.get("proc").and_then(|v| v.as_str());
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let alert = eng.on_egress(ip, port, proc);
+                json!({"ok": true, "alert": alert})
+            }
+            "on_suspicious_dns" => {
+                let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let alert = eng.on_suspicious_dns(name);
+                json!({"ok": true, "alert": alert})
+            }
+            "decide_risk" => {
+                let host = req.get("host_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let agent = req.get("agent_score").and_then(|v| v.as_f64());
+                let age = req.get("agent_age_sec").and_then(|v| v.as_f64());
+                let host_thr = req
+                    .get("host_threshold")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.5);
+                let risk_thr = req
+                    .get("risk_threshold")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.7);
+                let hw = req.get("host_weight").and_then(|v| v.as_f64()).unwrap_or(0.6);
+                let aw = req.get("agent_weight").and_then(|v| v.as_f64()).unwrap_or(0.4);
+                let hl = req
+                    .get("agent_half_life_sec")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(risk::DEFAULT_AGENT_HALF_LIFE_SEC);
+                let bz = req.get("baseline_z").and_then(|v| v.as_f64());
+                let ba = req.get("baseline_alert").and_then(|v| v.as_bool());
+                let d = risk::decide_risk(
+                    host, agent, age, host_thr, risk_thr, hw, aw, hl, bz, ba,
+                );
+                json!({"ok": true, "decision": d})
+            }
+            "ban" => {
+                let ip = req.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+                let ttl = req.get("ttl_sec").and_then(|v| v.as_i64()).unwrap_or(3600);
+                let dry = req.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+                let msg = response::ban_via_helper(ip, ttl, dry, None);
+                json!({"ok": true, "message": msg})
+            }
+            "configure_rules" => {
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                if let Some(n) = req.get("fail_threshold").and_then(|v| v.as_u64()) {
+                    eng.set_fail_threshold(n as usize);
+                }
+                if let Some(n) = req.get("scan_unique_ports").and_then(|v| v.as_u64()) {
+                    eng.set_scan_unique_ports(n as usize);
+                }
+                if let Some(arr) = req.get("public_ports").and_then(|v| v.as_array()) {
+                    eng.set_public_ports(
+                        arr.iter()
+                            .filter_map(|x| x.as_u64().map(|n| n as u16))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                if let Some(arr) = req.get("listening_ports").and_then(|v| v.as_array()) {
+                    eng.set_listening_ports(
+                        arr.iter()
+                            .filter_map(|x| x.as_u64().map(|n| n as u16))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                if let Some(arr) = req.get("allowlist").and_then(|v| v.as_array()) {
+                    eng.set_allowlist(
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                json!({"ok": true})
             }
             _ => json!({"ok": false, "error": "unknown_op"}),
         };

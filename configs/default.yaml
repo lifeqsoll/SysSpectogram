@@ -215,6 +215,10 @@ guard_core:
   shadow: false
   # Prefer guard-core cpu/mem on the host sample path; Python values remain the fallback.
   use_for_metrics: false
+  # Live RuleEngine + decide_risk via `guard-core serve` (Python fallback on socket error).
+  use_for_rules: true
+  use_for_risk: true
+  socket: state/guard-core.sock
   # Optional SHA-256 pin of the guard-core binary (required when use_for_metrics in hostile envs).
   bin_sha256: null
   metrics_interval_sec: 5

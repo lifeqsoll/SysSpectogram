@@ -23,7 +23,7 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft
 - ML feature-event JSONL + weak labels (including Telegram ban/kill/isolate/mute/allow/host_fp) and the mini reference dataset (`docs/ML.md`).
 - Per-rule adaptive thresholds (`ml.adaptive_thresholds`); critical severity is never softened.
 - Model shadow/live/previous promote + rollback (`ml.shadow_dir`, `ml.live_dir`), verified with the supply-chain manifest before promote.
-- `guard-core` CLI: `metrics`, `auth-fail-ip`, `tcp-addr`, `render`, `serve` (Unix JSONL IPC). Python shadow compare and optional Rust CPU/mem (`guard_core.shadow`, `guard_core.use_for_metrics`).
+- `guard-core` CLI: `metrics`, `auth-fail-ip`, `tcp-addr`, `render`, `serve` (Unix JSONL IPC with live **RuleEngine**, **decide_risk**, helper **ban**). Defaults `use_for_rules` / `use_for_risk` on; Python fallback if socket down.
 - Agent optional `onnx` feature (`tract-onnx`, not default): `--onnx-model` / `--onnx-shadow` attach `ml_score` extras.
 - Timeseries metrics: `ml_raw_score`, `baseline_z`, `threshold`, severity-split alert rates.
 - Charts grid overlays (risk+threshold, score+ml_raw, mem+swap, net/disk pairs), stacked severity alerts, marker → Alerts.
@@ -49,7 +49,6 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft
 
 ### Known limitations
 
-- Perimeter **RuleEngine**, response, and risk fusion stay in Python; guard-core provides helpers + shadow + `serve` IPC, not a full live swap of those loops.
 - Agent ONNX (`tract-onnx`) is feature-gated and off by default; scores are extras only and do not replace rule severity.
 
 ### Added (carried from unreleased 1.4.x line)
