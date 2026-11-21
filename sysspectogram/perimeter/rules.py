@@ -11,6 +11,9 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+ALERT_SCHEMA_VERSION = 1
+
+
 @dataclass
 class Alert:
     rule_id: str
@@ -20,6 +23,19 @@ class Alert:
     port: int | None = None
     extras: dict = field(default_factory=dict)
     ts: float = field(default_factory=time.time)
+    schema_version: int = ALERT_SCHEMA_VERSION
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": int(self.schema_version),
+            "rule_id": self.rule_id,
+            "severity": self.severity,
+            "message": self.message,
+            "ip": self.ip,
+            "port": self.port,
+            "extras": dict(self.extras or {}),
+            "ts": float(self.ts),
+        }
 
 
 class Denylist:

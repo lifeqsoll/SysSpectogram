@@ -81,7 +81,16 @@ class CollectDaemon:
                     self._writer.writerow(row)
                     self._fh.flush()
                 if on_sample is not None:
-                    on_sample(row)
+                    try:
+                        on_sample(row)
+                    except Exception as exc:  # noqa: BLE001 — isolate callback from sample loop
+                        if isinstance(exc, KeyboardInterrupt):
+                            raise
+                        import logging
+
+                        logging.getLogger(__name__).warning(
+                            "on_sample failed (continuing): %s", exc
+                        )
                 count += 1
                 elapsed = time.monotonic() - t0
                 sleep_for = self.interval_sec - elapsed

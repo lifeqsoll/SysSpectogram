@@ -39,6 +39,6 @@ def inode_to_process(inodes: set[str]) -> dict[str, str]:
 
 def _comm(pdir: Path) -> str:
     try:
-        return (pdir / "comm").read_text(encoding="utf-8").strip() or "?"
-    except OSError:
+        return (pdir / "comm").read_text(encoding="utf-8", errors="replace").strip() or "?"
+    except (OSError, ValueError):
         return "?"

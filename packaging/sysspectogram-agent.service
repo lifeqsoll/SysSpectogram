@@ -21,8 +21,10 @@ WatchdogSec=120
 KillMode=control-group
 TimeoutStopSec=20
 OOMPolicy=continue
-AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_NET_ADMIN
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_SYS_PTRACE CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_SYS_PTRACE CAP_SYS_ADMIN CAP_NET_ADMIN
+# BPF maps / JIT need executable pages in some kernels
+MemoryDenyWriteExecute=no
 NoNewPrivileges=false
 
 [Install]

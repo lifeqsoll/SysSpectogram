@@ -158,17 +158,18 @@ def recommend(facts: HostFacts | None = None) -> Recommendations:
             )
         )
 
-    # Runtime prefer
-    if facts.ram_gib < 2.0 or not facts.has_torch:
-        prefer = "notorch"
-        reason = "no torch or RAM<2GiB — ONNX/notorch preferred"
-        sev = "warn" if facts.ram_gib < 1.5 else "info"
-    else:
-        prefer = "torch" if facts.has_torch else "notorch"
-        reason = "torch available and RAM ok"
+    # Runtime prefer — ONNX by default when available (no torch import on hot path).
+    if facts.has_onnx:
+        prefer = "onnx"
+        reason = "onnxruntime available — default host inference without torch"
         sev = "info"
-    if prefer == "notorch" and not facts.has_onnx:
-        reason += "; install onnxruntime for ML scoring"
+    elif facts.ram_gib >= 2.0 and facts.has_torch:
+        prefer = "torch"
+        reason = "no onnxruntime; torch available as fallback"
+        sev = "warn"
+    else:
+        prefer = "notorch"
+        reason = "no onnx/torch — rules + agent only; install onnxruntime for ML"
         sev = "warn"
     items.append(RecItem("runtime.prefer", prefer, reason, sev))
 

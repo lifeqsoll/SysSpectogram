@@ -25,6 +25,36 @@ mod imp {
         pub detail: String,
     }
 
+    fn kernel_at_least(major: u32, minor: u32) -> bool {
+        let Ok(raw) = std::fs::read_to_string("/proc/sys/kernel/osrelease") else {
+            return false;
+        };
+        let mut parts = raw.trim().split(|c: char| !c.is_ascii_digit());
+        let maj: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let min: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        (maj, min) >= (major, minor)
+    }
+
+    fn has_cap_bpfish() -> bool {
+        // Root always ok; otherwise look for CapEff bit for CAP_BPF (39) / CAP_PERFMON (38).
+        if unsafe { libc::geteuid() } == 0 {
+            return true;
+        }
+        let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+            return false;
+        };
+        for line in status.lines() {
+            if let Some(hex) = line.strip_prefix("CapEff:\t") {
+                if let Ok(v) = u64::from_str_radix(hex.trim(), 16) {
+                    const CAP_PERFMON: u64 = 1 << 38;
+                    const CAP_BPF: u64 = 1 << 39;
+                    return (v & (CAP_BPF | CAP_PERFMON)) != 0;
+                }
+            }
+        }
+        false
+    }
+
     pub fn probe_toolchain() -> EbpfStatus {
         let clang = std::process::Command::new("clang")
             .arg("--version")
@@ -33,7 +63,13 @@ mod imp {
             .unwrap_or(false);
         let btf = std::path::Path::new("/sys/kernel/btf/vmlinux").exists();
         let obj = std::path::Path::new(env!("OUT_DIR")).join("sysspectogram-ebpf");
-        if clang && btf && obj.exists() {
+        let kern_ok = kernel_at_least(5, 8);
+        let caps_ok = has_cap_bpfish();
+        let lockdown = std::fs::read_to_string("/sys/kernel/security/lockdown")
+            .unwrap_or_default()
+            .to_lowercase();
+        let lockdown_block = lockdown.contains("[integrity]") || lockdown.contains("[confidentiality]");
+        if clang && btf && obj.exists() && kern_ok && caps_ok && !lockdown_block {
             EbpfStatus {
                 available: true,
                 detail: format!("ready ({})", obj.display()),
@@ -42,10 +78,13 @@ mod imp {
             EbpfStatus {
                 available: false,
                 detail: format!(
-                    "incomplete clang={} btf={} obj={} — see docs/EBPF_SETUP.md",
+                    "unavailable clang={} btf={} obj={} kernel>=5.8={} caps={} lockdown_block={} — mode=proc; see docs/EBPF_SETUP.md",
                     clang,
                     btf,
-                    obj.exists()
+                    obj.exists(),
+                    kern_ok,
+                    caps_ok,
+                    lockdown_block
                 ),
             }
         }

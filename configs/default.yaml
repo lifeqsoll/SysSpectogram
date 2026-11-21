@@ -1,6 +1,7 @@
 load_profile: lite
 runtime:
-  prefer: notorch
+  # Prefer ONNX host scoring when cnn.onnx exists; falls back to notorch without artifacts.
+  prefer: onnx
 collector: {}
 window:
   size: 60

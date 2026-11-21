@@ -1778,10 +1778,17 @@ class TelegramBot:
                 return
         self.client.send_document(Path(path), caption=self.prefix("report"), chat_id=chat_id)
 
-    def poll_once(self, timeout: int = 2) -> None:
+    def poll_once(self, timeout: int = 2) -> bool:
+        """Poll Telegram once. Returns False when the API call failed (for backoff)."""
         if not self.client.configured:
-            return
-        updates = self.client.get_updates(offset=self._offset, timeout=timeout)
+            return True
+        payload: dict = {"timeout": timeout}
+        if self._offset is not None:
+            payload["offset"] = self._offset
+        res = self.client._post("getUpdates", payload, timeout=timeout + 10)
+        if not res.get("ok"):
+            return False
+        updates = list(res.get("result") or [])
         for upd in updates:
             self._offset = int(upd["update_id"]) + 1
             if "message" in upd:
@@ -1806,3 +1813,4 @@ class TelegramBot:
                     self.client.answer_callback(
                         upd["callback_query"].get("id", ""), f"err:{exc}"[:180]
                     )
+        return True

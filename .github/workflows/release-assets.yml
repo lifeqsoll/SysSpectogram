@@ -27,17 +27,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
-      - name: musl tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
-      - name: build musl agent
+      - name: musl + eBPF build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools clang llvm libbpf-dev
+      - name: build musl agent (eBPF default)
         working-directory: agent
         env:
-          SYSSPECTOGRAM_SKIP_EBPF: "1"
+          C_INCLUDE_PATH: /usr/include/x86_64-linux-gnu
+          CC_x86_64_unknown_linux_musl: musl-gcc
         run: |
-          cargo build --release --target x86_64-unknown-linux-musl --no-default-features
+          # Ship with default `ebpf` feature (aya). Fallback to proc at runtime if attach fails.
+          cargo build --release --target x86_64-unknown-linux-musl --locked
           cp target/x86_64-unknown-linux-musl/release/sysspectogram-agent \
             ../sysspectogram-agent-x86_64-linux-musl
           sha256sum ../sysspectogram-agent-x86_64-linux-musl | tee ../sysspectogram-agent-x86_64-linux-musl.sha256
+          # Hard gate: eBPF must be linked into the musl release binary.
+          if ! strings ../sysspectogram-agent-x86_64-linux-musl | grep -qE 'sysspectogram_execve|sysspectogram-ebpf|aya'; then
+            echo "ERROR: musl agent binary missing eBPF symbols" >&2
+            exit 1
+          fi
+          strings ../sysspectogram-agent-x86_64-linux-musl | grep -E 'sysspectogram_execve|sysspectogram-ebpf|aya' | head -8
       - name: build Python release assets and SBOM
         run: |
           python3 -m pip install --upgrade build

@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "rule_id": "bruteforce_ssh",
+  "severity": "critical",
+  "message": "SSH auth failures from 203.0.113.9",
+  "ip": "203.0.113.9",
+  "port": 22,
+  "extras": {
+    "fails": 9,
+    "user": "root"
+  },
+  "ts": 1700000000.0
+}

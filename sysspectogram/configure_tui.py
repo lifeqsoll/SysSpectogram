@@ -193,7 +193,11 @@ def run_configure(
             mode = mode_rec
 
     prefer_rec = str(rec.overlay["runtime"]["prefer"])
-    prefer = Prompt.ask("runtime.prefer", choices=["notorch", "torch", "auto"], default=prefer_rec)
+    prefer = Prompt.ask(
+        "runtime.prefer",
+        choices=["onnx", "notorch", "torch", "auto"],
+        default=prefer_rec,
+    )
     if prefer != prefer_rec:
         it = next(i for i in rec.items if i.key == "runtime.prefer")
         if not _confirm_override("runtime.prefer", prefer_rec, prefer, it.reason):

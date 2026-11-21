@@ -2,7 +2,7 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-**Beta** · self-hosted **Linux VPS / host guard** for operators who want understandable alerts, SSH perimeter rules, optional nft auto-ban, Telegram (and optional web) control — without shipping logs to a vendor cloud.
+**1.5.0 (prep)** · self-hosted **Linux VPS / host guard** for operators who want understandable alerts, SSH perimeter rules, optional nft auto-ban, Telegram (and optional web) control — without shipping logs to a vendor cloud.
 
 **For:** solo devs and small teams on one or a few VPS boxes (friend AppImage path or headless `friend-day0.sh`). **Not** a full SIEM — see [Comparison](docs/COMPARISON.md).
 
@@ -46,11 +46,11 @@ Optional **helper** (soft auto-ban on non-root guard): `curl -fsSL -O "https://g
 
 **Other paths:** [Control Center AppImage / `.deb`](#1-desktop-appimage--deb) · [source / dev](#3-source-install) · [AI-assisted install](docs/INSTALL_WITH_AI.md)
 
-Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md) · [v1.3.3](docs/RELEASE_v1.3.3.md) and older `docs/RELEASE_*.md`.
+Release history: [CHANGELOG.md](CHANGELOG.md) · [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft) · [v1.4.0](docs/RELEASE_v1.4.0.md) and older `docs/RELEASE_*.md`.
 
-### Host ML (optional, experimental)
+### Host ML (optional)
 
-Guard works in **observe** without PyTorch. Default stays `notorch`: by our gates, CNN/fuse is **not** enabled until it beats statistical baselines on your data ([EVAL.md](docs/EVAL.md), `check_ml_ready.py`). A quiet per-host MAD baseline may learn with no alerts during the warm-up. Do not cite headline F1 without EVAL on **your** CSVs.
+Default `runtime.prefer: **onnx**` when `cnn.onnx` exists (no torch on the hot path). Without artifacts the guard stays rules + agent. Gates still apply before trusting fuse scores ([EVAL.md](docs/EVAL.md), [ML.md](docs/ML.md), `check_ml_ready.py`). Do not cite headline F1 without EVAL on **your** CSVs.
 
 ---
 

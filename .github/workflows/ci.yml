@@ -140,10 +140,19 @@ jobs:
       - name: cargo metadata --locked (all Rust projects)
         run: |
           set -euo pipefail
-          for d in agent helper control-center/src-tauri fleet-center/src-tauri; do
+          for d in agent helper control-center/src-tauri fleet-center/src-tauri guard-core; do
             echo "== $d =="
             (cd "$d" && cargo metadata --locked --format-version 1 >/dev/null)
           done
+
+  guard-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: test guard-core
+        working-directory: guard-core
+        run: cargo test --locked -q
 
   nft-real:
     runs-on: ubuntu-24.04
@@ -187,4 +196,7 @@ jobs:
             tests/test_alert_explain.py \
             tests/test_feedback_loop.py \
             tests/test_drift_refit.py \
-            tests/test_onnx_parity.py
+            tests/test_onnx_parity.py \
+            tests/test_ml_feature_events.py \
+            tests/test_ml_reference_eval.py \
+            tests/test_ml_reference_gate.py

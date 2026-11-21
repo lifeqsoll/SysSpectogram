@@ -79,6 +79,10 @@ class TimeseriesStore:
             pass
         self._buffer: list[tuple[float, str, float]] = []
         self._last_rollup = 0.0
+        self._buffer_cap = 50_000
+        self.dropped = 0
+        self.flush_errors = 0
+        self.disk_full = False
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -101,6 +105,10 @@ class TimeseriesStore:
 
     def write(self, metric: str, value: float, ts: float | None = None) -> None:
         now = time.time() if ts is None else float(ts)
+        if len(self._buffer) >= self._buffer_cap:
+            drop = max(1, len(self._buffer) // 10)
+            del self._buffer[:drop]
+            self.dropped += drop
         self._buffer.append((int(now), metric, float(value)))
 
     def write_many(self, values: Mapping[str, float], ts: float | None = None) -> None:
@@ -115,23 +123,36 @@ class TimeseriesStore:
         rows = self._buffer
         self._buffer = []
         with self._lock:
-            self._db.execute("BEGIN")
             try:
+                self._db.execute("BEGIN")
                 self._db.executemany(
                     "INSERT OR REPLACE INTO raw(ts, metric, value) VALUES (?, ?, ?)", rows
                 )
                 self._db.execute("COMMIT")
             except Exception:
-                self._db.execute("ROLLBACK")
-                raise
+                if self._db.in_transaction:
+                    try:
+                        self._db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                # Disk full / locked DB must not kill the sample loop — requeue and warn.
+                self.flush_errors += 1
+                self.disk_full = True
+                self._buffer = rows + self._buffer
+                if len(self._buffer) > self._buffer_cap:
+                    overflow = len(self._buffer) - self._buffer_cap
+                    del self._buffer[:overflow]
+                    self.dropped += overflow
+                return 0
+        self.disk_full = False
         return len(rows)
 
     def rollup(self, now: float | None = None) -> None:
         """Compute complete buckets from the level below, then apply retention."""
         now = time.time() if now is None else float(now)
         with self._lock:
-            self._db.execute("BEGIN")
             try:
+                self._db.execute("BEGIN")
                 # r10s from raw: buckets fully older than 30 s (raw is 1 s, late writes tolerated)
                 self._aggregate("raw", "r10s", 10, now - 30.0)
                 # r1m from raw: buckets fully older than 120 s
@@ -143,8 +164,12 @@ class TimeseriesStore:
                     self._db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
                 self._db.execute("COMMIT")
             except Exception:
-                self._db.execute("ROLLBACK")
-                raise
+                if self._db.in_transaction:
+                    try:
+                        self._db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                return
             self._last_rollup = now
 
     def _aggregate(

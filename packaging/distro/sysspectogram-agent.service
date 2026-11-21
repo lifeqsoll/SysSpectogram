@@ -5,7 +5,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/sysspectogram-agent --mode userspace --phoenix \
+# Prefer eBPF; agent falls back to mode=userspace/proc if attach fails (visible in journal).
+ExecStart=/usr/bin/sysspectogram-agent --mode ebpf --phoenix \
   --socket /run/sysspectogram/agent.sock \
   --pidfile /run/sysspectogram/agent.pid \
   --hmac-secret /var/lib/sysspectogram/state/agent_hmac.secret \
@@ -18,7 +19,11 @@ Restart=always
 RestartSec=2
 WatchdogSec=120
 UMask=0077
-NoNewPrivileges=true
+# Caps required for eBPF attach; without them the binary still runs in userspace/proc.
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_SYS_PTRACE CAP_NET_ADMIN
+MemoryDenyWriteExecute=no
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target

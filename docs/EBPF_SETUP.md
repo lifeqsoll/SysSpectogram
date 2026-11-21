@@ -1,9 +1,26 @@
 # eBPF setup — Aya loader + clang BPF probes
 
-Probes include `sys_enter_execve`, `sys_enter_openat`, `sys_enter_kill`, setuid helpers, and module load/unload.
-Build: **system `clang -target bpf`**. Load/attach: **Aya** in `sysspectogram-agent`.
+Probes: `sys_enter_execve`, `sys_enter_openat`, `sys_enter_kill`, setuid helpers, module load/unload.
+Build: system `clang -target bpf`. Load/attach: **Aya** in `sysspectogram-agent`.
 
-Needs **BTF** (`ls /sys/kernel/btf/vmlinux`) and **real root** (tracefs is typically `0700`).
+Requirements:
+
+| Check | Minimum |
+|---|---|
+| Kernel | ≥ 5.8 (CAP_BPF / ring buffer) |
+| BTF | `/sys/kernel/btf/vmlinux` present (`CONFIG_DEBUG_INFO_BTF`) |
+| Caps / user | root **or** `CAP_BPF` + `CAP_PERFMON` **and** readable tracefs |
+| Tracefs | `/sys/kernel/tracing` (often mode `0700` → real root needed) |
+| Lockdown | not integrity/confidentiality blocking BPF |
+
+At startup the agent prints `eBPF probe: available=…` and either attaches or falls back:
+
+```text
+mode=ebpf
+mode=proc (ebpf unavailable: <reason>)
+```
+
+Fallback is **visible** (stderr + effective mode). The process does not exit.
 
 ## Arch
 
@@ -17,28 +34,29 @@ cd agent && cargo build --release
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential clang llvm libbpf-dev linux-libc-dev
-# Without this, probes.c fails with 'asm/types.h not found'
+sudo apt-get install -y build-essential clang llvm libbpf-dev linux-libc-dev musl-tools
 export C_INCLUDE_PATH=/usr/include/$(uname -m)-linux-gnu
 cd agent && cargo build --release
 ```
 
-## Build notes
+## Musl static (release shape)
 
 ```bash
+rustup target add x86_64-unknown-linux-musl
 cd agent
-cargo build --release
-# binary: agent/target/release/sysspectogram-agent
+C_INCLUDE_PATH=/usr/include/x86_64-linux-gnu CC_x86_64_unknown_linux_musl=musl-gcc \
+  cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-Skip BPF compile (userspace-only): `SYSSPECTOGRAM_SKIP_EBPF=1 cargo build --release --no-default-features`
+Default features include `ebpf`. Userspace-only:
 
-**Release musl agent** (GitHub assets) is built `--no-default-features` → **no eBPF**. Kill witness and eBPF setuid/openat alerts need a source build with the default `ebpf` feature. Packaged units that pass `--mode ebpf` require that binary; otherwise the agent falls back to userspace.
+```bash
+SYSSPECTOGRAM_SKIP_EBPF=1 cargo build --release --no-default-features
+```
 
-## Run (needs **real root**, not only setcap)
+GitHub `release-assets` builds the musl agent **with eBPF enabled** (clang/llvm/libbpf + musl-gcc).
 
-`/sys/kernel/tracing` is typically `0700 root`. Aya must `readdir` it to attach.
-`setcap cap_bpf,...` is **not enough** → `tracefs not found` / not readable.
+## Run
 
 ```bash
 sudo -E ./agent/target/release/sysspectogram-agent \
@@ -47,15 +65,24 @@ sudo -E ./agent/target/release/sysspectogram-agent \
   --metrics-ms 1000
 ```
 
+`setcap` alone is often **not enough** if `/sys/kernel/tracing` is `0700`.
+
+## systemd
+
+`packaging/sysspectogram-agent.service` grants:
+
+`CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_SYS_PTRACE` and `MemoryDenyWriteExecute=no`.
+
 ## Common errors
 
 | Symptom | Fix |
 |---|---|
-| `asm/types.h not found` | Set `C_INCLUDE_PATH=/usr/include/$(uname -m)-linux-gnu` (Debian/Ubuntu) |
-| `tracefs not readable` / not found | Run as root; do not rely on setcap alone |
-| `BTF missing` | Install a kernel with BTF / ensure `/sys/kernel/btf/vmlinux` exists |
+| `asm/types.h not found` | `C_INCLUDE_PATH=/usr/include/$(uname -m)-linux-gnu` |
+| `tracefs not readable` | run as root |
+| `BTF missing` | kernel with BTF / install `linux-image-…` debug BTF package |
+| `mode=proc (ebpf unavailable: …)` | expected fallback — check reason string |
 
-## Guard
+## Guard config
 
 ```yaml
 agent:
@@ -64,15 +91,4 @@ agent:
 
 ```bash
 sudo -E .venv/bin/python -m sysspectogram guard --telegram --dry-run
-```
-
-## Profile packs (GitHub Release)
-
-```bash
-mkdir -p dist
-python -m sysspectogram profiles pack \
-  --name profile-generic-linux-v1 --role generic-linux \
-  --host artifacts/real_v3 \
-  --out dist/profile-generic-linux-v1.tar.gz \
-  --agent-if artifacts/agent_iforest.ssf.npz
 ```

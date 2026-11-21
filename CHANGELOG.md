@@ -5,22 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Older release write-ups: [docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
-[docs/RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md),
-[docs/RELEASE_v1.3.2.md](docs/RELEASE_v1.3.2.md),
-[docs/RELEASE_v1.3.1.md](docs/RELEASE_v1.3.1.md),
-[docs/RELEASE_v1.3.0.md](docs/RELEASE_v1.3.0.md) (and earlier `docs/RELEASE_*.md`).
+Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft),
+[docs/RELEASE_v1.4.0.md](docs/RELEASE_v1.4.0.md),
+[docs/RELEASE_v1.3.3.md](docs/RELEASE_v1.3.3.md) (and earlier `docs/RELEASE_*.md`).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-21 (prep — tag after Mell review)
+
 ### Added
+
+- Control Center charts **grid** (multi-metric), shared poll helpers, metrics cache, cursor sync, fleet host charts over SSH.
+- Timeseries backend **downsample** + incremental tail (`max_points` / `after_ts`).
+- Perimeter: **per-source** `port_scan_suspected`, `public_ports`, `inbound_flood_suspected`; TG Shield warn on public ports.
+- Rootkit `deleted_exe` downgrade to info after package upgrade (`audit.deleted_exe_downgrade_on_upgrade`).
+- `guard-core/` Rust crate: alert `schema_version`, procfs metrics/flow helpers, golden fixture.
+- ML feature-event JSONL + weak labels + mini reference dataset (`docs/ML.md`).
+- Timeseries metrics: `ml_raw_score`, `baseline_z`, `threshold`.
+- Docs: `EBPF_SETUP.md` refresh, `NFT_COEXISTENCE.md`, `ML.md`.
+
+### Changed
+
+- Default `runtime.prefer: onnx` (falls back without artifacts).
+- Matplotlib alert panels debounced/cached off the hot path.
+- Release musl agent build enables **eBPF by default**; visible `mode=proc` fallback.
+- systemd agent unit: CAP_BPF/PERFMON/SYS_RESOURCE/SYS_PTRACE, `MemoryDenyWriteExecute=no`.
+- Telegram long-poll exponential backoff on API failures.
+- `scan_unique_ports` replaces per-port unique-IP scan (`scan_unique_ips` deprecated alias).
+
+### Fixed
+
+- Non-UTF8 `/proc/*/comm` no longer crashes perimeter mapping.
+- Timeseries flush on disk-full no longer kills the sample loop (bounded buffer + backpressure).
+- Collect daemon isolates `on_sample` failures.
+
+### Known limitations (→ 1.6)
+
+- Full Python→Rust **shadow swap** of perimeter/response/risk fusion into `guard-core` (crate now has metrics/flow/auth/plotters; Python still owns the live loops).
+- Agent-side ONNX via `tract`, signed model promotion, shadow ML mode end-to-end.
+- Per-rule noise-adaptive thresholds; full supervised eval beyond the mini reference gate.
+
+### Added (carried from unreleased 1.4.x line)
 
 - Phase 7 ML honesty: leak-free train/val/test (+ gap), lab filters/balance opt-in, `ml.baselines`, gate vs best baseline, `docs/DATASET.md`, `collect_labeled` scaffold.
 - Phase 7.5–7.9: `user_metrics` (FP/day, TTD), plain ML explain, FP suppress after «normal», drift refit controller, ONNX↔torch parity test.
 - `backend_from_config` factory so CLI/friend/helper ban paths share ssh_port / egress / `allow_private_bans`.
 - IPv6 brute aggregation can ban a `/48`–`/128` prefix via `ban6` `flags interval,timeout`.
 
-### Changed
+### Changed (carried)
 
 - `build-dataset` defaults: no lab filters, no balance; `eval_offline` hard-errors on `windows_format=scaled`; `check_ml_ready` requires fuse > best baseline (PR-AUC + recall@FPR1%).
 - Auth Failed/Invalid: sshd end-of-line peer IP when unique; multiple `from <ip> port` → `auth_log_injection` (no ban). Accepted still uses the first `from`.

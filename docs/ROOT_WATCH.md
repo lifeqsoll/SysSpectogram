@@ -40,7 +40,7 @@ sysspectogram-agent --no-root-watch
 
 Guard maps `agent_unexpected_root` to the root alert UI (Kill process, Lockdown, Ignore proc).
 
-**Honest limit:** you cannot “remove root” without ending the process. Kill needs privileges; Isolate locks network. Same-host root can still stop services; eBPF kill witness needs a binary built with the `ebpf` feature (release musl builds are userspace-only).
+**Honest limit:** you cannot “remove root” without ending the process. Kill needs privileges; Isolate locks network. Same-host root can still stop services. eBPF kill witness needs a binary built with the `ebpf` feature (default); if attach fails the agent logs `mode=proc (ebpf unavailable: …)` — see [EBPF_SETUP.md](EBPF_SETUP.md).
 
 ## Config
 

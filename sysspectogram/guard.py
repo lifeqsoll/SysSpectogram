@@ -275,6 +275,9 @@ def run_guard(
     agent_weight = float(ens_cfg.get("agent_weight", 0.4))
     load_name = str(config.get("load_profile") or "lite")
     risk_state: dict[str, float] = {"agent": 0.0}
+    from sysspectogram.timeseries.rates import AlertRateMeter
+
+    rate_meter = AlertRateMeter()
     agent_half_life_sec = float(
         (config.get("agent") or {}).get("score_half_life_sec", 60.0)
     )
@@ -458,6 +461,14 @@ def run_guard(
 
     def on_alert(alert, recon):
         rid = str(getattr(alert, "rule_id", "") or "alert")
+        try:
+            rate_meter.note(
+                severity=str(getattr(alert, "severity", "medium") or "medium"),
+                perimeter=True,
+                ts=float(getattr(alert, "ts", None) or time.time()),
+            )
+        except Exception:
+            pass
         plain = describe(rid, str(getattr(alert, "message", "") or ""), lang=notify_lang)  # type: ignore[arg-type]
         GLOBAL_BUS.push_alert(
             LiveAlert(
@@ -845,11 +856,24 @@ def run_guard(
         health_h = float(tg_cfg.get("health_ping_hours") or 0)
         health_period = health_h * 3600.0 if health_h > 0 else 0.0
         last_health = time.monotonic()
+        fail_streak = 0
         while not stop.is_set():
             try:
-                bot.poll_once(timeout=2)
+                ok = bot.poll_once(timeout=2)
+                if ok:
+                    fail_streak = 0
+                else:
+                    fail_streak += 1
+                    backoff = min(60.0, 2.0 * (2 ** min(fail_streak - 1, 5)))
+                    console.print(f"[yellow]tg poll[/] API not ok; backoff {backoff:.0f}s")
+                    wait_stop(stop, backoff)
+                    continue
             except Exception as exc:
-                console.print(f"[yellow]tg poll[/] {exc}")
+                fail_streak += 1
+                backoff = min(60.0, 2.0 * (2 ** min(fail_streak - 1, 5)))
+                console.print(f"[yellow]tg poll[/] {exc}; backoff {backoff:.0f}s")
+                wait_stop(stop, backoff)
+                continue
             if health_period > 0 and (time.monotonic() - last_health) >= health_period:
                 last_health = time.monotonic()
                 try:
@@ -884,17 +908,17 @@ def run_guard(
     def host_loop():
         web_on = enable_web or bool(web_cfg.get("enabled"))
         runtime = str(config.get("runtime") or "notorch").strip().lower()
+        # Prefer ONNX when artifacts exist; without artifacts always keep metrics-only path
+        # (do not early-return for onnx/torch — that would kill host timeseries on headless VPS).
         if runtime == "notorch" or artifacts_dir is None or not artifacts_dir.exists():
             if runtime == "notorch":
                 console.print("[cyan]runtime=notorch[/] host CNN off - perimeter + agent risk only")
             elif artifacts_dir is None or not artifacts_dir.exists():
-                console.print("[yellow]no model artifacts; host ML monitor disabled[/]")
-            if not web_on and runtime == "notorch":
-                # still feed light metrics so bus/risk from agent works
-                pass
+                console.print(
+                    f"[yellow]no model artifacts; runtime={runtime} → metrics-only "
+                    "(perimeter + agent; install cnn.onnx for host ML)[/]"
+                )
             if artifacts_dir is None or not artifacts_dir.exists() or runtime == "notorch":
-                if not web_on and runtime != "notorch":
-                    return
                 # metrics-only feed for the live web UI + agent fuse
                 collector = MetricsCollector(
                     max_cores=int(col_cfg.get("max_cores", 16)),
@@ -934,8 +958,8 @@ def run_guard(
                         load_profile=load_name,
                     )
                     if nt_store is not None:
-                        nt_store.write_many(
-                            {
+                        try:
+                            payload = {
                                 "cpu_percent": row.get("cpu_percent"),
                                 "mem_percent": row.get("mem_percent"),
                                 "swap_percent": row.get("swap_percent"),
@@ -948,9 +972,12 @@ def run_guard(
                                 "agent_score": ascore,
                                 "host_risk": ascore,
                             }
-                        )
-                        nt_store.flush()
-                        nt_store.maybe_rollup()
+                            payload.update(rate_meter.snapshot(time.time()))
+                            nt_store.write_many(payload)
+                            nt_store.flush()
+                            nt_store.maybe_rollup()
+                        except Exception as exc:
+                            console.print(f"[yellow]timeseries write[/] {exc}")
                     if now - last_print >= interval_sec:
                         last_print = now
                         console.print(f"host ok risk={ascore:.3f} host=0.000 agent={ascore:.3f} (notorch)")
@@ -967,7 +994,64 @@ def run_guard(
                 supply_chain=config.get("supply_chain") or {},
             )
         except Exception as exc:
-            console.print(f"[yellow]host ML unavailable[/] {exc}")
+            console.print(
+                f"[yellow]host ML unavailable[/] {exc} — falling back to metrics-only"
+            )
+            # Same path as missing artifacts: keep timeseries + agent fuse alive.
+            collector = MetricsCollector(
+                max_cores=int(col_cfg.get("max_cores", 16)),
+                socket_sample_every=int(col_cfg.get("socket_sample_every", 5)),
+            )
+            daemon = CollectDaemon(collector, interval_sec=1.0, buffer_size=None)
+            mon_cfg_local = config.get("monitor") or {}
+            try:
+                interval_sec = float(mon_cfg_local.get("interval_sec", 5))
+                if not math.isfinite(interval_sec) or interval_sec <= 0:
+                    raise ValueError(interval_sec)
+            except (TypeError, ValueError) as exc2:
+                raise ValueError(
+                    f"monitor.interval_sec invalid ({mon_cfg_local.get('interval_sec')!r}): {exc2}"
+                ) from exc2
+            last_print = 0.0
+            nt_store = _open_timeseries()
+
+            def on_metrics_fb(row: dict) -> None:
+                nonlocal last_print
+                if stop.is_set():
+                    raise KeyboardInterrupt
+                now = time.time()
+                ascore, _ = GLOBAL_BUS.agent_score(now)
+                if nt_store is not None:
+                    try:
+                        fb = {
+                            "cpu_percent": row.get("cpu_percent"),
+                            "mem_percent": row.get("mem_percent"),
+                            "swap_percent": row.get("swap_percent"),
+                            "net_bytes_sent_per_s": row.get("net_bytes_sent_per_s"),
+                            "net_bytes_recv_per_s": row.get("net_bytes_recv_per_s"),
+                            "disk_read_bytes_per_s": row.get("disk_read_bytes_per_s"),
+                            "disk_write_bytes_per_s": row.get("disk_write_bytes_per_s"),
+                            "gpu_util_percent": row.get("gpu_util_percent"),
+                            "gpu_mem_percent": row.get("gpu_mem_percent"),
+                            "agent_score": ascore,
+                            "host_risk": ascore,
+                        }
+                        fb.update(rate_meter.snapshot(time.time()))
+                        nt_store.write_many(fb)
+                        nt_store.flush()
+                        nt_store.maybe_rollup()
+                    except Exception as wexc:
+                        console.print(f"[yellow]timeseries write[/] {wexc}")
+                if now - last_print >= interval_sec:
+                    last_print = now
+                    console.print(
+                        f"host ok risk={ascore:.3f} host=0.000 agent={ascore:.3f} (ml-fallback)"
+                    )
+
+            try:
+                daemon.run(duration_sec=duration_sec, on_sample=on_metrics_fb)
+            except KeyboardInterrupt:
+                return
             return
         columns = infer.columns
         collector = MetricsCollector(
@@ -1042,9 +1126,12 @@ def run_guard(
             if stop.is_set():
                 raise KeyboardInterrupt
             if ts_store is not None:
-                ts_store.write_many({m: row.get(m) for m in ts_metrics})
-                ts_store.flush()
-                ts_store.maybe_rollup()
+                try:
+                    ts_store.write_many({m: row.get(m) for m in ts_metrics})
+                    ts_store.flush()
+                    ts_store.maybe_rollup()
+                except Exception as exc:
+                    console.print(f"[yellow]timeseries write[/] {exc}")
             try:
                 proc_track.sample()
             except Exception:
@@ -1132,15 +1219,48 @@ def run_guard(
             )
             risk = decision.risk
             if ts_store is not None:
-                ts_store.write_many(
-                    {
+                try:
+                    payload = {
                         "host_score": host_score,
                         "host_risk": risk,
                         "agent_score": ascore,
                         "threshold": risk_thr,
+                        "ml_raw_score": float(pred.score),
                     }
-                )
+                    if baseline_z is not None:
+                        payload["baseline_z"] = float(baseline_z)
+                    payload.update(rate_meter.snapshot(time.time()))
+                    ts_store.write_many(payload)
+                except Exception as exc:
+                    console.print(f"[yellow]timeseries write[/] {exc}")
             is_anom = decision.is_anomaly
+            if is_anom:
+                try:
+                    rate_meter.note(severity="high", perimeter=False, ts=time.time())
+                except Exception:
+                    pass
+                try:
+                    from sysspectogram.ml.feature_events import FeatureEvent, append_feature_event
+
+                    append_feature_event(
+                        state_root() / "reports" / "feature_events.jsonl",
+                        FeatureEvent(
+                            rule_id="host_anomaly",
+                            severity="high",
+                            exe="",
+                            ppid=0,
+                            scores={
+                                "host_score": float(host_score),
+                                "host_risk": float(risk),
+                                "ml_raw_score": float(pred.score),
+                                "agent_score": float(ascore),
+                            },
+                            ts=time.time(),
+                            extras={"baseline_z": baseline_z},
+                        ),
+                    )
+                except Exception:
+                    pass
             # Drift refit observes after the alert decision; never emit as HOST ALERT.
             if drift_ctl is not None:
                 try:
@@ -1384,20 +1504,35 @@ def run_guard(
                         console.print(f"[yellow]kirk host-risk isolate failed[/] {exc}")
             if bot is not None:
                 proc_mat, proc_labels = proc_track.matrix(top_k=8)
-                png = render_alert_panel(
-                    metric_window=matrix,
-                    metric_columns=columns,
-                    proc_matrix=proc_mat,
-                    proc_labels=proc_labels,
-                    title=f"[{host_id}] metrics",
-                    score=pred.score,
-                )
-                if png is None:
-                    try:
-                        vis = np.clip(matrix / (matrix.max() + 1e-6), 0, 1).astype(np.float32)
-                        png = _heatmap_png_bytes(vis)
-                    except Exception:
-                        png = None
+
+                def _render_png() -> bytes | None:
+                    from sysspectogram.viz.render_cache import render_debounced
+
+                    def _do() -> bytes | None:
+                        out = render_alert_panel(
+                            metric_window=matrix,
+                            metric_columns=columns,
+                            proc_matrix=proc_mat,
+                            proc_labels=proc_labels,
+                            title=f"[{host_id}] metrics",
+                            score=pred.score,
+                        )
+                        if out is None:
+                            try:
+                                vis = np.clip(
+                                    matrix / (matrix.max() + 1e-6), 0, 1
+                                ).astype(np.float32)
+                                return _heatmap_png_bytes(vis)
+                            except Exception:
+                                return None
+                        return out
+
+                    return render_debounced(
+                        f"host:{host_id}:{round(float(pred.score), 3)}",
+                        _do,
+                    )
+
+                png = _render_png()
                 caption = format_host_alert_caption(
                     host_id=host_id,
                     score=host_score,

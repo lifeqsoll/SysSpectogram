@@ -16,12 +16,18 @@
     height = 220,
     yRange,
     legend = false,
+    syncKey = null,
+    markers = [],
   }: {
     xs: number[];
     series: ChartSeries[];
     height?: number;
     yRange?: [number, number];
     legend?: boolean;
+    /** When set, uPlot cursors sync across charts with the same key. */
+    syncKey?: string | null;
+    /** Unix timestamps for vertical alert markers. */
+    markers?: number[];
   } = $props();
 
   let container: HTMLDivElement | undefined = $state();
@@ -44,7 +50,8 @@
         return `${s.label}:${v.length}:${last}`;
       })
       .join('|');
-    return `${n}:${head}:${tail}:${series.length}:${tails}:${height}:${legend}`;
+    const mk = markers.length ? `${markers[0]}:${markers[markers.length - 1]}:${markers.length}` : '0';
+    return `${n}:${head}:${tail}:${series.length}:${tails}:${height}:${legend}:${mk}`;
   }
 
   function options(width: number): uPlot.Options {
@@ -52,7 +59,11 @@
       width,
       height,
       legend: { show: legend },
-      cursor: { show: false, drag: { x: false, y: false } },
+      cursor: {
+        show: Boolean(syncKey),
+        drag: { x: false, y: false },
+        sync: syncKey ? { key: syncKey, setSeries: false } : undefined,
+      },
       scales: {
         x: { time: true },
         y: yRange ? { range: () => yRange } : { auto: true },
@@ -71,6 +82,27 @@
           points: { show: false },
         })),
       ],
+      hooks: {
+        draw: [
+          (u) => {
+            if (!markers.length) return;
+            const ctx = u.ctx;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.55)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            for (const ts of markers) {
+              const x = u.valToPos(ts, 'x', true);
+              if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+              ctx.beginPath();
+              ctx.moveTo(x, u.bbox.top);
+              ctx.lineTo(x, u.bbox.top + u.bbox.height);
+              ctx.stroke();
+            }
+            ctx.restore();
+          },
+        ],
+      },
     };
   }
 
@@ -86,6 +118,7 @@
     void series;
     void height;
     void legend;
+    void markers;
     if (sig === lastSig && plot) return;
     lastSig = sig;
 

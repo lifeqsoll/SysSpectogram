@@ -287,20 +287,26 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!(
-                        "[sysspectogram-agent] eBPF attach failed: {e} — falling back to userspace"
+                        "[sysspectogram-agent] eBPF attach failed: {e} — mode=proc (ebpf unavailable)"
                     );
-                    effective_mode = "userspace";
+                    effective_mode = "proc";
                 }
             }
         }
         #[cfg(not(feature = "ebpf"))]
         {
-            eprintln!("[sysspectogram-agent] binary built without ebpf feature — userspace");
-            effective_mode = "userspace";
+            eprintln!(
+                "[sysspectogram-agent] binary built without ebpf feature — mode=proc (ebpf unavailable: no-default-features)"
+            );
+            effective_mode = "proc";
         }
-    } else if args.mode != "userspace" {
+    } else if args.mode == "userspace" || args.mode == "proc" {
+        // `userspace` remains the CLI/default alias; logs also say proc for operators.
+        effective_mode = "userspace";
+        eprintln!("[sysspectogram-agent] mode=userspace (proc fallback path)");
+    } else {
         eprintln!(
-            "[sysspectogram-agent] unknown mode {:?}, using userspace",
+            "[sysspectogram-agent] unknown mode {:?}, using mode=userspace",
             args.mode
         );
         effective_mode = "userspace";

@@ -26,6 +26,12 @@
     { id: 'host_risk', labelKey: 'charts.m.hostRisk', group: 'risk', unit: 'score' },
     { id: 'host_score', labelKey: 'charts.m.hostScore', group: 'risk', unit: 'score' },
     { id: 'agent_score', labelKey: 'charts.m.agentScore', group: 'risk', unit: 'score' },
+    { id: 'ml_raw_score', labelKey: 'charts.m.mlRaw', group: 'risk', unit: 'score' },
+    { id: 'baseline_z', labelKey: 'charts.m.baselineZ', group: 'risk', unit: 'score' },
+    { id: 'threshold', labelKey: 'charts.m.threshold', group: 'risk', unit: 'score' },
+    { id: 'alerts_per_min', labelKey: 'charts.m.alerts', group: 'risk', unit: 'score' },
+    { id: 'alerts_high_per_min', labelKey: 'charts.m.alertsHigh', group: 'risk', unit: 'score' },
+    { id: 'perimeter_events_per_min', labelKey: 'charts.m.perimeter', group: 'risk', unit: 'score' },
     { id: 'cpu_percent', labelKey: 'charts.m.cpu', group: 'system', unit: 'pct' },
     { id: 'mem_percent', labelKey: 'charts.m.mem', group: 'system', unit: 'pct' },
     { id: 'swap_percent', labelKey: 'charts.m.swap', group: 'system', unit: 'pct' },
@@ -335,6 +341,10 @@
         {@const xs = pts.map((p) => p.ts)}
         {@const ys = pts.map((p) => p.avg)}
         {@const now = liveValue(m.id)}
+        {@const markers = (seriesById['alerts_per_min'] ?? [])
+          .filter((p) => p.avg > 0)
+          .map((p) => p.ts)
+          .slice(-40)}
         <button type="button" class="panel chart-card chart-tile" onclick={() => openDetail(m.id)}>
           <div class="row" style="margin-bottom: 4px">
             <h2 style="margin: 0; font-size: 14px">{t(m.labelKey)}</h2>
@@ -348,6 +358,8 @@
               xs={xs}
               series={[{ label: t(m.labelKey), color: '#3b82f6', values: ys }]}
               height={140}
+              syncKey={`charts-${ui.activeHostId}-${ui.range}`}
+              markers={markers}
             />
           {:else}
             <p class="muted" style="margin: 12px 0; font-size: 12px">

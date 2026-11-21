@@ -2,7 +2,7 @@
 import { ui } from './state.svelte';
 
 /** Keep in sync with package.json / check_versions.py (bump_versions.py updates this). */
-export const APP_VERSION_TAG = 'v1.4.1';
+export const APP_VERSION_TAG = 'v1.5.0';
 
 export const STRINGS: Record<string, { en: string; ru: string }> = {
   'app.name': { en: 'SysSpectogram', ru: 'SysSpectogram' },
@@ -109,6 +109,12 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   'charts.m.hostRisk': { en: 'Host risk', ru: 'Риск хоста' },
   'charts.m.hostScore': { en: 'Host ML score', ru: 'Оценка ML хоста' },
   'charts.m.agentScore': { en: 'Agent score', ru: 'Оценка агента' },
+  'charts.m.mlRaw': { en: 'ML raw score', ru: 'Сырой ML-скор' },
+  'charts.m.baselineZ': { en: 'Baseline z', ru: 'Baseline z' },
+  'charts.m.threshold': { en: 'Risk threshold', ru: 'Порог риска' },
+  'charts.m.alerts': { en: 'Alerts / min', ru: 'Алерты / мин' },
+  'charts.m.alertsHigh': { en: 'High+ alerts / min', ru: 'High+ алерты / мин' },
+  'charts.m.perimeter': { en: 'Perimeter / min', ru: 'Периметр / мин' },
   'charts.now': { en: 'now', ru: 'сейчас' },
   'charts.backGrid': { en: 'Back to grid', ru: 'К сетке' },
   'charts.pickMetrics': { en: 'Metrics…', ru: 'Метрики…' },

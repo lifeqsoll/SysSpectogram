@@ -7,6 +7,20 @@ from pathlib import Path
 from typing import Any
 
 
+def optional_model_meta_fields(
+    *,
+    schema_version: int | None = None,
+    train_set_hash: str | None = None,
+) -> dict[str, Any]:
+    """Extra meta.json keys for §5.3 provenance (optional; export does not set them yet)."""
+    out: dict[str, Any] = {}
+    if schema_version is not None:
+        out["feature_schema_version"] = int(schema_version)
+    if train_set_hash:
+        out["train_set_hash"] = str(train_set_hash)
+    return out
+
+
 def export_cnn_onnx(
     artifacts_dir: Path,
     *,
