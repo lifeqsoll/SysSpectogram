@@ -42,29 +42,24 @@ TELEGRAM_CHAT_ID=6360...
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ```
 
-### Bot API blocked from the VPS (optional local proxy)
+### If `api.telegram.org` is unreachable from the host
 
-Some regions / providers filter `api.telegram.org`. SysSpectogram can send Bot API traffic through a **loopback HTTP CONNECT** proxy only (no system route change, no TUN).
+You can route **only** Bot API calls through an HTTP proxy on the same machine (loopback). Other host traffic is unchanged.
 
 ```bash
-# .env or Environment= in the protect unit
+# .env or Environment= on the protect unit
 TELEGRAM_API_PROXY=http://127.0.0.1:1080
 ```
 
-Or YAML / Settings: `telegram.api_proxy: "http://127.0.0.1:1080"`. Env overrides YAML.
+Or in config / Settings: `telegram.api_proxy: "http://127.0.0.1:1080"` (environment overrides YAML).
 
-Rules:
+Requirements:
 
-- Only `http://127.0.0.1:PORT`, `localhost`, or `::1` — remote proxies are refused.
-- Only HTTPS to `api.telegram.org` is requested; other destinations are rejected in the client.
-- If the local proxy cannot be connected **before** the request body is sent, the client tries **one direct** connection (no replay after a send has started).
-- **Bring your own** VPN/subscription (sing-box, Clash, …). SysSpectogram does **not** ship nodes or subscription URLs.
+- Proxy URL must be **localhost** (`127.0.0.1`, `localhost`, or `::1`) over plain HTTP CONNECT.
+- The client talks only to `api.telegram.org` over HTTPS.
+- If the local proxy is down when opening the connection, one direct attempt is used; requests are not retried after they have already been sent.
 
-Minimal operator sketch (you own the config and secrets):
-
-1. Run a local proxy on `127.0.0.1:1080` that can reach `api.telegram.org:443` (e.g. sing-box `mixed` inbound + your VLESS/SS outbounds).
-2. Set `TELEGRAM_API_PROXY` / `telegram.api_proxy`.
-3. Restart protect / guard. Check with `python -m sysspectogram home health --ping` when configured.
+Install and run any local proxy that can reach Telegram (your choice of tool and upstream). Then set the variable above and restart the guard / protect unit. Optional check: `python -m sysspectogram home health --ping`.
 
 `--dry-run`: ban/kill/shield print what would happen; no nft/SIGKILL.
 

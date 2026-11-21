@@ -227,7 +227,7 @@ settings:
     type: string
     default: ""
     restart: true
-    title: {en: Bot API local proxy, ru: Локальный proxy для Bot API}
+    title: {en: Bot API local proxy, ru: Локальный прокси для Bot API}
     description:
-      en: "Optional HTTP CONNECT to api.telegram.org only. Loopback only, e.g. http://127.0.0.1:1080 (your sing-box). Env TELEGRAM_API_PROXY overrides. No subscription shipped — bring your own."
-      ru: "Опциональный HTTP CONNECT только к api.telegram.org. Только loopback, напр. http://127.0.0.1:1080 (свой sing-box). Env TELEGRAM_API_PROXY перекрывает. Подписку VPN не кладём — своя."
+      en: "Optional HTTP proxy on this host for api.telegram.org (localhost only), e.g. http://127.0.0.1:1080. TELEGRAM_API_PROXY overrides. See TELEGRAM.md."
+      ru: "Опциональный HTTP-прокси на этом хосте для api.telegram.org (только localhost), напр. http://127.0.0.1:1080. TELEGRAM_API_PROXY важнее. См. TELEGRAM.md."

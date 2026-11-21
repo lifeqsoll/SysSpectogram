@@ -42,7 +42,7 @@ loginctl enable-linger "$USER"
 
 ## С VPS не достучаться до api.telegram.org
 
-Локальный HTTP CONNECT (свой sing-box и т.п.) + `TELEGRAM_API_PROXY=http://127.0.0.1:1080` (или `telegram.api_proxy`). Подписку VPN в продукт не кладём. [TELEGRAM_RU.md](TELEGRAM_RU.md).
+Локальный HTTP-прокси на хосте + `TELEGRAM_API_PROXY=http://127.0.0.1:1080` (или `telegram.api_proxy` в конфиге). [TELEGRAM_RU.md](TELEGRAM_RU.md).
 
 ## Как приглушить шум в Telegram (сканы / eBPF)?
 

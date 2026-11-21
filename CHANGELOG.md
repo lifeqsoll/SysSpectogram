@@ -13,7 +13,7 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md),
 
 ### Added
 
-- Optional Telegram Bot API **loopback HTTP CONNECT** proxy (`telegram.api_proxy` / `TELEGRAM_API_PROXY`) with pre-send direct fallback; no VPN subscription shipped — operators bring their own local proxy ([TELEGRAM.md](docs/TELEGRAM.md)).
+- Optional localhost HTTP proxy for Telegram Bot API (`telegram.api_proxy` / `TELEGRAM_API_PROXY`), with one direct attempt if the local proxy is down ([TELEGRAM.md](docs/TELEGRAM.md)).
 
 ## [1.5.0] - 2026-11-21
 

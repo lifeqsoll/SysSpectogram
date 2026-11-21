@@ -42,14 +42,14 @@ Treat it as **experimental**. Default is `runtime.prefer: onnx` with a metrics-o
 
 ## Telegram Bot API times out from my VPS
 
-Set a **local** HTTP CONNECT proxy (your own sing-box / Clash / … on `127.0.0.1`) and:
+Point Bot API traffic at a **local** HTTP proxy on the same host:
 
 ```bash
 export TELEGRAM_API_PROXY=http://127.0.0.1:1080
 # or telegram.api_proxy in config / Settings
 ```
 
-SysSpectogram does not ship VPN subscriptions. Details: [TELEGRAM.md](TELEGRAM.md#bot-api-blocked-from-the-vps-optional-local-proxy).
+Details: [TELEGRAM.md](TELEGRAM.md#if-apitelegramorg-is-unreachable-from-the-host).
 
 ## How do I quiet Telegram noise (port scans / eBPF)?
 
