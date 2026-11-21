@@ -179,11 +179,8 @@ impl RuleEngine {
             if !seen.insert(*port) {
                 continue;
             }
-            if !self.cfg.listening_ports.is_empty() && !self.cfg.listening_ports.contains(port) {
-                score += self.cfg.closed_port_weight;
-            } else if !self.cfg.public_ports.contains(port)
-                && !self.cfg.listening_ports.contains(port)
-            {
+            // Closed / non-listening and non-public ports weigh more heavily.
+            if !self.cfg.listening_ports.contains(port) && !self.cfg.public_ports.contains(port) {
                 score += self.cfg.closed_port_weight;
             } else {
                 score += 1.0;
@@ -210,25 +207,26 @@ impl RuleEngine {
         if samples >= 30 {
             if let Some(p) = prev {
                 let threshold = (baseline * self.cfg.flood_mult).max(self.cfg.flood_min_ip_per_min);
-                if rate >= threshold && rate >= self.cfg.flood_min_ip_per_min {
-                    if self.cool(&format!("flood:{port}"), self.cfg.flood_cooldown_sec) {
-                        let mut a = Alert::new(
-                            "inbound_flood_suspected",
-                            "medium",
-                            format!(
-                                "Inbound flood suspected on :{port}: {rate:.0} unique IPs/min (baseline≈{baseline:.0}, ×{})",
-                                self.cfg.flood_mult
-                            ),
-                        );
-                        a.port = Some(port);
-                        a.ts = now;
-                        a.extras
-                            .insert("unique_ips".into(), serde_json::json!(rate as i64));
-                        a.extras.insert("ewma".into(), serde_json::json!(baseline));
-                        a.extras
-                            .insert("threshold".into(), serde_json::json!(threshold));
-                        alert = Some(a);
-                    }
+                if rate >= threshold
+                    && rate >= self.cfg.flood_min_ip_per_min
+                    && self.cool(&format!("flood:{port}"), self.cfg.flood_cooldown_sec)
+                {
+                    let mut a = Alert::new(
+                        "inbound_flood_suspected",
+                        "medium",
+                        format!(
+                            "Inbound flood suspected on :{port}: {rate:.0} unique IPs/min (baseline≈{baseline:.0}, ×{})",
+                            self.cfg.flood_mult
+                        ),
+                    );
+                    a.port = Some(port);
+                    a.ts = now;
+                    a.extras
+                        .insert("unique_ips".into(), serde_json::json!(rate as i64));
+                    a.extras.insert("ewma".into(), serde_json::json!(baseline));
+                    a.extras
+                        .insert("threshold".into(), serde_json::json!(threshold));
+                    alert = Some(a);
                 }
                 let _ = p;
             }

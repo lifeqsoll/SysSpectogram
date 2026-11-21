@@ -203,9 +203,18 @@ fn handle_client(stream: UnixStream, engine: Arc<Mutex<RuleEngine>>) -> Result<(
                     .unwrap_or(risk::DEFAULT_AGENT_HALF_LIFE_SEC);
                 let bz = req.get("baseline_z").and_then(|v| v.as_f64());
                 let ba = req.get("baseline_alert").and_then(|v| v.as_bool());
-                let d = risk::decide_risk(
-                    host, agent, age, host_thr, risk_thr, hw, aw, hl, bz, ba,
-                );
+                let d = risk::decide_risk(risk::RiskInputs {
+                    host_score: host,
+                    agent_score: agent,
+                    agent_age_sec: age,
+                    host_threshold: host_thr,
+                    risk_threshold: risk_thr,
+                    host_weight: hw,
+                    agent_weight: aw,
+                    agent_half_life_sec: hl,
+                    baseline_z: bz,
+                    baseline_alert: ba,
+                });
                 json!({"ok": true, "decision": d})
             }
             "ban" => {
