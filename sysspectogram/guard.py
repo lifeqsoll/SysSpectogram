@@ -282,6 +282,69 @@ def run_guard(
         (config.get("agent") or {}).get("score_half_life_sec", 60.0)
     )
     console.print(f"[cyan]load_profile[/] {load_name} (lite=small VPS, full=large VDS)")
+    gc_cfg = dict(config.get("guard_core") or {})
+    ml_cfg_top = dict(config.get("ml") or {})
+    from sysspectogram.guard_core_bridge import (
+        append_shadow_diff,
+        find_bin,
+        run_once_metrics,
+        shadow_compare_metrics,
+    )
+    from sysspectogram.ml.rule_thresholds import RuleThresholdStore
+
+    gc_shadow = bool(gc_cfg.get("shadow", False))
+    gc_use_metrics = bool(gc_cfg.get("use_for_metrics", False))
+    gc_bin = find_bin(gc_cfg.get("bin"))
+    gc_shadow_path = _resolve(gc_cfg.get("shadow_path") or "reports/guard_core_shadow.jsonl")
+    try:
+        gc_shadow_iv = float(gc_cfg.get("shadow_interval_sec") or 30.0)
+    except (TypeError, ValueError):
+        gc_shadow_iv = 30.0
+    if gc_shadow_iv < 5.0:
+        gc_shadow_iv = 30.0
+    _gc_shadow_at = {"t": 0.0}
+    if gc_shadow or gc_use_metrics:
+        console.print(
+            f"[cyan]guard-core[/] bin={gc_bin or 'missing'} "
+            f"shadow={gc_shadow} use_for_metrics={gc_use_metrics}"
+        )
+    rule_thresholds = RuleThresholdStore(
+        _resolve(ml_cfg_top.get("thresholds_path") or "state/rule_thresholds.json"),
+        enabled=bool(ml_cfg_top.get("adaptive_thresholds", False)),
+    )
+
+    def _apply_guard_core(row: dict) -> dict:
+        rust = None
+        now_m = time.monotonic()
+        want_shadow = gc_shadow and (now_m - float(_gc_shadow_at["t"]) >= gc_shadow_iv)
+        if gc_use_metrics or want_shadow:
+            try:
+                rust = run_once_metrics(gc_bin)
+            except Exception:
+                rust = None
+        if want_shadow:
+            _gc_shadow_at["t"] = now_m
+            try:
+                if rust is None:
+                    append_shadow_diff(
+                        gc_shadow_path,
+                        {
+                            "ts": time.time(),
+                            "error": "guard-core metrics unavailable",
+                            "bin": str(gc_bin) if gc_bin else None,
+                        },
+                    )
+                else:
+                    append_shadow_diff(gc_shadow_path, shadow_compare_metrics(row, rust))
+            except Exception as exc:
+                console.print(f"[yellow]guard-core shadow[/] {exc}")
+        if gc_use_metrics and rust:
+            merged = dict(row)
+            merged["cpu_percent"] = rust.get("cpu_percent")
+            merged["mem_percent"] = rust.get("mem_percent")
+            return merged
+        return row
+
     import os
     webapp_url = (
         os.environ.get("WEBAPP_URL")
@@ -461,9 +524,16 @@ def run_guard(
 
     def on_alert(alert, recon):
         rid = str(getattr(alert, "rule_id", "") or "alert")
+        sev = str(getattr(alert, "severity", "medium") or "medium")
+        try:
+            rule_thresholds.record_hit(rid, severity=sev)
+            sev = rule_thresholds.effective_severity_adjust(rid, sev)
+            alert.severity = sev
+        except Exception:
+            pass
         try:
             rate_meter.note(
-                severity=str(getattr(alert, "severity", "medium") or "medium"),
+                severity=sev,
                 perimeter=True,
                 ts=float(getattr(alert, "ts", None) or time.time()),
             )
@@ -473,7 +543,7 @@ def run_guard(
         GLOBAL_BUS.push_alert(
             LiveAlert(
                 ts=getattr(alert, "ts", None) or __import__("time").time(),
-                severity=str(getattr(alert, "severity", "medium")),
+                severity=sev,
                 title=plain.title,
                 body=f"{plain.what}\n{plain.action}",
                 kind="perimeter",
@@ -940,6 +1010,7 @@ def run_guard(
 
                 def on_metrics(row: dict) -> None:
                     nonlocal last_print
+                    row = _apply_guard_core(row)
                     if stop.is_set():
                         raise KeyboardInterrupt
                     ascore = float(risk_state.get("agent", 0.0))
@@ -1017,6 +1088,7 @@ def run_guard(
 
             def on_metrics_fb(row: dict) -> None:
                 nonlocal last_print
+                row = _apply_guard_core(row)
                 if stop.is_set():
                     raise KeyboardInterrupt
                 now = time.time()
@@ -1123,6 +1195,7 @@ def run_guard(
 
         def on_sample(row: dict) -> None:
             nonlocal last_alert, last_infer, last_drift_notify
+            row = _apply_guard_core(row)
             if stop.is_set():
                 raise KeyboardInterrupt
             if ts_store is not None:
@@ -1380,6 +1453,10 @@ def run_guard(
                 from sysspectogram.ml.feedback_suppress import should_suppress
 
                 if should_suppress(matrix, scaler=None):
+                    try:
+                        rule_thresholds.record_fp("host_anomaly")
+                    except Exception:
+                        pass
                     return
             except (OSError, ValueError, ImportError, TypeError) as exc:
                 console.print(f"[yellow]fp-suppress warn[/] {exc}")
@@ -1412,11 +1489,17 @@ def run_guard(
                     f" promoted={bool(decision.baseline_promoted)}"
                 )
             console.print(f"[red bold]HOST ALERT[/] pattern={pattern}\n{body}")
+            host_sev = "high"
+            try:
+                rule_thresholds.record_hit("host_anomaly", severity="high")
+                host_sev = rule_thresholds.effective_severity_adjust("host_anomaly", "high")
+            except Exception:
+                pass
             host_plain = describe("host_anomaly", lang=notify_lang)  # type: ignore[arg-type]
             GLOBAL_BUS.push_alert(
                 LiveAlert(
                     ts=__import__("time").time(),
-                    severity="high",
+                    severity=host_sev,
                     title=host_plain.title,
                     body=f"{host_plain.what}\n{body}\n{host_plain.action}",
                     kind="host",
@@ -1825,6 +1908,10 @@ def run_guard(
                 comm=getattr(alert, "comm", None),
                 path=getattr(alert, "path", None),
             ) or feedback.is_rule_muted(str(alert.rule_id)):
+                try:
+                    rule_thresholds.record_fp(str(alert.rule_id))
+                except Exception:
+                    pass
                 return
 
             extras = dict(getattr(alert, "extras", None) or {})
@@ -1980,6 +2067,15 @@ def run_guard(
                 getattr(alert, "comm", None), getattr(alert, "path", None)
             ):
                 notify_tg = False
+
+            try:
+                sev_now = str(alert.severity)
+                rule_thresholds.record_hit(str(alert.rule_id), severity=sev_now)
+                alert.severity = rule_thresholds.effective_severity_adjust(
+                    str(alert.rule_id), sev_now
+                )
+            except Exception:
+                pass
 
             body = str(alert.message)
             if ascore >= agent_score_threshold and notify_tg:

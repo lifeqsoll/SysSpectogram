@@ -210,3 +210,12 @@ supply_chain:
   public_key: null
   manifest_name: artifacts.manifest.json
   signature_name: artifacts.manifest.json.minisig
+guard_core:
+  # Shadow-compare Python CPU/mem with guard-core (~30s → reports/guard_core_shadow.jsonl).
+  shadow: false
+  # Prefer guard-core cpu/mem on the host sample path; Python values remain the fallback.
+  use_for_metrics: false
+ml:
+  adaptive_thresholds: false
+  shadow_dir: artifacts/ml-shadow
+  live_dir: artifacts/ml-live

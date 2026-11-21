@@ -20,7 +20,11 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft
 - Perimeter: **per-source** `port_scan_suspected`, `public_ports`, `inbound_flood_suspected`; TG Shield warn on public ports.
 - Rootkit `deleted_exe` downgrade to info after package upgrade (`audit.deleted_exe_downgrade_on_upgrade`).
 - `guard-core/` Rust crate: alert `schema_version`, procfs metrics/flow helpers, golden fixture.
-- ML feature-event JSONL + weak labels + mini reference dataset (`docs/ML.md`).
+- ML feature-event JSONL + weak labels (including Telegram ban/kill/isolate/mute/allow/host_fp) and the mini reference dataset (`docs/ML.md`).
+- Per-rule adaptive thresholds (`ml.adaptive_thresholds`); critical severity is never softened.
+- Model shadow/live/previous promote + rollback (`ml.shadow_dir`, `ml.live_dir`), verified with the supply-chain manifest before promote.
+- `guard-core` CLI: `metrics`, `auth-fail-ip`, `tcp-addr`, `render`. Python shadow compare (~30s) and optional Rust CPU/mem (`guard_core.shadow`, `guard_core.use_for_metrics`).
+- Agent optional `onnx` feature (`tract-onnx`, not default): `--onnx-model` / `--onnx-shadow` attach `ml_score` extras.
 - Timeseries metrics: `ml_raw_score`, `baseline_z`, `threshold`.
 - Docs: `EBPF_SETUP.md` refresh, `NFT_COEXISTENCE.md`, `ML.md`.
 
@@ -39,11 +43,11 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft
 - Timeseries flush on disk-full no longer kills the sample loop (bounded buffer + backpressure).
 - Collect daemon isolates `on_sample` failures.
 
-### Known limitations (→ 1.6)
+### Known limitations
 
-- Full Python→Rust **shadow swap** of perimeter/response/risk fusion into `guard-core` (crate now has metrics/flow/auth/plotters; Python still owns the live loops).
-- Agent-side ONNX via `tract`, signed model promotion, shadow ML mode end-to-end.
-- Per-rule noise-adaptive thresholds; full supervised eval beyond the mini reference gate.
+- Perimeter **RuleEngine**, response, and risk fusion stay in Python. guard-core shadows CPU/mem and parses auth/tcp; it does not replace those loops.
+- Full supervised eval beyond the mini reference gate.
+- Agent ONNX (`tract-onnx`) is feature-gated and off by default; scores are extras only and do not replace rule severity.
 
 ### Added (carried from unreleased 1.4.x line)
 

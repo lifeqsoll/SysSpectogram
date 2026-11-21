@@ -12,7 +12,7 @@ def optional_model_meta_fields(
     schema_version: int | None = None,
     train_set_hash: str | None = None,
 ) -> dict[str, Any]:
-    """Extra meta.json keys for §5.3 provenance (optional; export does not set them yet)."""
+    """Extra meta.json keys for §5.3 provenance. Export writes these when provided."""
     out: dict[str, Any] = {}
     if schema_version is not None:
         out["feature_schema_version"] = int(schema_version)
@@ -26,6 +26,9 @@ def export_cnn_onnx(
     *,
     out_path: Path | None = None,
     opset: int = 17,
+    minisign_secret_key: Path | None = None,
+    schema_version: int | None = None,
+    train_set_hash: str | None = None,
 ) -> dict[str, Any]:
     try:
         import torch
@@ -76,6 +79,12 @@ def export_cnn_onnx(
     meta["onnx_file"] = out_path.name
     meta["cnn_height"] = height
     meta["cnn_width"] = width
+    extra_meta = optional_model_meta_fields(
+        schema_version=schema_version,
+        train_set_hash=train_set_hash,
+    )
+    if extra_meta:
+        meta.update(extra_meta)
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     # refresh checksums so torch infer still loads
@@ -97,13 +106,18 @@ def export_cnn_onnx(
             h = hashlib.sha256(f.read_bytes()).hexdigest()
             lines.append(f"{h}  {name}")
     (artifacts_dir / "checksums.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    from sysspectogram.supply_chain import write_manifest
+    from sysspectogram.supply_chain import sign_file, write_manifest
 
-    write_manifest(artifacts_dir)
+    manifest_path = write_manifest(artifacts_dir)
+    signed = None
+    if minisign_secret_key is not None:
+        signed = str(sign_file(manifest_path, Path(minisign_secret_key)))
 
     return {
         "onnx": str(out_path.resolve()),
         "height": height,
         "width": width,
         "meta": str(meta_path.resolve()),
+        "manifest": str(manifest_path),
+        "signature": signed,
     }

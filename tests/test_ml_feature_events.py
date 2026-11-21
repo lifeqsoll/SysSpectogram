@@ -45,3 +45,26 @@ def test_weak_label_from_decision() -> None:
     assert weak_label_from_decision("ignore") is None
     assert weak_label_from_decision("") is None
     assert weak_label_from_decision("recon") is None
+
+
+def test_telegram_decisions_append_weak_labels(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SYSSPECTOGRAM_HOME", str(tmp_path))
+    from sysspectogram.telegram_bot import TelegramBot
+
+    class _Client:
+        pass
+
+    bot = TelegramBot(_Client(), config={"ml": {}}, nft=object())
+    bot._note_weak_label("ban", {"ip": "203.0.113.10", "rule": "bruteforce_ssh"})
+    bot._note_weak_label("ignore", {"ip": "203.0.113.10", "rule": "bruteforce_ssh"})
+    bot._note_weak_label("host_fp", {"score": 0.2})
+    bot._note_weak_label("mute", {"ip": "198.51.100.7", "rule": "port_scan"})
+    dest = tmp_path / "reports" / "feature_events.jsonl"
+    rows = [json.loads(line) for line in dest.read_text(encoding="utf-8").splitlines()]
+    labels = [(row["extras"]["action"], row["extras"]["weak_label"]) for row in rows]
+    assert ("ban", 1) in labels
+    assert ("mute", -1) in labels
+    assert ("host_fp", -1) in labels
+    assert all(row["extras"]["action"] != "ignore" for row in rows)
+    assert any(row["rule_id"] == "host_anomaly" for row in rows)
+    assert "ml_phase=off" in bot._status_text()

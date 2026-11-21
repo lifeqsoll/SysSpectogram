@@ -10,6 +10,7 @@ mod ebpf;
 mod emit;
 mod fim;
 mod metrics;
+mod onnx;
 mod phoenix;
 mod procwatch;
 mod protect;
@@ -179,6 +180,14 @@ struct Args {
     /// Extra root_watch allowlist entries (comm name or absolute exe path). Repeatable.
     #[arg(long = "root-allow")]
     root_allow: Vec<String>,
+
+    /// Optional ONNX model. Ignored unless the agent is built with `--features onnx`.
+    #[arg(long)]
+    onnx_model: Option<PathBuf>,
+
+    /// Attach ml_score extras without changing rule severity (requires --onnx-model).
+    #[arg(long, default_value_t = false)]
+    onnx_shadow: bool,
 }
 
 fn main() {
@@ -447,6 +456,14 @@ fn main() {
     let mut last_pids = Instant::now();
     let mut guard_alerted = false;
     let _ = metrics.sample();
+    let onnx_scorer = open_onnx_scorer(&args);
+    let emit_alert = |alert: &crate::types::AgentAlert| {
+        let mut owned = alert.clone();
+        crate::onnx::annotate(&mut owned, onnx_scorer.as_ref());
+        if let Err(e) = emitter.emit_alert(&owned) {
+            eprintln!("[sysspectogram-agent] emit: {e}");
+        }
+    };
 
     while running.load(Ordering::SeqCst) {
         match watcher.poll() {
@@ -464,17 +481,13 @@ fn main() {
         }
         if let Some(ref mut fim) = fim {
             for alert in fim.poll() {
-                if let Err(e) = emitter.emit_alert(&alert) {
-                    eprintln!("[sysspectogram-agent] emit: {e}");
-                }
+                emit_alert(&alert);
             }
         }
         #[cfg(feature = "ebpf")]
         if let Some(ref ebpf) = ebpf_rt {
             while let Some(alert) = ebpf.try_recv() {
-                if let Err(e) = emitter.emit_alert(&alert) {
-                    eprintln!("[sysspectogram-agent] emit: {e}");
-                }
+                emit_alert(&alert);
             }
         }
 
@@ -503,7 +516,7 @@ fn main() {
                             msg,
                             &host,
                         );
-                        let _ = emitter.emit_alert(&a);
+                        emit_alert(&a);
                     }
                 } else {
                     guard_alerted = false;
@@ -516,20 +529,14 @@ fn main() {
             for snap in snaps {
                 for mut alert in rules.eval(&snap) {
                     alert.host_id = host.clone();
-                    if let Err(e) = emitter.emit_alert(&alert) {
-                        eprintln!("[sysspectogram-agent] emit: {e}");
-                    }
+                    emit_alert(&alert);
                 }
             }
             for alert in watcher.module_alerts(&host) {
-                if let Err(e) = emitter.emit_alert(&alert) {
-                    eprintln!("[sysspectogram-agent] emit: {e}");
-                }
+                emit_alert(&alert);
             }
             for alert in watcher.drain_root_alerts(&host) {
-                if let Err(e) = emitter.emit_alert(&alert) {
-                    eprintln!("[sysspectogram-agent] emit: {e}");
-                }
+                emit_alert(&alert);
             }
             last_flush = Instant::now();
         }
@@ -537,14 +544,10 @@ fn main() {
         if let Some(ref mut cv) = cross {
             if last_cross.elapsed() >= cross_every {
                 if let Some(alert) = cv.poll_modules(&host) {
-                    if let Err(e) = emitter.emit_alert(&alert) {
-                        eprintln!("[sysspectogram-agent] emit: {e}");
-                    }
+                    emit_alert(&alert);
                 }
                 if let Some(alert) = cv.poll_pid_drop(&host) {
-                    if let Err(e) = emitter.emit_alert(&alert) {
-                        eprintln!("[sysspectogram-agent] emit: {e}");
-                    }
+                    emit_alert(&alert);
                 }
                 last_cross = Instant::now();
             }
@@ -552,9 +555,7 @@ fn main() {
 
         if let Some(ref mut bm) = baseline_mon {
             if let Some(alert) = bm.poll(&host) {
-                if let Err(e) = emitter.emit_alert(&alert) {
-                    eprintln!("[sysspectogram-agent] emit: {e}");
-                }
+                emit_alert(&alert);
             }
         }
 
@@ -738,6 +739,9 @@ fn absolutize_runtime_paths(args: &mut Args) {
     if let Some(ref mut j) = args.jsonl {
         *j = absolutize_path(j.clone());
     }
+    if let Some(ref mut model) = args.onnx_model {
+        *model = absolutize_path(model.clone());
+    }
     if let Some(ref mut w) = args.watch_pidfile {
         *w = absolutize_path(w.clone());
     }
@@ -800,6 +804,13 @@ fn build_phoenix_respawn_args(args: &Args, host: &str, root_watch: bool) -> Vec<
         respawn_args.push("--fim-baseline".into());
         respawn_args.push(args.fim_baseline.display().to_string());
     }
+    if let Some(ref model) = args.onnx_model {
+        respawn_args.push("--onnx-model".into());
+        respawn_args.push(model.display().to_string());
+        if args.onnx_shadow {
+            respawn_args.push("--onnx-shadow".into());
+        }
+    }
     respawn_args
 }
 
@@ -851,6 +862,26 @@ fn lethal_signal_alert(sig: u32, sender: u32, host: &str) -> Option<crate::types
         &std::collections::HashSet::new(),
         host,
     )
+}
+
+fn open_onnx_scorer(args: &Args) -> Option<crate::onnx::OnnxScorer> {
+    let Some(path) = args.onnx_model.as_ref() else {
+        return None;
+    };
+    match crate::onnx::OnnxScorer::load(path, args.onnx_shadow) {
+        Ok(scorer) => {
+            eprintln!(
+                "[sysspectogram-agent] onnx model={} shadow={}",
+                path.display(),
+                args.onnx_shadow
+            );
+            Some(scorer)
+        }
+        Err(err) => {
+            eprintln!("[sysspectogram-agent] onnx disabled: {err}");
+            None
+        }
+    }
 }
 
 fn hostname_fallback() -> String {
@@ -910,5 +941,25 @@ mod respawn_args_tests {
             args.watchdog_pidfile,
             PathBuf::from("/run/sysspectogram/watchdog.pid")
         );
+    }
+
+    #[test]
+    fn onnx_flags_parse_and_respawn() {
+        let args = Args::parse_from([
+            "sysspectogram-agent",
+            "--onnx-model",
+            "artifacts/cnn.onnx",
+            "--onnx-shadow",
+        ]);
+        assert_eq!(
+            args.onnx_model.as_deref(),
+            Some(std::path::Path::new("artifacts/cnn.onnx"))
+        );
+        assert!(args.onnx_shadow);
+        let out = build_phoenix_respawn_args(&args, "host-x", false);
+        assert!(out
+            .windows(2)
+            .any(|w| w[0] == "--onnx-model" && w[1] == "artifacts/cnn.onnx"));
+        assert!(out.iter().any(|a| a == "--onnx-shadow"));
     }
 }

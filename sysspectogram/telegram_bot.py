@@ -1074,6 +1074,8 @@ class TelegramBot:
             failed = any(
                 tok in result.lower() for tok in ("refused", "failed", "nft required")
             )
+            if not failed:
+                self._note_weak_label(action, payload)
             if self.audit is not None:
                 try:
                     self.audit.record(
@@ -1291,6 +1293,71 @@ class TelegramBot:
                 return "collect disabled (allow_destructive_sims=false)"
             return self._start_collect(float(payload.get("duration") or 60))
         return f"unknown action {action}"
+
+    def _note_weak_label(self, action: str, payload: dict) -> None:
+        mapped = {
+            "ban": "ban",
+            "kill": "kill",
+            "isolate": "isolate",
+            "kirk_isolate": "isolate",
+            "lockdown": "isolate",
+            "mute": "mute",
+            "allow": "allow",
+            "host_fp": "host_fp",
+            "ignore": "ignore",
+        }.get(action)
+        if mapped is None:
+            return
+        try:
+            from sysspectogram.config import resolve_runtime_path
+            from sysspectogram.ml.feature_events import (
+                FeatureEvent,
+                append_feature_event,
+                weak_label_from_decision,
+            )
+
+            label = weak_label_from_decision(mapped)
+            if label is None:
+                return
+            raw = (self.config.get("ml") or {}).get("feature_events") or "reports/feature_events.jsonl"
+            rule = str(payload.get("rule") or payload.get("rule_id") or action)
+            if action == "host_fp":
+                rule = str(payload.get("rule") or payload.get("rule_id") or "host_anomaly")
+            scores: dict[str, float] = {"weak_label": float(label)}
+            if payload.get("score") is not None:
+                try:
+                    scores["host_score"] = float(payload.get("score"))
+                except (TypeError, ValueError):
+                    pass
+            ppid = int(payload.get("ppid") or 0)
+            append_feature_event(
+                resolve_runtime_path(str(raw)),
+                FeatureEvent(
+                    rule_id=rule,
+                    severity=str(payload.get("severity") or ""),
+                    exe=str(payload.get("path") or payload.get("exe") or ""),
+                    ppid=ppid,
+                    scores=scores,
+                    ts=time.time(),
+                    extras={
+                        "action": action,
+                        "weak_label": label,
+                        "ip": payload.get("ip"),
+                    },
+                ),
+            )
+        except Exception:
+            return
+
+    def _status_ml_phase(self) -> str:
+        try:
+            from sysspectogram.config import resolve_runtime_path
+            from sysspectogram.ml.model_promote import read_ml_phase
+
+            raw = (self.config.get("ml") or {}).get("phase_path") or "state/ml_phase.json"
+            return read_ml_phase(resolve_runtime_path(str(raw)))
+        except Exception:
+            return "off"
 
     def _start_simulate(self, kind: str, duration: float) -> str:
         if self._busy:
@@ -1666,7 +1733,7 @@ class TelegramBot:
         isolated = self.kirk_status.get("isolated", False)
         return (
             f"uptime_s={uptime} quiet={quiet} lockdown={lockdown} dry_run={self.dry_run} busy={self._busy}\n"
-            f"response.mode={self.response_mode} model={self.model_dir or 'none'}\n"
+            f"response.mode={self.response_mode} model={self.model_dir or 'none'} ml_phase={self._status_ml_phase()}\n"
             f"kirk.trust={kt} ima={kr.get('ima_present')} sb={kr.get('secure_boot')} "
             f"tpm={kr.get('tpm_present')} isolated={isolated}\n"
             f"last_alert={last or 'none'}\n"
