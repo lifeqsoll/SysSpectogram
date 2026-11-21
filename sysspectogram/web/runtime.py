@@ -175,7 +175,11 @@ def run_web_dashboard(
         try:
             from sysspectogram.notify_telegram import TelegramClient
 
-            client = TelegramClient(token=tg_cfg.get("bot_token"), chat_id=tg_cfg.get("chat_id"))
+            client = TelegramClient(
+                token=tg_cfg.get("bot_token"),
+                chat_id=tg_cfg.get("chat_id"),
+                api_proxy=tg_cfg.get("api_proxy") or None,
+            )
             res = client.set_chat_menu_button_webapp("Dashboard", public_url)
             if res.get("ok"):
                 console.print("[green]Telegram menu button → Dashboard[/]")

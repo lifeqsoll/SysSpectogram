@@ -366,6 +366,7 @@ const SETTINGS_RULES: &[(&str, Kind)] = &[
     ("response.never_ban_cidrs", Kind::String),
     ("telegram.enabled", Kind::Bool),
     ("telegram.require_console_unlock", Kind::Bool),
+    ("telegram.api_proxy", Kind::String),
     ("timeseries.enabled", Kind::Bool),
     ("ui.lang", Kind::Enum(&["en", "ru"])),
     ("web.enabled", Kind::Bool),

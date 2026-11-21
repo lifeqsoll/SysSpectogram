@@ -34,6 +34,15 @@ python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 
 `--dry-run`: ban/kill/shield только текстом, без nft/SIGKILL.
 
+### Bot API режется с VPS (опциональный local proxy)
+
+```bash
+TELEGRAM_API_PROXY=http://127.0.0.1:1080
+# или telegram.api_proxy в YAML / Settings
+```
+
+Только loopback HTTP CONNECT; remote proxy отклоняется. Если туннель к proxy не поднялся **до** отправки тела — один direct fallback. Подписку VPN **не** кладём в репозиторий — каждый ставит свою (sing-box и т.п.). Подробнее: [TELEGRAM.md](TELEGRAM.md).
+
 ## Скриншоты
 
 Галерея dry-run (без unlock-кодов и home-путей): [assets/tg/](assets/tg/).

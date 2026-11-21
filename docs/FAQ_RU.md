@@ -40,6 +40,10 @@ loginctl enable-linger "$USER"
 
 **Экспериментально.** Дефолт `runtime.prefer: onnx` (без артефактов — metrics-only); PyTorch на VPS не нужен. Сначала офлайн-оценка: [EVAL.md](EVAL.md).
 
+## С VPS не достучаться до api.telegram.org
+
+Локальный HTTP CONNECT (свой sing-box и т.п.) + `TELEGRAM_API_PROXY=http://127.0.0.1:1080` (или `telegram.api_proxy`). Подписку VPN в продукт не кладём. [TELEGRAM_RU.md](TELEGRAM_RU.md).
+
 ## Как приглушить шум в Telegram (сканы / eBPF)?
 
 **`/notify`** (или Menu → Notify): группы (`internet_noise`, `port_scans`, `agent_ebpf`, …), мин. severity, точечные rule id через `/notify ids`. Файл: `state/telegram_notify.json`. [TELEGRAM_RU.md](TELEGRAM_RU.md).

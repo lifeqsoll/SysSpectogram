@@ -81,6 +81,7 @@ Notable keys (see `configs/default.yaml` for the full file):
 | `response` | `mode` | `observe` | `observe` \| `shield` \| `aggressive` \| `isolate` |
 | `response` | `never_ban_cidrs` | `[]` | CIDRs that must never be auto-banned (your admin IP as `/32`) |
 | `telegram` | `require_console_unlock` | `true` | Gate TG + web actions until `/unlock` |
+| `telegram` | `api_proxy` | `null` | Loopback HTTP CONNECT for Bot API (`TELEGRAM_API_PROXY`); [TELEGRAM.md](TELEGRAM.md) |
 | `telegram.notify` | `groups` / `rules` | see yaml | Push filters; live via `/notify` ([TELEGRAM.md](TELEGRAM.md)) |
 | `agent` | `mode` | `userspace` | `userspace` or `ebpf` (attach needs root; musl release builds link eBPF) |
 | `agent` | `require_hmac` | `true` | Reject unsigned critical agent rules |

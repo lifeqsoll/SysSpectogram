@@ -389,6 +389,7 @@ def run_guard(
     client = TelegramClient(
         token=tg_cfg.get("bot_token") or None,
         chat_id=tg_cfg.get("chat_id") or None,
+        api_proxy=tg_cfg.get("api_proxy") or None,
     )
     if not tg_cfg.get("token_secret"):
         console.print(

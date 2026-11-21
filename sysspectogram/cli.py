@@ -1001,6 +1001,7 @@ def _cmd_home_health(args: argparse.Namespace) -> int:
             client = TelegramClient(
                 str(tg.get("bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN")),
                 str(tg.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID")),
+                api_proxy=tg.get("api_proxy") or None,
             )
             client.send_message("SysSpectogram health check: ok")
             add("telegram_ping", True, "test message sent")

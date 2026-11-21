@@ -73,6 +73,9 @@ telegram:
   bot_token: null
   chat_id: null
   token_secret: null
+  # Optional loopback HTTP CONNECT for Bot API (e.g. local sing-box). Env: TELEGRAM_API_PROXY.
+  # Only http://127.0.0.1:PORT or localhost / ::1 — bring your own subscription; none shipped.
+  api_proxy: ""
   allow_destructive_sims: false
   require_console_unlock: true
   # 0 = session never expires after unlock (until /lock or guard restart)

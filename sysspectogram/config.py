@@ -221,6 +221,7 @@ OVERLAY_ALLOWED = frozenset(
         "response.never_ban_cidrs",
         "telegram.enabled",
         "telegram.require_console_unlock",
+        "telegram.api_proxy",
         "timeseries.enabled",
         "ui.lang",
         "web.enabled",

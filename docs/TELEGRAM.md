@@ -42,6 +42,30 @@ TELEGRAM_CHAT_ID=6360...
 python -m sysspectogram guard --model artifacts/real_v3 --telegram --dry-run
 ```
 
+### Bot API blocked from the VPS (optional local proxy)
+
+Some regions / providers filter `api.telegram.org`. SysSpectogram can send Bot API traffic through a **loopback HTTP CONNECT** proxy only (no system route change, no TUN).
+
+```bash
+# .env or Environment= in the protect unit
+TELEGRAM_API_PROXY=http://127.0.0.1:1080
+```
+
+Or YAML / Settings: `telegram.api_proxy: "http://127.0.0.1:1080"`. Env overrides YAML.
+
+Rules:
+
+- Only `http://127.0.0.1:PORT`, `localhost`, or `::1` — remote proxies are refused.
+- Only HTTPS to `api.telegram.org` is requested; other destinations are rejected in the client.
+- If the local proxy cannot be connected **before** the request body is sent, the client tries **one direct** connection (no replay after a send has started).
+- **Bring your own** VPN/subscription (sing-box, Clash, …). SysSpectogram does **not** ship nodes or subscription URLs.
+
+Minimal operator sketch (you own the config and secrets):
+
+1. Run a local proxy on `127.0.0.1:1080` that can reach `api.telegram.org:443` (e.g. sing-box `mixed` inbound + your VLESS/SS outbounds).
+2. Set `TELEGRAM_API_PROXY` / `telegram.api_proxy`.
+3. Restart protect / guard. Check with `python -m sysspectogram home health --ping` when configured.
+
 `--dry-run`: ban/kill/shield print what would happen; no nft/SIGKILL.
 
 Alert buttons (after unlock): **Kill**, feedback (**Ignore** / **As normal** / **As anomaly**), root Kill, session **Kick tty** / **Ban IP**. See [FEEDBACK.md](FEEDBACK.md), [ROOT_WATCH.md](ROOT_WATCH.md), [SESSIONS.md](SESSIONS.md).

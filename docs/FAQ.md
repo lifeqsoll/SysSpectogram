@@ -40,6 +40,17 @@ Release assets ship **SHA256SUMS** and, when published, **minisign** signatures.
 
 Treat it as **experimental**. Default is `runtime.prefer: onnx` with a metrics-only fallback when artifacts are missing — no PyTorch required on the VPS. Run offline gates in [EVAL.md](EVAL.md) before trusting F1 / FPR claims on your data.
 
+## Telegram Bot API times out from my VPS
+
+Set a **local** HTTP CONNECT proxy (your own sing-box / Clash / … on `127.0.0.1`) and:
+
+```bash
+export TELEGRAM_API_PROXY=http://127.0.0.1:1080
+# or telegram.api_proxy in config / Settings
+```
+
+SysSpectogram does not ship VPN subscriptions. Details: [TELEGRAM.md](TELEGRAM.md#bot-api-blocked-from-the-vps-optional-local-proxy).
+
 ## How do I quiet Telegram noise (port scans / eBPF)?
 
 Use **`/notify`** (or Menu → Notify): toggle groups (`internet_noise`, `port_scans`, `agent_ebpf`, …), set min severity, or pin individual rule ids via `/notify ids`. Persists under `state/telegram_notify.json`. Details: [TELEGRAM.md](TELEGRAM.md).
