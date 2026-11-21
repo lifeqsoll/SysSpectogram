@@ -110,6 +110,12 @@ export const STRINGS: Record<string, { en: string; ru: string }> = {
   'charts.m.hostScore': { en: 'Host ML score', ru: 'Оценка ML хоста' },
   'charts.m.agentScore': { en: 'Agent score', ru: 'Оценка агента' },
   'charts.now': { en: 'now', ru: 'сейчас' },
+  'charts.backGrid': { en: 'Back to grid', ru: 'К сетке' },
+  'charts.pickMetrics': { en: 'Metrics…', ru: 'Метрики…' },
+  'charts.pickMetricsHint': {
+    en: 'Choose which metrics appear in the grid. Click a tile for a larger chart.',
+    ru: 'Выберите метрики для сетки. Клик по плитке открывает крупный график.',
+  },
   'alerts.title': { en: 'Alerts', ru: 'Алерты' },
   'alerts.lead': { en: 'Plain-language events. Ban or stop only after unlock when Telegram is on.', ru: 'События простым языком. Бан и остановка — после разблокировки, если включён Telegram.' },
   'alerts.ban': { en: 'Ban IP', ru: 'Забанить IP' },

@@ -30,6 +30,7 @@ const REMOTE_POLL_MS = 5000;
 
 let started = false;
 let remoteTimer: ReturnType<typeof setInterval> | undefined;
+let syncTimer: ReturnType<typeof setInterval> | undefined;
 let applyLocal = true;
 let remoteInFlight = false;
 let lastRemoteHost = '';
@@ -110,15 +111,48 @@ function syncRemotePoller(): void {
   }
 }
 
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'hidden') {
+    if (remoteTimer) {
+      clearInterval(remoteTimer);
+      remoteTimer = undefined;
+    }
+    return;
+  }
+  syncRemotePoller();
+  if (isRemoteHost()) void pollRemote();
+}
+
+/** Call when active host changes (avoids relying solely on the sync interval). */
+export function notifyLiveHostChanged(): void {
+  if (!started) return;
+  syncRemotePoller();
+}
+
+export function stopLive(): void {
+  if (remoteTimer) {
+    clearInterval(remoteTimer);
+    remoteTimer = undefined;
+  }
+  if (syncTimer) {
+    clearInterval(syncTimer);
+    syncTimer = undefined;
+  }
+  started = false;
+}
+
 export async function startLive(): Promise<void> {
   if (started) return;
   started = true;
   await api.onLive(apply);
   syncRemotePoller();
   if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && isRemoteHost()) void pollRemote();
-    });
+    document.addEventListener('visibilitychange', onVisibilityChange);
   }
-  setInterval(() => syncRemotePoller(), 2500);
+  if (!syncTimer) {
+    syncTimer = setInterval(() => {
+      if (!pageVisible()) return;
+      syncRemotePoller();
+    }, 2500);
+  }
 }

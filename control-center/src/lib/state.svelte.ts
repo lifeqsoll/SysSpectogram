@@ -66,6 +66,15 @@ export const HUB_SECTIONS = [
 /** `local` = this machine; otherwise a fleet host id. */
 export type ActiveHostId = 'local' | string;
 
+export const DEFAULT_CHART_GRID: string[] = [
+  'host_risk',
+  'cpu_percent',
+  'mem_percent',
+  'net_bytes_recv_per_s',
+  'net_bytes_sent_per_s',
+  'disk_write_bytes_per_s',
+];
+
 function storedActiveHost(): ActiveHostId {
   try {
     const v = localStorage.getItem('sys-active-host');
@@ -73,6 +82,20 @@ function storedActiveHost(): ActiveHostId {
   } catch {
     return 'local';
   }
+}
+
+function storedChartGridMetrics(): string[] {
+  try {
+    const raw = localStorage.getItem('sys-chart-grid');
+    if (!raw) return [...DEFAULT_CHART_GRID];
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string') && parsed.length) {
+      return parsed as string[];
+    }
+  } catch {
+    /* ignore */
+  }
+  return [...DEFAULT_CHART_GRID];
 }
 
 export const ui = $state({
@@ -86,10 +109,22 @@ export const ui = $state({
   activeHostId: storedActiveHost() as ActiveHostId,
   /** Bumped when active host changes so views clear series caches. */
   hostEpoch: 0,
+  /** Metrics shown in the Charts grid (persisted). */
+  chartGridMetrics: storedChartGridMetrics() as string[],
   onboardingDone: true as boolean,
   /** False until stack is ready (dev checkout always ready). */
   bootstrapDone: true as boolean,
 });
+
+export function setChartGridMetrics(ids: string[]): void {
+  const next = ids.map((s) => s.trim()).filter(Boolean);
+  ui.chartGridMetrics = next.length ? next : [...DEFAULT_CHART_GRID];
+  try {
+    localStorage.setItem('sys-chart-grid', JSON.stringify(ui.chartGridMetrics));
+  } catch {
+    /* ignore */
+  }
+}
 
 export function isRemoteHost(): boolean {
   return ui.activeHostId !== 'local';
@@ -105,6 +140,8 @@ export function setActiveHost(id: ActiveHostId): void {
   } catch {
     /* ignore */
   }
+  // Lazy import avoids a circular dependency with live.svelte.ts.
+  void import('./live.svelte').then((m) => m.notifyLiveHostChanged());
 }
 
 export function setFleetHubOnly(on: boolean): void {

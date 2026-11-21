@@ -3,7 +3,13 @@
   import { api, errorText, RANGES, type Point, type Range } from '../lib/api';
   import { t } from '../lib/i18n';
   import { fmtNum, fmtTime } from '../lib/format';
-  import { isRemoteHost, ui } from '../lib/state.svelte';
+  import { ui } from '../lib/state.svelte';
+  import {
+    CHART_POLL_MS,
+    DETAIL_MAX_POINTS,
+    fetchSeries,
+    pageVisible,
+  } from '../lib/timeseriesPoll.svelte';
   import Chart from '../lib/Chart.svelte';
 
   const METRICS = [
@@ -28,25 +34,33 @@
   let loading = $state(false);
   let inFlight = false;
   let loadGen = 0;
+  let hadFullLoad = false;
   /** Chart only mounts after the selected metric’s series is ready. */
   let chartReady = $state(false);
 
-  async function load(m: string, r: Range): Promise<void> {
+  async function load(m: string, r: Range, incremental: boolean): Promise<void> {
     if (ui.section !== 'dashboards') return;
     if (inFlight) return;
     const gen = ++loadGen;
     inFlight = true;
     loading = true;
     error = null;
-    chartReady = false;
-    points = [];
+    if (!incremental) {
+      chartReady = false;
+      points = [];
+      hadFullLoad = false;
+    }
     try {
-      const next = await api.timeseriesQuery(m, r);
+      const next = await fetchSeries(m, r, points, {
+        maxPoints: DETAIL_MAX_POINTS,
+        incremental: incremental && hadFullLoad,
+      });
       if (gen !== loadGen) return;
       // Ignore stale responses if the user already picked another metric.
       if (m !== metric || r !== ui.range) return;
       points = next;
       chartReady = next.length > 1;
+      hadFullLoad = true;
     } catch (e) {
       if (gen !== loadGen) return;
       error = errorText(e);
@@ -72,15 +86,14 @@
     const r = ui.range;
     void ui.hostEpoch;
     if (ui.section !== 'dashboards') return;
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (!pageVisible()) return;
 
-    void load(m, r);
-    const period = 5000;
+    hadFullLoad = false;
+    void load(m, r, false);
     const timer = setInterval(() => {
-      if (ui.section !== 'dashboards') return;
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void load(m, r);
-    }, period);
+      if (ui.section !== 'dashboards' || !pageVisible()) return;
+      void load(m, r, true);
+    }, CHART_POLL_MS);
     return () => clearInterval(timer);
   });
 
@@ -128,7 +141,7 @@
     </div>
   </div>
   <div class="spacer"></div>
-  <button class="btn" onclick={() => load(metric, ui.range)} disabled={loading}>{t('common.refresh')}</button>
+  <button class="btn" onclick={() => load(metric, ui.range, false)} disabled={loading}>{t('common.refresh')}</button>
   {#if loading}<span class="muted">{t('common.loading')}</span>{/if}
 </div>
 
