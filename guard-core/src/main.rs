@@ -1,8 +1,11 @@
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
+use serde_json::json;
 use sysspectogram_guard_core::{auth, flow, metrics, render, SCHEMA_VERSION};
 
 #[derive(Parser, Debug)]
@@ -38,6 +41,11 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Serve JSONL request/response over a Unix stream socket.
+    Serve {
+        #[arg(long)]
+        socket: PathBuf,
+    },
 }
 
 #[derive(Serialize)]
@@ -64,11 +72,85 @@ fn main() {
         Some(Cmd::AuthFailIp { line }) => emit_auth_fail_ip(&line),
         Some(Cmd::TcpAddr { field }) => emit_tcp_addr(&field),
         Some(Cmd::Render { points, out }) => emit_render(&points, &out),
+        Some(Cmd::Serve { socket }) => serve_socket(&socket),
         None => {
-            eprintln!("use --once, metrics, auth-fail-ip, tcp-addr, or render");
+            eprintln!("use --once, metrics, auth-fail-ip, tcp-addr, render, or serve");
             std::process::exit(2);
         }
     }
+}
+
+fn serve_socket(path: &std::path::Path) {
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+    let listener = UnixListener::bind(path).unwrap_or_else(|err| {
+        eprintln!("serve bind {}: {err}", path.display());
+        std::process::exit(1);
+    });
+    eprintln!(
+        "[sysspectogram-guard-core] serve schema_version={SCHEMA_VERSION} socket={}",
+        path.display()
+    );
+    for conn in listener.incoming() {
+        match conn {
+            Ok(stream) => {
+                if let Err(err) = handle_client(stream) {
+                    eprintln!("serve client: {err}");
+                }
+            }
+            Err(err) => eprintln!("serve accept: {err}"),
+        }
+    }
+}
+
+fn handle_client(stream: UnixStream) -> Result<(), String> {
+    let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+    let mut writer = stream;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        let req: serde_json::Value =
+            serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
+        let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        let resp = match op {
+            "ping" => json!({"ok": true, "schema_version": SCHEMA_VERSION}),
+            "metrics" => {
+                let m = metrics::collect_cpu_mem();
+                json!({
+                    "ok": true,
+                    "schema_version": SCHEMA_VERSION,
+                    "cpu_percent": m.get("cpu_percent").copied().unwrap_or(0.0),
+                    "mem_percent": m.get("mem_percent").copied().unwrap_or(0.0),
+                })
+            }
+            "auth_fail_ip" => {
+                let text = req.get("line").and_then(|v| v.as_str()).unwrap_or("");
+                json!({"ok": true, "ip": auth::parse_auth_fail_ip(text)})
+            }
+            "tcp_addr" => {
+                let field = req.get("field").and_then(|v| v.as_str()).unwrap_or("");
+                match flow::parse_tcp_hex_addr(field) {
+                    Some((ip, port)) => json!({"ok": true, "ip": ip, "port": port}),
+                    None => json!({"ok": false, "error": "bad_field"}),
+                }
+            }
+            _ => json!({"ok": false, "error": "unknown_op"}),
+        };
+        let mut out = serde_json::to_string(&resp).map_err(|e| e.to_string())?;
+        out.push('\n');
+        writer.write_all(out.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn emit_metrics_once() {

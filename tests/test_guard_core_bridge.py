@@ -54,6 +54,45 @@ def test_find_bin_explicit(tmp_path: Path) -> None:
     assert find_bin(exe) == exe.resolve()
 
 
+def test_find_bin_prefers_bundled_over_path(tmp_path: Path, monkeypatch) -> None:
+    import pytest
+    from sysspectogram import guard_core_bridge as bridge
+
+    root = Path(bridge.__file__).resolve().parents[1]
+    bundled = None
+    for rel in (
+        "guard-core/target/release/sysspectogram-guard-core",
+        "guard-core/target/debug/sysspectogram-guard-core",
+        "bin/sysspectogram-guard-core",
+    ):
+        cand = root / rel
+        if cand.is_file():
+            bundled = cand.resolve()
+            break
+    if bundled is None:
+        pytest.skip("no bundled guard-core binary in tree")
+    fake_path = tmp_path / "sysspectogram-guard-core"
+    fake_path.write_text("#!/bin/sh\necho path\n", encoding="utf-8")
+    fake_path.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    found = find_bin()
+    assert found is not None
+    assert found.resolve() == bundled
+    assert found.resolve() != fake_path.resolve()
+
+
+def test_verify_bin_sha256(tmp_path: Path) -> None:
+    from sysspectogram.guard_core_bridge import verify_bin_sha256
+    import hashlib
+
+    exe = tmp_path / "bin"
+    exe.write_bytes(b"abc")
+    digest = hashlib.sha256(b"abc").hexdigest()
+    assert verify_bin_sha256(exe, None) is True
+    assert verify_bin_sha256(exe, digest) is True
+    assert verify_bin_sha256(exe, "0" * 64) is False
+
+
 def test_bridge_matches_cli_on_doc_ip() -> None:
     root = Path(__file__).resolve().parents[1] / "guard-core"
     exe = find_bin()

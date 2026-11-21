@@ -27,6 +27,7 @@ def test_hit_pulls_ewma_back(tmp_path: Path) -> None:
     assert store.effective_severity_adjust("scan", "medium") == "low"
     store.record_hit("scan", severity="medium")
     assert store.effective_severity_adjust("scan", "medium") == "medium"
+    store.flush()
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["rules"]["scan"]["hits"] == 1
     assert payload["rules"]["scan"]["fps"] == 1

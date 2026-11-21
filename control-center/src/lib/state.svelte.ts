@@ -66,6 +66,7 @@ export const HUB_SECTIONS = [
 /** `local` = this machine; otherwise a fleet host id. */
 export type ActiveHostId = 'local' | string;
 
+/** Default grid: combined overlays (risk+thr, score+raw, mem+swap, net/disk pairs, stacked alerts). */
 export const DEFAULT_CHART_GRID: string[] = [
   'agent_score',
   'host_score',
@@ -73,9 +74,7 @@ export const DEFAULT_CHART_GRID: string[] = [
   'cpu_percent',
   'mem_percent',
   'net_bytes_recv_per_s',
-  'net_bytes_sent_per_s',
   'disk_write_bytes_per_s',
-  'ml_raw_score',
   'baseline_z',
   'alerts_per_min',
   'perimeter_events_per_min',

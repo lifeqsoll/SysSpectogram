@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -12,34 +13,55 @@ from typing import Any
 
 
 def find_bin(explicit: str | Path | None = None) -> Path | None:
-    """Locate `sysspectogram-guard-core` (explicit path, PATH, then target/)."""
+    """Locate `sysspectogram-guard-core`.
+
+    Order (security): explicit config → bundled target/ → PATH last.
+    """
     if explicit:
         cand = Path(explicit)
         if cand.is_file() and os.access(cand, os.X_OK):
             return cand.resolve()
         return None
-    found = shutil.which("sysspectogram-guard-core")
-    if found:
-        return Path(found)
     root = Path(__file__).resolve().parents[1]
     for rel in (
         "guard-core/target/release/sysspectogram-guard-core",
         "guard-core/target/debug/sysspectogram-guard-core",
+        "bin/sysspectogram-guard-core",
     ):
         cand = root / rel
         if cand.is_file() and os.access(cand, os.X_OK):
             return cand.resolve()
+    found = shutil.which("sysspectogram-guard-core")
+    if found:
+        return Path(found).resolve()
     return None
+
+
+def verify_bin_sha256(path: Path, expect_hex: str | None) -> bool:
+    """If ``expect_hex`` is set, require matching SHA-256 of the binary."""
+    if not expect_hex:
+        return True
+    want = expect_hex.strip().lower()
+    if len(want) != 64 or any(c not in "0123456789abcdef" for c in want):
+        return False
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return digest == want
 
 
 def run_once_metrics(
     bin_path: str | Path | None = None,
     *,
     timeout: float = 5.0,
+    expect_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """One CPU/mem sample from `guard-core metrics` (falls back to `--once`)."""
     exe = Path(bin_path) if bin_path else find_bin()
     if exe is None or not exe.is_file():
+        return None
+    if not verify_bin_sha256(exe, expect_sha256):
         return None
     for args in ([str(exe), "metrics"], [str(exe), "--once"]):
         try:

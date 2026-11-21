@@ -6,42 +6,101 @@
   import { isRemoteHost, setChartGridMetrics, ui } from '../lib/state.svelte';
   import { live } from '../lib/live.svelte';
   import {
-    CHART_POLL_MS,
     DETAIL_MAX_POINTS,
     GRID_MAX_POINTS,
     fetchMany,
     fetchSeries,
     pageVisible,
+    subscribeSharedPoll,
   } from '../lib/timeseriesPoll.svelte';
-  import Chart from '../lib/Chart.svelte';
+  import Chart, { type ChartSeries } from '../lib/Chart.svelte';
 
   type MetricDef = {
     id: string;
     labelKey: string;
     group: 'risk' | 'system' | 'net' | 'disk' | 'gpu';
     unit: 'pct' | 'bytes' | 'score';
+    /** Extra series overlaid on this tile (shared xs from primary). */
+    overlay?: string[];
+    /** Stacked severity rates for the alerts tile. */
+    stack?: string[];
   };
 
   const METRICS: MetricDef[] = [
-    { id: 'host_risk', labelKey: 'charts.m.hostRisk', group: 'risk', unit: 'score' },
-    { id: 'host_score', labelKey: 'charts.m.hostScore', group: 'risk', unit: 'score' },
     { id: 'agent_score', labelKey: 'charts.m.agentScore', group: 'risk', unit: 'score' },
+    {
+      id: 'host_score',
+      labelKey: 'charts.m.hostScore',
+      group: 'risk',
+      unit: 'score',
+      overlay: ['ml_raw_score'],
+    },
+    {
+      id: 'host_risk',
+      labelKey: 'charts.m.hostRisk',
+      group: 'risk',
+      unit: 'score',
+      overlay: ['threshold'],
+    },
     { id: 'ml_raw_score', labelKey: 'charts.m.mlRaw', group: 'risk', unit: 'score' },
     { id: 'baseline_z', labelKey: 'charts.m.baselineZ', group: 'risk', unit: 'score' },
     { id: 'threshold', labelKey: 'charts.m.threshold', group: 'risk', unit: 'score' },
-    { id: 'alerts_per_min', labelKey: 'charts.m.alerts', group: 'risk', unit: 'score' },
+    {
+      id: 'alerts_per_min',
+      labelKey: 'charts.m.alerts',
+      group: 'risk',
+      unit: 'score',
+      stack: [
+        'alerts_low_per_min',
+        'alerts_medium_per_min',
+        'alerts_high_per_min',
+        'alerts_critical_per_min',
+      ],
+    },
     { id: 'alerts_high_per_min', labelKey: 'charts.m.alertsHigh', group: 'risk', unit: 'score' },
     { id: 'perimeter_events_per_min', labelKey: 'charts.m.perimeter', group: 'risk', unit: 'score' },
     { id: 'cpu_percent', labelKey: 'charts.m.cpu', group: 'system', unit: 'pct' },
-    { id: 'mem_percent', labelKey: 'charts.m.mem', group: 'system', unit: 'pct' },
+    {
+      id: 'mem_percent',
+      labelKey: 'charts.m.mem',
+      group: 'system',
+      unit: 'pct',
+      overlay: ['swap_percent'],
+    },
     { id: 'swap_percent', labelKey: 'charts.m.swap', group: 'system', unit: 'pct' },
-    { id: 'net_bytes_recv_per_s', labelKey: 'charts.m.netIn', group: 'net', unit: 'bytes' },
+    {
+      id: 'net_bytes_recv_per_s',
+      labelKey: 'charts.m.netIn',
+      group: 'net',
+      unit: 'bytes',
+      overlay: ['net_bytes_sent_per_s'],
+    },
     { id: 'net_bytes_sent_per_s', labelKey: 'charts.m.netOut', group: 'net', unit: 'bytes' },
+    {
+      id: 'disk_write_bytes_per_s',
+      labelKey: 'charts.m.diskWrite',
+      group: 'disk',
+      unit: 'bytes',
+      overlay: ['disk_read_bytes_per_s'],
+    },
     { id: 'disk_read_bytes_per_s', labelKey: 'charts.m.diskRead', group: 'disk', unit: 'bytes' },
-    { id: 'disk_write_bytes_per_s', labelKey: 'charts.m.diskWrite', group: 'disk', unit: 'bytes' },
-    { id: 'gpu_util_percent', labelKey: 'charts.m.gpu', group: 'gpu', unit: 'pct' },
+    {
+      id: 'gpu_util_percent',
+      labelKey: 'charts.m.gpu',
+      group: 'gpu',
+      unit: 'pct',
+      overlay: ['gpu_mem_percent'],
+    },
     { id: 'gpu_mem_percent', labelKey: 'charts.m.gpuMem', group: 'gpu', unit: 'pct' },
   ];
+
+  const OVERLAY_COLORS = ['#8fa3c4', '#f0b35a', '#34d399', '#f472b6'];
+  const STACK_COLORS: Record<string, string> = {
+    alerts_low_per_min: '#60a5fa',
+    alerts_medium_per_min: '#fbbf24',
+    alerts_high_per_min: '#f97316',
+    alerts_critical_per_min: '#ef4444',
+  };
 
   const REMOTE_METRIC_IDS = new Set([
     'host_risk',
@@ -109,9 +168,86 @@
     setChartGridMetrics([...set]);
   }
 
+  function metricIdsForGrid(): string[] {
+    const ids = new Set<string>();
+    for (const m of gridDefs) {
+      ids.add(m.id);
+      for (const o of m.overlay ?? []) ids.add(o);
+      for (const s of m.stack ?? []) ids.add(s);
+    }
+    ids.add('alerts_per_min');
+    return [...ids];
+  }
+
+  function alignYs(primary: Point[], other: Point[]): (number | null)[] {
+    if (!primary.length) return [];
+    const byTs = new Map(other.map((p) => [p.ts, p.avg] as const));
+    return primary.map((p) => {
+      const v = byTs.get(p.ts);
+      return v == null || Number.isNaN(v) ? null : v;
+    });
+  }
+
+  function tileSeries(m: MetricDef): { xs: number[]; series: ChartSeries[]; markers: number[] } {
+    if (m.stack?.length) {
+      let base = seriesById[m.id] ?? [];
+      if (!base.length) {
+        for (const sid of m.stack) {
+          if ((seriesById[sid] ?? []).length) {
+            base = seriesById[sid] ?? [];
+            break;
+          }
+        }
+      }
+      const series: ChartSeries[] = m.stack.map((sid) => {
+        const lab =
+          sid === 'alerts_low_per_min'
+            ? 'low'
+            : sid === 'alerts_medium_per_min'
+              ? 'med'
+              : sid === 'alerts_high_per_min'
+                ? 'high'
+                : sid === 'alerts_critical_per_min'
+                  ? 'crit'
+                  : sid;
+        return {
+          label: lab,
+          color: STACK_COLORS[sid] ?? '#8fa3c4',
+          values: alignYs(base, seriesById[sid] ?? []),
+        };
+      });
+      return { xs: base.map((p) => p.ts), series, markers: alertMarkers() };
+    }
+    const pts = seriesById[m.id] ?? [];
+    const series: ChartSeries[] = [
+      { label: t(m.labelKey), color: '#3b82f6', values: pts.map((p) => p.avg) },
+    ];
+    (m.overlay ?? []).forEach((oid, i) => {
+      const def = METRICS.find((x) => x.id === oid);
+      series.push({
+        label: def ? t(def.labelKey) : oid,
+        color: OVERLAY_COLORS[i % OVERLAY_COLORS.length],
+        values: alignYs(pts, seriesById[oid] ?? []),
+        dash: [4, 3],
+      });
+    });
+    return { xs: pts.map((p) => p.ts), series, markers: alertMarkers() };
+  }
+
+  function alertMarkers(): number[] {
+    return (seriesById['alerts_per_min'] ?? [])
+      .filter((p) => p.avg > 0)
+      .map((p) => p.ts)
+      .slice(-40);
+  }
+
+  function openAlertsFromMarker(): void {
+    ui.section = 'alerts';
+  }
+
   async function loadGrid(r: Range, incremental: boolean): Promise<void> {
     if (!chartsActive() || inFlight) return;
-    const ids = gridDefs.map((m) => m.id);
+    const ids = metricIdsForGrid();
     if (!ids.length) {
       seriesById = {};
       return;
@@ -206,20 +342,16 @@
 
     if (!pageVisible()) return;
 
-    const run = () => {
-      if (focused) void loadDetail(r, focused, true);
-      else void loadGrid(r, true);
-    };
     // Full reload on key change (range/host/detail) — reset incremental.
     hadFullLoad = false;
     if (focused) void loadDetail(r, focused, false);
     else void loadGrid(r, false);
 
-    const timer = setInterval(() => {
+    return subscribeSharedPoll(() => {
       if (!chartsActive() || !pageVisible()) return;
-      run();
-    }, CHART_POLL_MS);
-    return () => clearInterval(timer);
+      if (focused) void loadDetail(r, focused, true);
+      else void loadGrid(r, true);
+    });
   });
 
   const liveXs = $derived(live.history.map((h) => h.ts));
@@ -337,36 +469,55 @@
   {#key `grid:${ui.range}:${ui.hostEpoch}`}
     <div class="charts-grid">
       {#each gridDefs as m (m.id)}
-        {@const pts = seriesById[m.id] ?? []}
-        {@const xs = pts.map((p) => p.ts)}
-        {@const ys = pts.map((p) => p.avg)}
+        {@const tile = tileSeries(m)}
         {@const now = liveValue(m.id)}
-        {@const markers = (seriesById['alerts_per_min'] ?? [])
-          .filter((p) => p.avg > 0)
-          .map((p) => p.ts)
-          .slice(-40)}
-        <button type="button" class="panel chart-card chart-tile" onclick={() => openDetail(m.id)}>
+        <div
+          class="panel chart-card chart-tile"
+          role="button"
+          tabindex="0"
+          onclick={() => openDetail(m.id)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              openDetail(m.id);
+            }
+          }}
+        >
           <div class="row" style="margin-bottom: 4px">
             <h2 style="margin: 0; font-size: 14px">{t(m.labelKey)}</h2>
             <span class="spacer"></span>
+            {#if tile.markers.length}
+              <button
+                type="button"
+                class="ghost"
+                style="font-size: 11px; padding: 0 4px"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  openAlertsFromMarker();
+                }}
+              >
+                {tile.markers.length}⚠
+              </button>
+            {/if}
             {#if now !== null}
               <span class="mono chart-now" style="font-size: 12px">{fmtMetric(m, now)}</span>
             {/if}
           </div>
-          {#if pts.length > 0}
+          {#if tile.xs.length > 0}
             <Chart
-              xs={xs}
-              series={[{ label: t(m.labelKey), color: '#3b82f6', values: ys }]}
+              xs={tile.xs}
+              series={tile.series}
               height={140}
+              legend={Boolean(m.overlay?.length || m.stack?.length)}
               syncKey={`charts-${ui.activeHostId}-${ui.range}`}
-              markers={markers}
+              markers={tile.markers}
             />
           {:else}
             <p class="muted" style="margin: 12px 0; font-size: 12px">
               {loading ? t('common.loading') : t('dash.empty')}
             </p>
           {/if}
-        </button>
+        </div>
       {/each}
     </div>
   {/key}

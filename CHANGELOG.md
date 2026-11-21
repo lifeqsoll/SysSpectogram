@@ -23,30 +23,33 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft
 - ML feature-event JSONL + weak labels (including Telegram ban/kill/isolate/mute/allow/host_fp) and the mini reference dataset (`docs/ML.md`).
 - Per-rule adaptive thresholds (`ml.adaptive_thresholds`); critical severity is never softened.
 - Model shadow/live/previous promote + rollback (`ml.shadow_dir`, `ml.live_dir`), verified with the supply-chain manifest before promote.
-- `guard-core` CLI: `metrics`, `auth-fail-ip`, `tcp-addr`, `render`. Python shadow compare (~30s) and optional Rust CPU/mem (`guard_core.shadow`, `guard_core.use_for_metrics`).
+- `guard-core` CLI: `metrics`, `auth-fail-ip`, `tcp-addr`, `render`, `serve` (Unix JSONL IPC). Python shadow compare and optional Rust CPU/mem (`guard_core.shadow`, `guard_core.use_for_metrics`).
 - Agent optional `onnx` feature (`tract-onnx`, not default): `--onnx-model` / `--onnx-shadow` attach `ml_score` extras.
-- Timeseries metrics: `ml_raw_score`, `baseline_z`, `threshold`.
+- Timeseries metrics: `ml_raw_score`, `baseline_z`, `threshold`, severity-split alert rates.
+- Charts grid overlays (risk+threshold, score+ml_raw, mem+swap, net/disk pairs), stacked severity alerts, marker → Alerts.
+- Model-occlusion explain (`model_based_explain`); one-class ML mode default; shared Charts/Dashboards poller.
 - Docs: `EBPF_SETUP.md` refresh, `NFT_COEXISTENCE.md`, `ML.md`.
 
 ### Changed
 
-- Default `runtime.prefer: onnx` (falls back without artifacts).
+- Default `runtime.prefer: onnx` (falls back without artifacts); `ml.mode: one_class`; `ml.adaptive_thresholds: true`.
 - Matplotlib alert panels debounced/cached off the hot path.
 - Release musl agent build enables **eBPF by default**; visible `mode=proc` fallback.
 - systemd agent unit: CAP_BPF/PERFMON/SYS_RESOURCE/SYS_PTRACE, `MemoryDenyWriteExecute=no`.
-- Telegram long-poll exponential backoff on API failures.
+- Telegram long-poll exponential backoff on API failures; weak-label rate-limit + audit JSONL.
 - `scan_unique_ports` replaces per-port unique-IP scan (`scan_unique_ips` deprecated alias).
+- `find_bin` prefers bundled guard-core over PATH; optional `bin_sha256` pin; metrics swap throttled.
 
 ### Fixed
 
 - Non-UTF8 `/proc/*/comm` no longer crashes perimeter mapping.
 - Timeseries flush on disk-full no longer kills the sample loop (bounded buffer + backpressure).
 - Collect daemon isolates `on_sample` failures.
+- `alerts_per_min` only increments on emitted host alerts (after cooldown), not every anomalous tick.
 
 ### Known limitations
 
-- Perimeter **RuleEngine**, response, and risk fusion stay in Python. guard-core shadows CPU/mem and parses auth/tcp; it does not replace those loops.
-- Full supervised eval beyond the mini reference gate.
+- Perimeter **RuleEngine**, response, and risk fusion stay in Python; guard-core provides helpers + shadow + `serve` IPC, not a full live swap of those loops.
 - Agent ONNX (`tract-onnx`) is feature-gated and off by default; scores are extras only and do not replace rule severity.
 
 ### Added (carried from unreleased 1.4.x line)

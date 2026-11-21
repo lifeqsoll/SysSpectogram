@@ -9,6 +9,37 @@ export function pageVisible(): boolean {
   return typeof document === 'undefined' || document.visibilityState !== 'hidden';
 }
 
+type PollTick = () => void;
+const pollListeners = new Set<PollTick>();
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureSharedPoller(): void {
+  if (pollTimer != null) return;
+  pollTimer = setInterval(() => {
+    if (!pageVisible()) return;
+    for (const fn of [...pollListeners]) {
+      try {
+        fn();
+      } catch {
+        /* ignore listener errors */
+      }
+    }
+  }, CHART_POLL_MS);
+}
+
+/** One shared 5s timer for Charts + Dashboards (paused while the tab is hidden). */
+export function subscribeSharedPoll(fn: PollTick): () => void {
+  pollListeners.add(fn);
+  ensureSharedPoller();
+  return () => {
+    pollListeners.delete(fn);
+    if (!pollListeners.size && pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+}
+
 export function lastTs(points: Point[]): number | undefined {
   if (!points.length) return undefined;
   return points[points.length - 1]?.ts;

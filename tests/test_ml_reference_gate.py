@@ -36,5 +36,27 @@ def test_reference_fp_budget():
     thr = (max(s for s, y in scores if y == 0) + min(s for s, y in scores if y == 1)) / 2.0
     fp = sum(1 for s, y in scores if y == 0 and s >= thr)
     tp = sum(1 for s, y in scores if y == 1 and s >= thr)
+    tn = sum(1 for s, y in scores if y == 0 and s < thr)
+    fn = sum(1 for s, y in scores if y == 1 and s < thr)
     assert fp == 0
     assert tp == sum(1 for _, y in scores if y == 1)
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    fpr = fp / max(fp + tn, 1)
+    assert precision >= 0.99
+    assert recall >= 0.99
+    assert fpr <= 0.01
+
+
+def test_one_class_mode_default_in_bundled_config():
+    from pathlib import Path
+
+    import yaml
+
+    cfg = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "sysspectogram" / "resources" / "configs" / "default.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (cfg.get("ml") or {}).get("mode") == "one_class"
+    assert (cfg.get("ml") or {}).get("adaptive_thresholds") is True

@@ -60,4 +60,66 @@ def plain_ml_line(
         "band": band,
         "sentence": sentence,
         "primary": name,
+        "method": "stats",
+    }
+
+
+def model_based_explain(
+    inferencer: Any,
+    window: np.ndarray,
+    columns: list[str],
+    *,
+    lang: str = "en",
+    top_k: int = 3,
+) -> dict[str, Any] | None:
+    """Occlusion deltas vs the live model score (feature contribution)."""
+    if inferencer is None or not hasattr(inferencer, "predict_window"):
+        return None
+    arr = np.asarray(window, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[1] == 0 or not columns:
+        return None
+    try:
+        base = float(inferencer.predict_window(arr).score)
+    except Exception:
+        return None
+    deltas: list[dict[str, Any]] = []
+    n_cols = min(arr.shape[1], len(columns))
+    for i in range(n_cols):
+        muted = arr.copy()
+        muted[:, i] = 0.0
+        try:
+            score = float(inferencer.predict_window(muted).score)
+        except Exception:
+            continue
+        deltas.append(
+            {
+                "feature": columns[i],
+                "delta": abs(base - score),
+                "mean": float(arr[:, i].mean()),
+                "contribution": float(base - score),
+            }
+        )
+    if not deltas:
+        return None
+    deltas.sort(key=lambda d: float(d["delta"]), reverse=True)
+    top = deltas[: max(1, top_k)]
+    name = str(top[0].get("feature") or "load")
+    contrib = float(top[0].get("contribution") or 0.0)
+    if lang.startswith("ru"):
+        sentence = (
+            f"модель сильнее всего опирается на `{name}` "
+            f"(Δscore={contrib:+.3f} при занулении)."
+        )
+    else:
+        sentence = (
+            f"model leans on `{name}` most "
+            f"(Δscore={contrib:+.3f} when zeroed)."
+        )
+    return {
+        "top_features": top,
+        "band": spectrogram_band_hint(arr),
+        "sentence": sentence,
+        "primary": name,
+        "method": "model_occlusion",
+        "base_score": base,
     }

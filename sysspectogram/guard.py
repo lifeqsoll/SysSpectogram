@@ -295,6 +295,8 @@ def run_guard(
     gc_shadow = bool(gc_cfg.get("shadow", False))
     gc_use_metrics = bool(gc_cfg.get("use_for_metrics", False))
     gc_bin = find_bin(gc_cfg.get("bin"))
+    gc_bin_sha = gc_cfg.get("bin_sha256")
+    gc_expect_sha = str(gc_bin_sha).strip() if gc_bin_sha else None
     gc_shadow_path = _resolve(gc_cfg.get("shadow_path") or "reports/guard_core_shadow.jsonl")
     try:
         gc_shadow_iv = float(gc_cfg.get("shadow_interval_sec") or 30.0)
@@ -302,26 +304,41 @@ def run_guard(
         gc_shadow_iv = 30.0
     if gc_shadow_iv < 5.0:
         gc_shadow_iv = 30.0
+    try:
+        gc_metrics_iv = float(gc_cfg.get("metrics_interval_sec") or 5.0)
+    except (TypeError, ValueError):
+        gc_metrics_iv = 5.0
+    if gc_metrics_iv < 1.0:
+        gc_metrics_iv = 5.0
     _gc_shadow_at = {"t": 0.0}
+    _gc_metrics_at = {"t": 0.0, "cache": None}
     if gc_shadow or gc_use_metrics:
         console.print(
             f"[cyan]guard-core[/] bin={gc_bin or 'missing'} "
-            f"shadow={gc_shadow} use_for_metrics={gc_use_metrics}"
+            f"shadow={gc_shadow} use_for_metrics={gc_use_metrics} "
+            f"sha_pin={'yes' if gc_expect_sha else 'no'}"
         )
     rule_thresholds = RuleThresholdStore(
         _resolve(ml_cfg_top.get("thresholds_path") or "state/rule_thresholds.json"),
-        enabled=bool(ml_cfg_top.get("adaptive_thresholds", False)),
+        enabled=bool(ml_cfg_top.get("adaptive_thresholds", True)),
     )
 
     def _apply_guard_core(row: dict) -> dict:
         rust = None
         now_m = time.monotonic()
         want_shadow = gc_shadow and (now_m - float(_gc_shadow_at["t"]) >= gc_shadow_iv)
-        if gc_use_metrics or want_shadow:
+        want_refresh = gc_use_metrics and (
+            now_m - float(_gc_metrics_at["t"]) >= gc_metrics_iv
+            or _gc_metrics_at["cache"] is None
+        )
+        if want_shadow or want_refresh:
             try:
-                rust = run_once_metrics(gc_bin)
+                rust = run_once_metrics(gc_bin, expect_sha256=gc_expect_sha)
             except Exception:
                 rust = None
+            if want_refresh and rust is not None:
+                _gc_metrics_at["t"] = now_m
+                _gc_metrics_at["cache"] = rust
         if want_shadow:
             _gc_shadow_at["t"] = now_m
             try:
@@ -338,10 +355,11 @@ def run_guard(
                     append_shadow_diff(gc_shadow_path, shadow_compare_metrics(row, rust))
             except Exception as exc:
                 console.print(f"[yellow]guard-core shadow[/] {exc}")
-        if gc_use_metrics and rust:
+        cached = _gc_metrics_at.get("cache") if isinstance(_gc_metrics_at.get("cache"), dict) else None
+        if gc_use_metrics and cached:
             merged = dict(row)
-            merged["cpu_percent"] = rust.get("cpu_percent")
-            merged["mem_percent"] = rust.get("mem_percent")
+            merged["cpu_percent"] = cached.get("cpu_percent")
+            merged["mem_percent"] = cached.get("mem_percent")
             return merged
         return row
 
@@ -1309,10 +1327,6 @@ def run_guard(
             is_anom = decision.is_anomaly
             if is_anom:
                 try:
-                    rate_meter.note(severity="high", perimeter=False, ts=time.time())
-                except Exception:
-                    pass
-                try:
                     from sysspectogram.ml.feature_events import FeatureEvent, append_feature_event
 
                     append_feature_event(
@@ -1428,6 +1442,10 @@ def run_guard(
             if now - last_alert < cooldown_sec:
                 return
             last_alert = now
+            try:
+                rate_meter.note(severity="high", perimeter=False, ts=time.time())
+            except Exception:
+                pass
             if prom_enabled:
                 try:
                     from sysspectogram.metrics_prom import GLOBAL_PROM
@@ -1463,9 +1481,20 @@ def run_guard(
             feats = feature_attribution(matrix, columns, top_k=3)
             plain = None
             try:
-                from sysspectogram.ml.explain import plain_ml_line
+                from sysspectogram.ml.explain import model_based_explain, plain_ml_line
 
                 plain = plain_ml_line(matrix, columns, lang=str(notify_lang))
+                try:
+                    model_plain = model_based_explain(
+                        infer,
+                        matrix,
+                        columns,
+                        lang=str(notify_lang),
+                    )
+                    if model_plain:
+                        plain = model_plain
+                except Exception:
+                    pass
                 feats = plain.get("top_features") or feats
             except (OSError, ValueError, ImportError, TypeError) as exc:
                 console.print(f"[yellow]ml-explain warn[/] {exc}")

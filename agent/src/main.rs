@@ -274,7 +274,7 @@ fn main() {
     let mut ebpf_rt: Option<crate::ebpf::EbpfHandle> = None;
     #[cfg(not(feature = "ebpf"))]
     let _ebpf_rt: Option<()> = None;
-    let mut effective_mode = args.mode.as_str();
+    let effective_mode: &str;
     if args.mode == "ebpf" {
         let st = probe_toolchain();
         eprintln!(

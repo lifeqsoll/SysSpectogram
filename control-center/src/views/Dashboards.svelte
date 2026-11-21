@@ -5,10 +5,10 @@
   import { fmtNum, fmtTime } from '../lib/format';
   import { ui } from '../lib/state.svelte';
   import {
-    CHART_POLL_MS,
     DETAIL_MAX_POINTS,
     fetchSeries,
     pageVisible,
+    subscribeSharedPoll,
   } from '../lib/timeseriesPoll.svelte';
   import Chart from '../lib/Chart.svelte';
 
@@ -90,11 +90,10 @@
 
     hadFullLoad = false;
     void load(m, r, false);
-    const timer = setInterval(() => {
+    return subscribeSharedPoll(() => {
       if (ui.section !== 'dashboards' || !pageVisible()) return;
       void load(m, r, true);
-    }, CHART_POLL_MS);
-    return () => clearInterval(timer);
+    });
   });
 
   const summary = $derived.by(() => {

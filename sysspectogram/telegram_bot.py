@@ -1319,7 +1319,21 @@ class TelegramBot:
             label = weak_label_from_decision(mapped)
             if label is None:
                 return
+            # Rate-limit + audit: max ~1 label / 2s / action bucket (authenticated TG only).
+            now = time.time()
+            bucket = f"{mapped}:{payload.get('ip') or payload.get('rule') or ''}"
+            last = getattr(self, "_weak_label_at", None)
+            if not isinstance(last, dict):
+                last = {}
+                self._weak_label_at = last
+            if now - float(last.get(bucket) or 0.0) < 2.0:
+                return
+            last[bucket] = now
+            if len(last) > 256:
+                for k in list(last.keys())[:64]:
+                    last.pop(k, None)
             raw = (self.config.get("ml") or {}).get("feature_events") or "reports/feature_events.jsonl"
+            audit_raw = (self.config.get("ml") or {}).get("weak_label_audit") or "reports/weak_label_audit.jsonl"
             rule = str(payload.get("rule") or payload.get("rule_id") or action)
             if action == "host_fp":
                 rule = str(payload.get("rule") or payload.get("rule_id") or "host_anomaly")
@@ -1330,22 +1344,39 @@ class TelegramBot:
                 except (TypeError, ValueError):
                     pass
             ppid = int(payload.get("ppid") or 0)
-            append_feature_event(
-                resolve_runtime_path(str(raw)),
-                FeatureEvent(
-                    rule_id=rule,
-                    severity=str(payload.get("severity") or ""),
-                    exe=str(payload.get("path") or payload.get("exe") or ""),
-                    ppid=ppid,
-                    scores=scores,
-                    ts=time.time(),
-                    extras={
-                        "action": action,
-                        "weak_label": label,
-                        "ip": payload.get("ip"),
-                    },
-                ),
+            event = FeatureEvent(
+                rule_id=rule,
+                severity=str(payload.get("severity") or ""),
+                exe=str(payload.get("path") or payload.get("exe") or ""),
+                ppid=ppid,
+                scores=scores,
+                ts=now,
+                extras={
+                    "action": action,
+                    "weak_label": label,
+                    "ip": payload.get("ip"),
+                    "source": "telegram",
+                },
             )
+            append_feature_event(resolve_runtime_path(str(raw)), event)
+            audit_path = resolve_runtime_path(str(audit_raw))
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with audit_path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(
+                        {
+                            "ts": now,
+                            "action": action,
+                            "mapped": mapped,
+                            "rule_id": rule,
+                            "weak_label": label,
+                            "ip": payload.get("ip"),
+                            "chat_id": getattr(self.client, "chat_id", None),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
         except Exception:
             return
 

@@ -6,6 +6,7 @@ Critical is never softened.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 _RANK = ("info", "low", "medium", "high", "critical")
@@ -21,13 +22,17 @@ class RuleThresholdStore:
         *,
         alpha: float = 0.3,
         enabled: bool = True,
+        save_interval_sec: float = 5.0,
     ) -> None:
         self.path = Path(path)
         self.alpha = float(alpha)
         if not 0.0 < self.alpha <= 1.0:
             self.alpha = 0.3
         self.enabled = bool(enabled)
+        self.save_interval_sec = max(0.5, float(save_interval_sec))
         self.rules: dict[str, dict] = {}
+        self._dirty = False
+        self._last_save = 0.0
         if self.enabled:
             self._load()
 
@@ -43,7 +48,7 @@ class RuleThresholdStore:
         row["ewma"] = (1.0 - self.alpha) * prev
         thr = float(row.get("threshold") if row.get("threshold") is not None else _BASE_THRESHOLD)
         row["threshold"] = (1.0 - self.alpha) * thr + self.alpha * _BASE_THRESHOLD
-        self._save()
+        self._mark_dirty()
 
     def record_fp(self, rule_id: str) -> None:
         if not self.enabled:
@@ -54,7 +59,11 @@ class RuleThresholdStore:
         row["ewma"] = self.alpha * 1.0 + (1.0 - self.alpha) * prev
         thr = float(row.get("threshold") if row.get("threshold") is not None else _BASE_THRESHOLD)
         row["threshold"] = (1.0 - self.alpha) * thr + self.alpha * _FP_TARGET
-        self._save()
+        self._mark_dirty()
+
+    def flush(self) -> None:
+        if self._dirty:
+            self._save()
 
     def effective_severity_adjust(self, rule_id: str, severity: str) -> str:
         """Step severity down one rank when the FP EWMA is hot. Never softens critical."""
@@ -101,7 +110,15 @@ class RuleThresholdStore:
         if isinstance(rules, dict):
             self.rules = {str(k): dict(v) for k, v in rules.items() if isinstance(v, dict)}
 
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        now = time.monotonic()
+        if now - self._last_save >= self.save_interval_sec:
+            self._save()
+
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"alpha": self.alpha, "rules": self.rules}
         self.path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self._dirty = False
+        self._last_save = time.monotonic()
