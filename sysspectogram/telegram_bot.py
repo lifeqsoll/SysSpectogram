@@ -764,10 +764,11 @@ class TelegramBot:
                 _btn("sev≥high", "notify|sev|high"),
             ]
         )
+        rows.append([_btn("IDs list", "notify|ids")])
         return _markup(rows)
 
-    def _notify_text(self) -> str:
-        return "\n".join(self.notify_prefs.summary_lines(lang=self.lang))
+    def _notify_text(self, *, detail: bool = False) -> str:
+        return "\n".join(self.notify_prefs.summary_lines(lang=self.lang, detail=detail))
 
     def handle_command(
         self,
@@ -1542,6 +1543,13 @@ class TelegramBot:
                 reply_markup=self._notify_markup(),
             )
             return
+        if head in ("ids", "id", "rules", "catalog"):
+            self.client.send_message(
+                self.prefix(self._notify_text(detail=True)),
+                chat_id=chat_id,
+                reply_markup=self._notify_markup(),
+            )
+            return
         if head in ("on", "off"):
             self.notify_prefs.set_master(head == "on")
             self.client.send_message(
@@ -1595,6 +1603,7 @@ class TelegramBot:
             self.prefix(
                 "usage:\n"
                 "/notify\n"
+                "/notify ids\n"
                 "/notify on|off\n"
                 "/notify group <id> on|off\n"
                 "/notify rule <rule_id> on|off\n"
@@ -1608,6 +1617,14 @@ class TelegramBot:
 
         parts = data.split("|")
         try:
+            if len(parts) >= 2 and parts[1] == "ids":
+                self.client.answer_callback(cq_id, "ids")
+                self.client.send_message(
+                    self.prefix(self._notify_text(detail=True)),
+                    chat_id=chat_id,
+                    reply_markup=self._notify_markup(),
+                )
+                return
             if len(parts) >= 2 and parts[1] == "master":
                 self.notify_prefs.set_master(not self.notify_prefs.enabled)
             elif len(parts) >= 3 and parts[1] == "g":

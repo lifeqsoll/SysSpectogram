@@ -232,7 +232,7 @@ class NotifyPrefs:
         # Unclassified rules: allow (high-signal default)
         return True
 
-    def summary_lines(self, *, lang: str = "en") -> list[str]:
+    def summary_lines(self, *, lang: str = "en", detail: bool = False) -> list[str]:
         ru = lang.startswith("ru")
         lines = [
             f"notify={'ON' if self.enabled else 'OFF'}  min_severity={self.min_severity}",
@@ -243,6 +243,16 @@ class NotifyPrefs:
             label = meta.get("label_ru") if ru else meta.get("label")
             mark = "✓" if on else "✗"
             lines.append(f"{mark} {gid}: {label}")
+            if detail:
+                rules = list(meta.get("rules") or ())
+                prefixes = list(meta.get("prefixes") or ())
+                if rules:
+                    lines.append("    rules: " + ", ".join(rules))
+                if prefixes:
+                    lines.append("    prefixes: " + ", ".join(prefixes))
+                pats = list(meta.get("patterns_off") or ())
+                if pats:
+                    lines.append("    patterns_off: " + ", ".join(pats))
         if self.rule_overrides:
             lines.append("")
             lines.append("rule overrides:")
@@ -250,4 +260,12 @@ class NotifyPrefs:
                 lines.append(f"  {'✓' if on else '✗'} {rid}")
         if self.disable_patterns:
             lines.append("patterns off: " + ", ".join(sorted(self.disable_patterns)))
+        if not detail:
+            tip = "полный список id: /notify ids" if ru else "full id list: /notify ids"
+            lines.append("")
+            lines.append(tip)
         return lines
+
+    def ids_catalog_lines(self, *, lang: str = "en") -> list[str]:
+        """Flat catalog of group ids and their rule ids for /notify ids."""
+        return self.summary_lines(lang=lang, detail=True)

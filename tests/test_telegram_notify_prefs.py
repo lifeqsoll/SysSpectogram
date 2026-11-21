@@ -63,3 +63,11 @@ def test_persist_roundtrip(tmp_path: Path) -> None:
     prefs.set_group("internet_noise", False)
     again = NotifyPrefs.load(path)
     assert again.groups["internet_noise"] is False
+
+
+def test_ids_catalog_lists_rules(tmp_path: Path) -> None:
+    prefs = NotifyPrefs.load(tmp_path / "n.json")
+    text = "\n".join(prefs.ids_catalog_lines())
+    assert "internet_noise" in text
+    assert "port_scan_suspected" in text
+    assert "rules:" in text
