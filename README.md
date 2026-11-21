@@ -2,7 +2,7 @@
 
 [English](README.md) · [Русский](README_RU.md)
 
-**1.5.0 (prep)** · self-hosted **Linux VPS / host guard** for operators who want understandable alerts, SSH perimeter rules, optional nft auto-ban, Telegram (and optional web) control — without shipping logs to a vendor cloud.
+**1.5.0** · self-hosted **Linux VPS / host guard** for operators who want understandable alerts, SSH perimeter rules, optional nft auto-ban, Telegram (and optional web) control — without shipping logs to a vendor cloud.
 
 **For:** solo devs and small teams on one or a few VPS boxes (friend AppImage path or headless `friend-day0.sh`). **Not** a full SIEM — see [Comparison](docs/COMPARISON.md).
 
