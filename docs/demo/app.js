@@ -15,19 +15,19 @@
       chip1: "AppImage / day-0",
       chip2: "Background protect",
       chip3: "Never-ban IP",
-      chip4: "CNN + IF fuse",
-      chip5: "TG unlock / SOAR",
+      chip4: "ONNX prefer + fuse",
+      chip5: "eBPF musl / TG /notify",
       ctaTry: "Try scenarios",
       ctaRelease: "Download latest release",
       ctaFriend: "Friend path",
       scenarios: "Scenarios",
       asideNote:
-        "Synthetic load only. Real product: AppImage or <code>friend-day0.sh</code> on a VPS.",
+        "Synthetic load only. Real product v1.5.0: AppImage or <code>friend-day0.sh</code> on a VPS.",
       trainTitle: "Train pipeline (fake)",
       liveStage: "Live stage",
       heatTitle: "Fake spectrogram window",
       heatCaption:
-        "60×N synthetic window. Real product: your collect CSV + trained artifacts; preview with <code>build-dataset --png</code>.",
+        "60×N synthetic window. Real product: your collect CSV + trained artifacts (ONNX prefer); preview with <code>build-dataset --png</code>.",
       alertTitle: 'Alert feed <span class="like-tg">(as Telegram would)</span>',
       footer:
         "Ready for the real thing? AppImage / <code>friend-day0.sh</code> → onboarding → background protect. Buttons here are fake — real Ban / Kill need console <code>/unlock</code>.",
@@ -40,19 +40,19 @@
       chip1: "AppImage / day-0",
       chip2: "Фоновая защита",
       chip3: "Never-ban IP",
-      chip4: "CNN + IF",
-      chip5: "TG unlock / SOAR",
+      chip4: "ONNX prefer + fuse",
+      chip5: "eBPF musl / TG /notify",
       ctaTry: "Сценарии",
       ctaRelease: "Скачать последний релиз",
       ctaFriend: "Friend path",
       scenarios: "Сценарии",
       asideNote:
-        "Только синтетика. Реальный продукт: AppImage или <code>friend-day0.sh</code> на VPS.",
+        "Только синтетика. Реальный продукт v1.5.0: AppImage или <code>friend-day0.sh</code> на VPS.",
       trainTitle: "Train pipeline (фейк)",
       liveStage: "Live stage",
       heatTitle: "Фейковое окно спектрограммы",
       heatCaption:
-        "Синтетическое окно 60×N. В продукте — ваш CSV + артефакты; превью: <code>build-dataset --png</code>.",
+        "Синтетическое окно 60×N. В продукте — ваш CSV + артефакты (ONNX prefer); превью: <code>build-dataset --png</code>.",
       alertTitle: 'Лента алертов <span class="like-tg">(как в Telegram)</span>',
       footer:
         "Готовы к реальному? AppImage / <code>friend-day0.sh</code> → онбординг → фоновая защита. Кнопки здесь фейк — Ban / Kill только после <code>/unlock</code>.",
@@ -147,6 +147,42 @@
         body: "Template: SSH auth failures spike from 203.0.113.50 (12 fails / 60s). Credential stuffing likely.",
         ip: "203.0.113.50",
         actions: ["Ban IP 1h", "Mute 1h", "Recon"],
+      },
+    },
+    scan: {
+      label: "port scan (per-source)",
+      cpu: [15, 4],
+      mem: [35, 2],
+      net: [220, 50],
+      score: [0.24, 0.05],
+      amplify: "net",
+      pills: { mode: "mode: shield" },
+      alert: {
+        severity: "high",
+        kind: "perimeter",
+        title: "PERIMETER · port_scan_suspected",
+        body:
+          "Template: many distinct dest ports from 203.0.113.77 in 60s (guard-core RiskInputs). Per-source scan heuristic.",
+        ip: "203.0.113.77",
+        actions: ["Ban IP 1h", "Mute 1h", "Recon"],
+      },
+    },
+    flood: {
+      label: "inbound flood (perimeter)",
+      cpu: [22, 5],
+      mem: [38, 3],
+      net: [3800, 350],
+      score: [0.31, 0.06],
+      amplify: "net",
+      pills: { mode: "mode: shield" },
+      alert: {
+        severity: "critical",
+        kind: "perimeter",
+        title: "PERIMETER · inbound_flood_suspected",
+        body:
+          "Template: inbound pps/bps spike from 198.51.100.40 — flood heuristic (not host ML). nft ban6 path.",
+        ip: "198.51.100.40",
+        actions: ["Ban IP 1h", "Lockdown", "Recon"],
       },
     },
     egress: {
@@ -283,16 +319,59 @@
         actions: ["Status", "Disable"],
       },
     },
+    notify: {
+      label: "TG /notify filter",
+      cpu: [11, 3],
+      mem: [33, 2],
+      net: [70, 20],
+      score: [0.16, 0.04],
+      amplify: null,
+      pills: {
+        mode: "mode: shield",
+        notify: "notify: quiet · no noise",
+      },
+      alert: {
+        severity: "medium",
+        kind: "system",
+        title: "NOTIFY · internet_noise filtered",
+        body:
+          "Template: /notify defaults hide low-signal internet_noise. Critical perimeter + host fuse still push. Demo: noise dropped, shield alert would pass.",
+        actions: ["/notify status", "Mute 1h"],
+      },
+    },
+    onnx: {
+      label: "ONNX prefer / metrics-only",
+      cpu: [18, 5],
+      mem: [40, 3],
+      net: [65, 18],
+      score: [0.42, 0.06],
+      amplify: "cpu",
+      runtime: "metrics-only",
+      pills: {
+        runtime: "runtime: metrics-only",
+        mode: "mode: observe",
+      },
+      alert: {
+        severity: "medium",
+        kind: "system",
+        title: "ML · runtime=metrics-only",
+        body:
+          "No ONNX/IF artifacts on path — host path stays metrics-only (fuse uses rules + metrics). With cnn.onnx present: runtime=onnx prefer over .pt.",
+        actions: ["Show path", "Ignore"],
+      },
+    },
   };
 
   const PILL_DEFAULTS = {
-    agent: "agent: up · HMAC",
+    agent: "agent: ebpf · HMAC",
     trust: "kirk: best-effort",
     root: "root_watch: learn",
     sess: "sessions: learn",
     mode: "mode: observe",
+    runtime: "runtime: onnx",
     protect: "protect: off",
     never: "never-ban: —",
+    notify: "notify: defaults",
   };
 
   function randn() {
@@ -436,8 +515,10 @@
       root: "pill-root",
       sess: "pill-sess",
       mode: "pill-mode",
+      runtime: "pill-runtime",
       protect: "pill-protect",
       never: "pill-never",
+      notify: "pill-notify",
     };
     Object.keys(ids).forEach((k) => {
       const el = document.getElementById(ids[k]);
@@ -447,12 +528,18 @@
       el.classList.remove("ok", "warn", "crit", "muted");
       const low = t.toLowerCase();
       if (low.includes("alert") || low.includes("critical")) el.classList.add("crit");
-      else if (low.includes("shield") || low.includes("ebpf") || low.includes("skip"))
+      else if (
+        low.includes("shield") ||
+        low.includes("skip") ||
+        low.includes("metrics-only") ||
+        low.includes("quiet")
+      )
         el.classList.add("warn");
       else if (
         low.includes("learn") ||
         low.includes("observe") ||
         low.includes("off") ||
+        low.includes("defaults") ||
         low.includes("—")
       )
         el.classList.add("muted");
@@ -468,6 +555,8 @@
       btn.classList.toggle("active", btn.dataset.scenario === name);
     });
     document.getElementById("pattern-label").textContent = `pattern: ${SCENARIOS[name].label}`;
+    const rt = document.getElementById("runtime-val");
+    if (rt) rt.textContent = SCENARIOS[name].runtime || "onnx";
     setPills(SCENARIOS[name]);
 
     const trainPanel = document.getElementById("train-panel");
@@ -611,7 +700,8 @@
         pushAlert({
           severity: "medium",
           title: "TRAIN · artifacts ready (simulated)",
-          body: "cnn.pt · iforest.joblib · scaler.joblib · meta.json — demo only, not written to disk.",
+          body:
+            "cnn.onnx · cnn.pt · iforest.joblib · scaler.joblib · meta.json — demo only; runtime prefers ONNX when present.",
         });
         return;
       }
@@ -626,8 +716,8 @@
       const labels = {
         collect: "collect → data/normal.csv + anomaly.csv",
         build: "build-dataset → dataset/real windows",
-        train: "train → CNN + Isolation Forest",
-        ready: "artifacts/real ready",
+        train: "train → CNN → export cnn.onnx + Isolation Forest",
+        ready: "artifacts/real ready (onnx prefer)",
       };
       document.getElementById("train-status").textContent = labels[step];
       i += 1;

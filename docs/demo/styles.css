@@ -122,6 +122,16 @@ body {
   color: var(--ink);
 }
 
+.brand .ver {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.55em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #0f766e;
+  vertical-align: middle;
+  margin-left: 0.35rem;
+}
+
 .tagline {
   max-width: 38rem;
   margin: 1.25rem 0 0;

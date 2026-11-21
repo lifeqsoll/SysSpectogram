@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SysSpectogram — interactive demo</title>
-  <meta name="description" content="Fake interactive demo of SysSpectogram: perimeter, protect, never-ban, optional host ML. Simulation only — not connected to your machine." />
+  <title>SysSpectogram v1.5.0 — interactive demo</title>
+  <meta name="description" content="Fake interactive demo of SysSpectogram v1.5.0: perimeter, protect, never-ban, ONNX host path, eBPF agent, Telegram. Simulation only — not connected to your machine." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -24,14 +24,14 @@
         <button type="button" class="lang-btn" data-lang="ru">RU</button>
       </div>
     </div>
-    <h1 class="brand">SysSpectogram</h1>
+    <h1 class="brand">SysSpectogram <span class="ver">v1.5.0</span></h1>
     <p class="tagline" data-i18n="tagline">Press a scenario. Watch metrics, fuse risk, and Telegram-style alerts — friend path (AppImage / VPS menu), without touching your host.</p>
     <ul class="hero-chips" aria-label="highlights">
       <li data-i18n="chip1">AppImage / day-0</li>
       <li data-i18n="chip2">Background protect</li>
       <li data-i18n="chip3">Never-ban IP</li>
-      <li data-i18n="chip4">CNN + IF fuse</li>
-      <li data-i18n="chip5">TG unlock / SOAR</li>
+      <li data-i18n="chip4">ONNX prefer + fuse</li>
+      <li data-i18n="chip5">eBPF musl / TG /notify</li>
     </ul>
     <div class="hero-ctas">
       <a class="btn btn-primary" href="#workbench" data-i18n="ctaTry">Try scenarios</a>
@@ -43,13 +43,15 @@
   <main class="workbench" id="workbench">
     <aside class="scenarios" aria-label="Scenarios">
       <h2 data-i18n="scenarios">Scenarios</h2>
-      <p class="aside-note" data-i18n="asideNote">Synthetic load only. Real product: AppImage or <code>friend-day0.sh</code> on a VPS.</p>
+      <p class="aside-note" data-i18n="asideNote">Synthetic load only. Real product v1.5.0: AppImage or <code>friend-day0.sh</code> on a VPS.</p>
       <div class="scenario-grid" role="group">
         <button type="button" class="scenario active" data-scenario="idle">Idle / Reset</button>
         <button type="button" class="scenario" data-scenario="cpu">CPU miner</button>
         <button type="button" class="scenario" data-scenario="mem">Mem pressure</button>
         <button type="button" class="scenario" data-scenario="net">Net flood</button>
         <button type="button" class="scenario" data-scenario="brute">SSH brute</button>
+        <button type="button" class="scenario" data-scenario="scan">Port scan (per-source)</button>
+        <button type="button" class="scenario" data-scenario="flood">Inbound flood</button>
         <button type="button" class="scenario" data-scenario="neverban">Never-ban skip</button>
         <button type="button" class="scenario" data-scenario="protect">Background protect</button>
         <button type="button" class="scenario" data-scenario="egress">Egress denylist</button>
@@ -57,6 +59,8 @@
         <button type="button" class="scenario" data-scenario="ssh">Unexpected SSH</button>
         <button type="button" class="scenario" data-scenario="kirk">Kirk module hide</button>
         <button type="button" class="scenario" data-scenario="ebpf">eBPF sensitive open</button>
+        <button type="button" class="scenario" data-scenario="notify">TG /notify filter</button>
+        <button type="button" class="scenario" data-scenario="onnx">ONNX / metrics-only</button>
         <button type="button" class="scenario scenario-wide" data-scenario="train">Fake train pipeline</button>
       </div>
 
@@ -65,7 +69,7 @@
         <ol class="train-steps" id="train-steps">
           <li data-step="collect">collect metrics CSV</li>
           <li data-step="build">build-dataset windows</li>
-          <li data-step="train">train CNN + IForest</li>
+          <li data-step="train">train CNN → ONNX + IForest</li>
           <li data-step="ready">artifacts ready</li>
         </ol>
         <div class="train-bar"><div class="train-bar-fill" id="train-bar-fill"></div></div>
@@ -77,19 +81,21 @@
       <div class="stage-head">
         <div>
           <h2 data-i18n="liveStage">Live stage</h2>
-          <p class="host-line"><span class="dot"></span> host <strong>demo-vps</strong> · fuse risk <strong id="score-val">0.12</strong> · thr 0.75</p>
+          <p class="host-line"><span class="dot"></span> host <strong>demo-vps</strong> · runtime <strong id="runtime-val">onnx</strong> · fuse risk <strong id="score-val">0.12</strong> · thr 0.75</p>
         </div>
         <p class="pattern" id="pattern-label">pattern: idle baseline</p>
       </div>
 
       <div class="status-strip" aria-label="Agent status (simulated)">
-        <span class="pill ok" id="pill-agent">agent: up · HMAC</span>
+        <span class="pill ok" id="pill-agent">agent: ebpf · HMAC</span>
         <span class="pill ok" id="pill-trust">kirk: best-effort</span>
         <span class="pill muted" id="pill-root">root_watch: learn</span>
         <span class="pill muted" id="pill-sess">sessions: learn</span>
         <span class="pill muted" id="pill-mode">mode: observe</span>
+        <span class="pill ok" id="pill-runtime">runtime: onnx</span>
         <span class="pill muted" id="pill-protect">protect: off</span>
         <span class="pill muted" id="pill-never">never-ban: —</span>
+        <span class="pill muted" id="pill-notify">notify: defaults</span>
       </div>
 
       <div class="charts">
