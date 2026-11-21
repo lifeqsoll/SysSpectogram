@@ -387,6 +387,116 @@ def _one_host(store: FleetStore, scope: str) -> FleetHost | dict[str, Any]:
     return hosts[0]
 
 
+_REMOTE_TS_SCRIPT = r"""
+import json, sqlite3, time, sys
+from pathlib import Path
+cfg = json.loads(sys.argv[1])
+db = Path(cfg["home"]) / "state" / "timeseries.sqlite"
+if not db.is_file():
+    print(json.dumps({"ok": True, "metrics": [], "latest": [], "series": {}}))
+    raise SystemExit(0)
+ranges = {"1h":3600,"6h":21600,"12h":43200,"24h":86400,"7d":604800,"30d":2592000}
+# Prefer rollups over raw for hub SSH (1h raw is huge).
+tables = {"1h":"r10s","6h":"r10s","12h":"r10s","24h":"r1m","7d":"r1m","30d":"r5m"}
+conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+op = cfg["op"]
+if op == "metrics":
+    rows = conn.execute("SELECT DISTINCT metric FROM raw ORDER BY metric").fetchall()
+    print(json.dumps({"ok": True, "metrics": [r[0] for r in rows]}))
+elif op == "latest":
+    names = cfg["metrics"] or [r[0] for r in conn.execute(
+        "SELECT DISTINCT metric FROM raw ORDER BY metric").fetchall()]
+    out = []
+    for name in names:
+        row = conn.execute(
+            "SELECT ts, value FROM raw WHERE metric=? ORDER BY ts DESC LIMIT 1",
+            (name,),
+        ).fetchone()
+        if row:
+            out.append({"metric": name, "ts": float(row[0]), "value": float(row[1])})
+    print(json.dumps({"ok": True, "latest": out}))
+elif op == "query":
+    rng = cfg.get("range") or "1h"
+    secs = ranges.get(rng)
+    table = tables.get(rng)
+    if secs is None or table is None:
+        print(json.dumps({"ok": False, "error": f"bad range {rng}"}))
+        raise SystemExit(0)
+    start = int(time.time() - secs)
+    series = {}
+    for name in cfg["metrics"]:
+        rows = []
+        use = table
+        if use != "raw":
+            try:
+                rows = conn.execute(
+                    f"SELECT ts, avg, min, max, n FROM {use} "
+                    "WHERE metric=? AND ts>=? ORDER BY ts",
+                    (name, start),
+                ).fetchall()
+            except Exception:
+                rows = []
+        if not rows:
+            rows = conn.execute(
+                "SELECT ts, value, value, value, 1 FROM raw "
+                "WHERE metric=? AND ts>=? ORDER BY ts",
+                (name, start),
+            ).fetchall()
+        pts = [
+            {"ts": float(r[0]), "avg": r[1], "min": r[2], "max": r[3], "n": int(r[4])}
+            for r in rows
+        ]
+        max_pts = int(cfg.get("max_points") or 240)
+        if max_pts > 0 and len(pts) > max_pts:
+            step = max(1, len(pts) // max_pts)
+            pts = pts[::step][:max_pts]
+        series[name] = pts
+    print(json.dumps({"ok": True, "series": series}))
+else:
+    print(json.dumps({"ok": False, "error": f"bad op {op}"}))
+conn.close()
+""".strip()
+
+
+def build_remote_ts_command(
+    *,
+    home: str,
+    python_bin: str,
+    op: str,
+    metrics: str = "",
+    range_name: str = "1h",
+    max_points: int = 240,
+) -> str:
+    """Build the remote SSH shell command (no network). Used by tests + ops."""
+    import base64
+    import json
+    import shlex
+
+    home_n = (home or "").rstrip("/") or "."
+    payload = {
+        "home": home_n,
+        "op": op,
+        "metrics": [x.strip() for x in metrics.split(",") if x.strip()],
+        "range": range_name,
+        "max_points": int(max_points),
+    }
+    b64 = base64.b64encode(_REMOTE_TS_SCRIPT.encode("utf-8")).decode("ascii")
+    cfg_json = json.dumps(payload, separators=(",", ":"))
+    # Quote the whole interpreter path (remote_python may already quote home).
+    py = python_bin.strip() or "python3"
+    if not (py.startswith("'") or py.startswith('"')):
+        py = shlex.quote(py)
+    return (
+        f"cd {shlex.quote(home_n)} && {py} -c "
+        + shlex.quote(
+            "import base64,sys\n"
+            f"code=base64.b64decode({b64!r}).decode()\n"
+            f"sys.argv=[sys.argv[0], {cfg_json!r}]\n"
+            "exec(code)\n"
+        )
+    )
+
+
 def _remote_ts_sqlite(
     h: FleetHost,
     *,
@@ -394,104 +504,19 @@ def _remote_ts_sqlite(
     metrics: str = "",
     range_name: str = "1h",
     identity: str | None = None,
+    max_points: int = 240,
 ) -> dict[str, Any]:
     """Read remote timeseries.sqlite via inline Python (works on older VPS packages)."""
-    import base64
-    import json
-    import shlex
-    import textwrap
-
     from sysspectogram.fleet.ssh import remote_python, ssh_run
 
     home = (h.home_path or "").rstrip("/") or "."
-    payload = {
-        "home": home,
-        "op": op,
-        "metrics": [x.strip() for x in metrics.split(",") if x.strip()],
-        "range": range_name,
-    }
-    script = textwrap.dedent(
-        r"""
-        import json, sqlite3, time, sys
-        from pathlib import Path
-        cfg = json.loads(sys.argv[1])
-        db = Path(cfg["home"]) / "state" / "timeseries.sqlite"
-        if not db.is_file():
-            print(json.dumps({"ok": True, "metrics": [], "latest": [], "series": {}}))
-            raise SystemExit(0)
-        ranges = {"1h":3600,"6h":21600,"12h":43200,"24h":86400,"7d":604800,"30d":2592000}
-        # Prefer rollups over raw for hub SSH (1h raw is huge).
-        tables = {"1h":"r10s","6h":"r10s","12h":"r10s","24h":"r1m","7d":"r1m","30d":"r5m"}
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        op = cfg["op"]
-        if op == "metrics":
-            rows = conn.execute("SELECT DISTINCT metric FROM raw ORDER BY metric").fetchall()
-            print(json.dumps({"ok": True, "metrics": [r[0] for r in rows]}))
-        elif op == "latest":
-            names = cfg["metrics"] or [r[0] for r in conn.execute(
-                "SELECT DISTINCT metric FROM raw ORDER BY metric").fetchall()]
-            out = []
-            for name in names:
-                row = conn.execute(
-                    "SELECT ts, value FROM raw WHERE metric=? ORDER BY ts DESC LIMIT 1",
-                    (name,),
-                ).fetchone()
-                if row:
-                    out.append({"metric": name, "ts": float(row[0]), "value": float(row[1])})
-            print(json.dumps({"ok": True, "latest": out}))
-        elif op == "query":
-            rng = cfg.get("range") or "1h"
-            secs = ranges.get(rng)
-            table = tables.get(rng)
-            if secs is None or table is None:
-                print(json.dumps({"ok": False, "error": f"bad range {rng}"}))
-                raise SystemExit(0)
-            start = int(time.time() - secs)
-            series = {}
-            for name in cfg["metrics"]:
-                rows = []
-                use = table
-                if use != "raw":
-                    try:
-                        rows = conn.execute(
-                            f"SELECT ts, avg, min, max, n FROM {use} "
-                            "WHERE metric=? AND ts>=? ORDER BY ts",
-                            (name, start),
-                        ).fetchall()
-                    except Exception:
-                        rows = []
-                if not rows:
-                    rows = conn.execute(
-                        "SELECT ts, value, value, value, 1 FROM raw "
-                        "WHERE metric=? AND ts>=? ORDER BY ts",
-                        (name, start),
-                    ).fetchall()
-                pts = [
-                    {"ts": float(r[0]), "avg": r[1], "min": r[2], "max": r[3], "n": int(r[4])}
-                    for r in rows
-                ]
-                max_pts = 240
-                if len(pts) > max_pts:
-                    step = max(1, len(pts) // max_pts)
-                    pts = pts[::step][:max_pts]
-                series[name] = pts
-            print(json.dumps({"ok": True, "series": series}))
-        else:
-            print(json.dumps({"ok": False, "error": f"bad op {op}"}))
-        conn.close()
-        """
-    ).strip()
-    b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
-    cfg_json = json.dumps(payload, separators=(",", ":"))
-    py = remote_python(h)
-    remote = (
-        f"cd {shlex.quote(home)} && {py} -c "
-        + shlex.quote(
-            "import base64,sys\n"
-            f"code=base64.b64decode({b64!r}).decode()\n"
-            f"sys.argv=[sys.argv[0], {cfg_json!r}]\n"
-            "exec(code)\n"
-        )
+    remote = build_remote_ts_command(
+        home=home,
+        python_bin=remote_python(h),
+        op=op,
+        metrics=metrics,
+        range_name=range_name,
+        max_points=max_points,
     )
     r = ssh_run(h, remote, identity=identity, timeout=90.0)
     data = r.json()
@@ -539,6 +564,7 @@ def timeseries_query_many(
     metrics: str,
     range_name: str = "1h",
     identity: str | None = None,
+    max_points: int = 240,
 ) -> dict[str, Any]:
     """Batch timeseries query on one host (JSON object metric -> points)."""
     h = _one_host(store, scope)
@@ -552,6 +578,7 @@ def timeseries_query_many(
         metrics=metrics,
         range_name=range_name,
         identity=identity,
+        max_points=max_points,
     )
 
 
