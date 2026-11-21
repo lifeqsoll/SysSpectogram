@@ -33,7 +33,7 @@ Older release write-ups: [docs/RELEASE_v1.5.0.md](docs/RELEASE_v1.5.0.md) (draft
 
 ### Changed
 
-- Default `runtime.prefer: onnx` (falls back without artifacts); `ml.mode: one_class`; `ml.adaptive_thresholds: true`.
+- Default `runtime.prefer: onnx` (without `cnn.onnx` / artifacts → safe metrics-only host path); `ml.mode: one_class`; `ml.adaptive_thresholds: true`.
 - Matplotlib alert panels debounced/cached off the hot path.
 - Release musl agent build enables **eBPF by default**; visible `mode=proc` fallback.
 - systemd agent unit: CAP_BPF/PERFMON/SYS_RESOURCE/SYS_PTRACE, `MemoryDenyWriteExecute=no`.

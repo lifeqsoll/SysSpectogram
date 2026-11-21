@@ -1043,7 +1043,7 @@ def run_guard(
 
     def host_loop():
         web_on = enable_web or bool(web_cfg.get("enabled"))
-        runtime = str(config.get("runtime") or "notorch").strip().lower()
+        runtime = str(config.get("runtime") or "onnx").strip().lower()
         # Prefer ONNX when artifacts exist; without artifacts always keep metrics-only path
         # (do not early-return for onnx/torch — that would kill host timeseries on headless VPS).
         if runtime == "notorch" or artifacts_dir is None or not artifacts_dir.exists():

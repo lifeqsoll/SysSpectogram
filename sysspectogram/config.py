@@ -490,7 +490,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     runtime_raw = data.get("runtime")
     if isinstance(runtime_raw, dict):
         runtime_raw = runtime_raw.get("prefer")
-    runtime = str(runtime_raw or "notorch").strip().lower()
+    runtime = str(runtime_raw or "onnx").strip().lower()
     data["runtime"] = runtime
     if runtime == "notorch":
         ens = data.setdefault("ensemble", {})

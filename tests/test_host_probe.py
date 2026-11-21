@@ -20,9 +20,26 @@ def test_recommend_lite_low_ram():
     )
     rec = recommend(facts)
     assert rec.profile == "lite"
-    assert rec.overlay["runtime"]["prefer"] == "notorch"
+    assert rec.overlay["runtime"]["prefer"] == "onnx"
     assert rec.overlay["agent"]["mode"] == "userspace"
     assert rec.overlay["feedback"]["if_refit"] is False
+
+
+def test_recommend_lite_low_ram_no_ml_runtime_notorch():
+    """Without onnx/torch artifacts path, probe prefers notorch (metrics-only host)."""
+    facts = HostFacts(
+        ram_gib=1.5,
+        vcpus=1,
+        container=False,
+        has_onnx=False,
+        has_torch=False,
+        desktopish=False,
+        systemd=True,
+        reasons=["low RAM"],
+    )
+    rec = recommend(facts)
+    assert rec.profile == "lite"
+    assert rec.overlay["runtime"]["prefer"] == "notorch"
 
 
 def test_recommend_full_headroom():

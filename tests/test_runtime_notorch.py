@@ -9,10 +9,10 @@ import yaml
 from sysspectogram.config import load_config
 
 
-def test_default_runtime_notorch(tmp_path: Path, monkeypatch):
+def test_default_runtime_onnx(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("SYSSPECTOGRAM_RUNTIME", raising=False)
     cfg = load_config()
-    assert cfg.get("runtime") == "notorch"
+    assert cfg.get("runtime") == "onnx"
 
 
 def test_runtime_env_override(monkeypatch):
