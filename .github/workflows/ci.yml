@@ -30,6 +30,8 @@ jobs:
           sudo apt-get install -y -qq minisign
       - name: version sync
         run: python scripts/check_versions.py
+      - name: bundled configs sync
+        run: python scripts/check_bundled_configs.py
       - name: ruff
         run: ruff check sysspectogram tests scripts --select E9,F63,F7,F82
       - run: pytest -q --ignore=tests/test_rolelab.py
@@ -150,9 +152,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: test guard-core
         working-directory: guard-core
         run: cargo test --locked -q
+      - name: clippy guard-core
+        working-directory: guard-core
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   nft-real:
     runs-on: ubuntu-24.04

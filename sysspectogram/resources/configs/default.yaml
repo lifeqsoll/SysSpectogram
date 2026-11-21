@@ -96,7 +96,9 @@ telegram:
       host_ml: true
       agent_ebpf: false
       agent_critical: true
+    # Optional per-rule force on/off, e.g. port_scan_suspected: false
     rules: {}
+    # Host ML pattern strings to suppress (case-insensitive)
     disable_patterns: []
 web:
   enabled: false
