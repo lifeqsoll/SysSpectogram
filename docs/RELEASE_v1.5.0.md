@@ -1,62 +1,96 @@
-# SysSpectogram 1.5.0 — release notes (DRAFT for review)
+# SysSpectogram v1.5.0
 
-**Status:** preparation only — **do not tag / publish** until Mell finishes review.  
-**Version:** `1.5.0` (pyproject / Cargo / Control Center / helper / agent aligned; `scripts/check_versions.py` green).  
-**Base:** `main` @ work after `fix/audit-686a05f` merge (`d848280` + local prep).
+Host perimeter + agent integrity release: faster Control Center charts, per-source port-scan scoring, live **guard-core** RuleEngine/risk over a Unix socket, default **ONNX** host path (metrics-only without artifacts), and musl agent builds with **eBPF on by default**.
+
+Docs: [INSTALL](INSTALL.md) · [INSTALL (RU)](INSTALL_RU.md) · [EBPF_SETUP](EBPF_SETUP.md) · [NFT_COEXISTENCE](NFT_COEXISTENCE.md) · [ML](ML.md) · [CHANGELOG](../CHANGELOG.md)
+
+---
+
+## Assets (after CI)
+
+| Asset | Use |
+| --- | --- |
+| `SysSpectogram_Control_Center_1.5.0_amd64.AppImage` / `.deb` (+ `.minisig`) | Desktop — note **no** `v` in the filename (`VER="${TAG#v}"`) |
+| Fleet Hub AppImage / `.deb` / `.dmg` / `.exe` (+ `.minisig`, `SHA256SUMS.fleet-center`) | Fleet |
+| `sysspectogram-1.5.0-*.whl` + musl agent (+ sha256 / minisig) | Stack |
+| `sysspectogram-helper-x86_64-linux` (+ sha256 / minisig) | Soft/full bans on friend path |
+| `friend-day0.sh` / `install-helper-from-release.sh` (+ minisig) | Headless |
+| `SHA256SUMS` / `SHA256SUMS.desktop` / `SHA256SUMS.fleet-center` + `.minisig` | Verify |
+
+GUI, wheel, agent, and helper must match **this tag**. Trusted comment shape: `sysspectogram v1.5.0 <file>`.
+
+---
 
 ## Highlights
 
-1. **Control Center performance & charts** — downsample + incremental tails, shared poller/cache, multi-metric grid with cursor sync, fleet host timeseries over SSH.
-2. **Perimeter** — port scans counted **per source IP** (not “many IPs on :443”); `public_ports` + optional `inbound_flood_suspected`; Telegram Shield warns on public ports.
-3. **Rootkit** — `(deleted)` exe after package upgrade → **info**, not high (`audit.deleted_exe_downgrade_on_upgrade`).
-4. **Stability** — non-UTF8 `/proc` comm; timeseries disk-full does not kill sampling; TG poll backoff.
-5. **guard-core** — live **RuleEngine** + **decide_risk** + helper ban over `serve` socket (defaults on); metrics/auth/tcp/render; Python fallback if binary/socket missing.
-6. **eBPF** — release musl build ships with eBPF feature; runtime prints `mode=ebpf` or `mode=proc (ebpf unavailable: …)`.
-7. **ML** — ONNX prefer + `one_class` default; feature events + weak-label audit; adaptive thresholds on; model-occlusion explain; promote/shadow; optional agent `tract-onnx`.
-8. **Charts** — combined overlays, stacked severity alerts, shared poller with Dashboards, marker jump to Alerts.
+### Control Center & charts
 
-## Migration
+- Downsample + incremental timeseries tails (`max_points` / `after_ts`).
+- Multi-metric **grid**, shared Charts/Dashboards poller, cursor sync, overlays (risk+threshold, score+ml_raw, mem/swap, net/disk).
+- Stacked severity alert rates; marker jump to Alerts.
+- Fleet host timeseries over SSH.
 
-| Old | New |
-|---|---|
-| `perimeter.scan_unique_ips` | Prefer `scan_unique_ports` (alias still works, warns) |
-| Many IPs on :80/:443 → `port_scan_suspected` | No longer; use flood rule / baseline |
-| `runtime.prefer: notorch` default | `onnx` (still fine without artifacts) |
-| `deleted_exe` always high | Downgraded after package upgrade unless paranoid flag off |
+### Perimeter & Telegram
 
-Config snippets: see `configs/default.yaml` (`public_ports`, `scan_unique_ports`, `audit.deleted_exe_downgrade_on_upgrade`).
+- Port scans counted **per source IP** (`scan_unique_ports`); `public_ports` + optional `inbound_flood_suspected`.
+- Telegram Shield warns when public ports are exposed.
+- **/notify** filters: groups (internet noise, scans, SSH, egress/DNS, host ML, eBPF, critical), min severity, per-rule overrides; `/notify ids` lists ids.
 
-## Docs
+### guard-core
 
-- [EBPF_SETUP.md](EBPF_SETUP.md) — requirements, fallback, systemd caps  
-- [NFT_COEXISTENCE.md](NFT_COEXISTENCE.md) — ufw/firewalld/Docker/fail2ban  
-- [ML.md](ML.md) — onnx default, feature stream, adaptive thresholds, promote/shadow, optional agent ONNX  
-- [FLEET.md](FLEET.md) / [CONTROL_CENTER.md](CONTROL_CENTER.md) — charts / fleet host picker  
+- Live **RuleEngine**, **decide_risk**, and helper **ban** over `serve` Unix JSONL (defaults on).
+- CLI: `metrics`, `auth-fail-ip`, `tcp-addr`, `render`, `serve`.
+- Python falls back if the binary/socket is missing.
+
+### Agent / eBPF
+
+- Release musl agent enables **eBPF by default**; runtime prints `mode=ebpf` or `mode=proc (ebpf unavailable: …)`.
+- systemd unit: CAP_BPF / PERFMON / SYS_RESOURCE / SYS_PTRACE; `MemoryDenyWriteExecute=no`.
+- Optional agent `onnx` feature (`tract-onnx`) for shadow scores — not in the default musl binary.
+
+### ML
+
+- Default `runtime.prefer: onnx` — without `cnn.onnx` / artifacts the host stays on a **safe metrics-only** path.
+- `ml.mode: one_class`; adaptive thresholds on; promote/shadow/rollback; model-occlusion explain.
+- Feature-event JSONL + weak labels (including Telegram actions).
+
+### Stability & rootkit honesty
+
+- Non-UTF8 `/proc/*/comm` no longer crashes perimeter mapping.
+- Timeseries disk-full no longer kills the sample loop.
+- `(deleted)` exe after package upgrade → **info**, not high (`audit.deleted_exe_downgrade_on_upgrade`).
+- Telegram long-poll exponential backoff on API failures.
+
+### nft
+
+- Migrating legacy `ban6` (timeout-only) to `interval,timeout` **preserves** active IPv6 members (empty `nft -j` falls back to text parse).
+
+---
+
+## Breaking / behaviour changes vs 1.4.x
+
+1. Default **`runtime.prefer: onnx`** (was `notorch`). Missing artifacts → metrics-only, not a hard fail.
+2. Prefer **`perimeter.scan_unique_ports`**; `scan_unique_ips` remains a deprecated alias with a warning.
+3. Many IPs on :80/:443 alone no longer fire `port_scan_suspected` — use flood/baseline rules.
+4. `deleted_exe` severity can drop to info after a package upgrade unless the paranoid flag is off.
+
+Config: `configs/default.yaml` (`public_ports`, `scan_unique_ports`, `audit.deleted_exe_downgrade_on_upgrade`, `runtime.prefer`).
+
+---
 
 ## Known limitations
 
-- Agent ONNX is an optional `onnx` feature (`tract-onnx`), not linked into the default musl build; scores are extras only.
+- Agent ONNX (`tract-onnx`) is feature-gated and off by default; scores are extras only and do not replace rule severity.
 
-## Verify before tag (Mell)
+---
 
-```bash
-python scripts/check_versions.py
-pytest -q
-(cd guard-core && cargo test -q)
-(cd agent && cargo test -q)
-(cd control-center && npm run check)
-```
+## Install / upgrade
 
-Then (after review only):
+Friend / headless: use assets from **this** release with minisign — see [INSTALL](INSTALL.md) / [INSTALL_RU](INSTALL_RU.md) / [FRIEND](FRIEND.md).
 
 ```bash
-git tag -s v1.5.0 -m "SysSpectogram 1.5.0"
-git push origin v1.5.0
-gh release create v1.5.0 --title "SysSpectogram 1.5.0" --notes-file docs/RELEASE_v1.5.0.md
+TAG=v1.5.0
+# verify + install from release assets (not raw git)
 ```
 
-## Artifact expectations
-
-- `sysspectogram-agent-*-linux-musl` with eBPF linked (strings / probes present).
-- Python sdist/wheel from `python -m build`.
-- Control Center AppImage rebuilt from `1.5.0` package metadata.
+Full detail: [CHANGELOG.md](../CHANGELOG.md).
