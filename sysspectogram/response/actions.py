@@ -544,7 +544,8 @@ class NftBackend:
         if "interval" in out:
             return
         elems = self._parse_ban6_elements_json()
-        if elems is None:
+        # Empty JSON list is not "parse failed" — still fall back to text from list out.
+        if not elems:
             elems = self._parse_ban6_elements_text(out)
         lines = [
             "delete set inet sysspectogram ban6",
@@ -555,24 +556,17 @@ class NftBackend:
             lines.append(f"add element inet sysspectogram ban6 {{ {rendered} }}")
         self._nft_stdin("\n".join(lines) + "\n")
 
-    @staticmethod
-    def _parse_ban6_elements_json() -> list[tuple[str, int]] | None:
+    def _parse_ban6_elements_json(self) -> list[tuple[str, int]] | None:
+        """Parse ban6 members via ``nft -j`` through the same backend ``_run`` as list."""
         if not shutil.which("nft"):
             return None
-        try:
-            proc = subprocess.run(
-                ["nft", "-j", "list", "set", "inet", "sysspectogram", "ban6"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if proc.returncode != 0:
+        code, stdout = self._run(
+            ["nft", "-j", "list", "set", "inet", "sysspectogram", "ban6"]
+        )
+        if code != 0:
             return None
         try:
-            data = json.loads(proc.stdout or "[]")
+            data = json.loads(stdout or "[]")
         except json.JSONDecodeError:
             return None
         now = time.time()

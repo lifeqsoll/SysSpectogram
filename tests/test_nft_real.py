@@ -193,6 +193,37 @@ def test_migrate_ban6_adds_interval(monkeypatch):
     assert "2001:db8::7" in script
 
 
+def test_migrate_ban6_empty_json_falls_back_to_text(monkeypatch):
+    """Empty nft -j list must not drop members — fall back to text parse of list out."""
+    from sysspectogram.response.actions import NftBackend
+
+    stdin_scripts: list[str] = []
+
+    def fake_run(cmd: list[str]) -> tuple[int, str]:
+        if cmd[:5] == ["nft", "list", "set", "inet", "sysspectogram"]:
+            return (
+                0,
+                "set ban6 { type ipv6_addr; flags timeout; elements = { "
+                "2001:db8::7 timeout 90s } }",
+            )
+        if cmd[:4] == ["nft", "-j", "list", "set"]:
+            return 0, "[]"
+        return 0, ""
+
+    b = NftBackend(never_ban_cidrs=[])
+    monkeypatch.setattr(b, "_run", fake_run)
+    monkeypatch.setattr(
+        "sysspectogram.response.actions.shutil.which",
+        lambda n: "/usr/sbin/nft" if n == "nft" else None,
+    )
+    monkeypatch.setattr(b, "_nft_stdin", lambda text: stdin_scripts.append(text) or (0, ""))
+    b._migrate_ban6()
+    assert stdin_scripts
+    script = stdin_scripts[0]
+    assert "interval,timeout" in script
+    assert "2001:db8::7" in script
+
+
 def test_ban_argv_uses_add_element_not_bare_comment(monkeypatch):
     """Unit: no unquoted comment with colon; prefer add element / -f -."""
     from sysspectogram.response.actions import NftBackend
